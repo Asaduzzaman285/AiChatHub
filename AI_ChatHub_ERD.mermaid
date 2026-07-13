@@ -1,0 +1,568 @@
+---
+title: AI ChatHub — Entity Relationship Diagram (v2.0)
+---
+erDiagram
+
+%% =============================================================
+%% AUTH SERVICE
+%% =============================================================
+
+    USERS {
+        uuid id PK
+        string email UK
+        string password
+        string name
+        string phone
+        string status
+        string preferred_currency
+        timestamp email_verified_at
+        timestamp last_login_at
+        inet last_login_ip
+        timestamp deleted_at
+        timestamp created_at
+    }
+
+    EMAIL_VERIFICATIONS {
+        uuid id PK
+        uuid user_id FK
+        string token UK
+        boolean used
+        timestamp expires_at
+        timestamp created_at
+    }
+
+    PASSWORD_RESETS {
+        uuid id PK
+        uuid user_id FK
+        string token UK
+        boolean used
+        timestamp expires_at
+        timestamp created_at
+    }
+
+    REFRESH_TOKENS {
+        uuid id PK
+        uuid user_id FK
+        string token_hash UK
+        boolean revoked
+        timestamp expires_at
+        timestamp created_at
+    }
+
+    LOGIN_ATTEMPTS {
+        uuid id PK
+        string email
+        inet ip_address
+        boolean success
+        string user_agent
+        timestamp created_at
+    }
+
+    ADMIN_USERS {
+        uuid id PK
+        uuid user_id FK
+        string role
+        jsonb permissions
+        boolean is_active
+        timestamp created_at
+    }
+
+    AUDIT_LOGS {
+        uuid id PK
+        uuid admin_user_id FK
+        string actor_type
+        string action
+        string resource_type
+        uuid resource_id
+        jsonb old_values
+        jsonb new_values
+        inet ip_address
+        timestamp created_at
+    }
+
+    SYSTEM_CONFIG {
+        string key PK
+        string value
+        string description
+        uuid updated_by
+        timestamp updated_at
+    }
+
+%% =============================================================
+%% SUBSCRIPTION SERVICE
+%% =============================================================
+
+    PACKAGES {
+        uuid id PK
+        string name
+        string slug UK
+        decimal monthly_price_usd
+        decimal monthly_price_bdt
+        decimal monthly_wallet_credit_usd
+        jsonb model_access
+        jsonb features
+        boolean is_active
+        int sort_order
+        timestamp created_at
+    }
+
+    USER_SUBSCRIPTIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid package_id FK
+        uuid previous_package_id FK
+        uuid scheduled_package_id FK
+        uuid payment_method_id FK
+        string status
+        boolean auto_renew
+        string currency
+        decimal exchange_rate
+        timestamp activated_at
+        timestamp renews_at
+        timestamp cancelled_at
+        timestamp past_due_at
+        timestamp created_at
+    }
+
+    SUBSCRIPTION_HISTORY {
+        uuid id PK
+        uuid subscription_id FK
+        uuid user_id FK
+        string action
+        uuid old_package_id FK
+        uuid new_package_id FK
+        string old_status
+        string new_status
+        jsonb metadata
+        timestamp created_at
+    }
+
+    RENEWAL_ATTEMPTS {
+        uuid id PK
+        uuid subscription_id FK
+        uuid user_id FK
+        int attempt_number
+        timestamp scheduled_at
+        timestamp attempted_at
+        boolean success
+        string error_message
+        uuid transaction_id FK
+        timestamp created_at
+    }
+
+%% =============================================================
+%% WALLET SERVICE
+%% =============================================================
+
+    WALLETS {
+        uuid id PK
+        uuid user_id UK
+        decimal balance
+        decimal reserved_balance
+        decimal credit_balance
+        decimal credit_limit
+        string currency
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    WALLET_LEDGER_ENTRIES {
+        uuid id PK
+        uuid wallet_id FK
+        uuid user_id FK
+        string type
+        decimal amount
+        decimal balance_before
+        decimal balance_after
+        string description
+        string reference_type
+        uuid reference_id
+        string currency
+        decimal exchange_rate
+        timestamp created_at
+    }
+
+    CREDIT_LEDGER {
+        uuid id PK
+        uuid wallet_id FK
+        uuid user_id FK
+        string type
+        decimal amount
+        decimal credit_balance_before
+        decimal credit_balance_after
+        string description
+        uuid reference_id
+        timestamp created_at
+    }
+
+%% =============================================================
+%% PAYMENT SERVICE
+%% =============================================================
+
+    PAYMENT_METHODS {
+        uuid id PK
+        uuid user_id FK
+        string gateway
+        string type
+        string token
+        string last_four
+        string card_brand
+        string bank_name
+        string mobile_number
+        date expires_at
+        boolean is_default
+        boolean is_active
+        timestamp created_at
+    }
+
+    TRANSACTIONS {
+        uuid id PK
+        uuid user_id FK
+        string type
+        string status
+        decimal amount
+        string currency
+        decimal exchange_rate
+        string gateway
+        string gateway_reference
+        uuid payment_method_id FK
+        string idempotency_key UK
+        string description
+        jsonb metadata
+        string error_message
+        decimal gateway_fee
+        decimal net_amount
+        timestamp completed_at
+        timestamp failed_at
+        timestamp created_at
+    }
+
+    WEBHOOK_EVENTS {
+        uuid id PK
+        string gateway
+        string event_type
+        string gateway_reference UK
+        string status
+        jsonb payload
+        timestamp processed_at
+        string error_message
+        uuid transaction_id FK
+        int retry_count
+        timestamp created_at
+    }
+
+%% =============================================================
+%% BILLING SERVICE
+%% =============================================================
+
+    INVOICES {
+        uuid id PK
+        uuid user_id FK
+        uuid subscription_id FK
+        string invoice_number UK
+        string type
+        decimal amount
+        string currency
+        decimal tax_amount
+        decimal total_amount
+        string status
+        uuid transaction_id FK
+        string pdf_url
+        timestamp issued_at
+        timestamp paid_at
+        timestamp created_at
+    }
+
+    RECEIPTS {
+        uuid id PK
+        uuid user_id FK
+        string receipt_number UK
+        string type
+        decimal amount
+        string currency
+        uuid transaction_id FK
+        string pdf_url
+        timestamp issued_at
+        timestamp created_at
+    }
+
+    PROMO_CODES {
+        uuid id PK
+        string code UK
+        string type
+        decimal discount_amount
+        decimal discount_percent
+        int max_uses
+        int times_used
+        timestamp valid_from
+        timestamp valid_until
+        boolean is_active
+        timestamp created_at
+    }
+
+    USER_PROMO_USAGE {
+        uuid id PK
+        uuid promo_code_id FK
+        uuid user_id FK
+        uuid transaction_id FK
+        timestamp applied_at
+    }
+
+%% =============================================================
+%% AI GATEWAY SERVICE
+%% =============================================================
+
+    AI_MODELS {
+        uuid id PK
+        string provider
+        string name
+        string model_id
+        string type
+        string description
+        int context_window
+        int max_output_tokens
+        jsonb capabilities
+        boolean is_active
+        timestamp created_at
+    }
+
+    MODEL_PRICING {
+        uuid id PK
+        uuid model_id FK
+        string pricing_type
+        decimal input_rate_per_million
+        decimal output_rate_per_million
+        decimal flat_rate_per_unit
+        string currency
+        timestamp effective_from
+        timestamp effective_until
+        boolean is_active
+        timestamp created_at
+    }
+
+    USAGE_LOGS {
+        uuid id PK
+        uuid user_id FK
+        uuid session_id FK
+        uuid message_id FK
+        uuid model_id FK
+        string operation_type
+        string status
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        decimal estimated_cost
+        decimal actual_cost
+        string currency
+        int duration_ms
+        string provider_request_id
+        string error_message
+        jsonb metadata
+        timestamp created_at
+    }
+
+    PROVIDER_FALLBACK_RULES {
+        uuid id PK
+        uuid primary_model_id FK
+        uuid fallback_model_id FK
+        jsonb trigger_conditions
+        int priority
+        boolean is_active
+        timestamp created_at
+    }
+
+    CIRCUIT_BREAKER_STATE {
+        uuid id PK
+        uuid model_id FK
+        string state
+        int failure_count
+        int success_count
+        timestamp opened_at
+        timestamp next_probe_at
+        timestamp updated_at
+    }
+
+%% =============================================================
+%% CHAT SERVICE
+%% =============================================================
+
+    CHAT_SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid model_id FK
+        string title
+        string status
+        int message_count
+        int total_tokens
+        decimal total_cost
+        timestamp deleted_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    CHAT_MESSAGES {
+        uuid id PK
+        uuid session_id FK
+        uuid user_id FK
+        string role
+        text content
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        decimal cost
+        uuid usage_log_id FK
+        string provider_message_id
+        boolean is_streaming
+        jsonb metadata
+        timestamp created_at
+    }
+
+    FILE_ATTACHMENTS {
+        uuid id PK
+        uuid user_id FK
+        uuid session_id FK
+        uuid message_id FK
+        string file_name
+        string original_name
+        bigint file_size
+        string mime_type
+        string storage_disk
+        string storage_path
+        string storage_url
+        string virus_scan_status
+        timestamp virus_scan_at
+        string provider_file_id
+        timestamp expires_at
+        timestamp created_at
+    }
+
+%% =============================================================
+%% NOTIFICATION SERVICE
+%% =============================================================
+
+    NOTIFICATIONS {
+        uuid id PK
+        uuid user_id FK
+        string type
+        string channel
+        string subject
+        text content
+        jsonb metadata
+        string status
+        timestamp sent_at
+        timestamp delivered_at
+        timestamp failed_at
+        timestamp opened_at
+        string error_message
+        int retry_count
+        string idempotency_key UK
+        timestamp created_at
+    }
+
+    NOTIFICATION_PREFERENCES {
+        uuid id PK
+        uuid user_id UK
+        boolean email_subscription_events
+        boolean email_payment_events
+        boolean email_low_balance
+        boolean email_marketing
+        boolean sms_critical_alerts
+        boolean push_enabled
+        timestamp created_at
+        timestamp updated_at
+    }
+
+%% =============================================================
+%% SUPPORT SERVICE
+%% =============================================================
+
+    TICKETS {
+        uuid id PK
+        uuid user_id FK
+        string subject
+        text description
+        string status
+        string priority
+        string category
+        uuid assigned_to FK
+        timestamp resolved_at
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    TICKET_MESSAGES {
+        uuid id PK
+        uuid ticket_id FK
+        uuid sender_id FK
+        string sender_type
+        text message
+        boolean is_internal
+        timestamp created_at
+    }
+
+%% =============================================================
+%% RELATIONSHIPS
+%% =============================================================
+
+    %% Auth relationships
+    USERS ||--o{ EMAIL_VERIFICATIONS : "has"
+    USERS ||--o{ PASSWORD_RESETS : "requests"
+    USERS ||--o{ REFRESH_TOKENS : "owns"
+    USERS ||--o| ADMIN_USERS : "may be"
+    ADMIN_USERS ||--o{ AUDIT_LOGS : "creates"
+
+    %% Subscription relationships
+    USERS ||--o| USER_SUBSCRIPTIONS : "has one active"
+    PACKAGES ||--o{ USER_SUBSCRIPTIONS : "subscribed via"
+    PACKAGES ||--o{ USER_SUBSCRIPTIONS : "previous_package"
+    PACKAGES ||--o{ USER_SUBSCRIPTIONS : "scheduled_package"
+    USER_SUBSCRIPTIONS ||--o{ SUBSCRIPTION_HISTORY : "audit trail"
+    USER_SUBSCRIPTIONS ||--o{ RENEWAL_ATTEMPTS : "retry log"
+    PACKAGES ||--o{ SUBSCRIPTION_HISTORY : "old_package"
+    PACKAGES ||--o{ SUBSCRIPTION_HISTORY : "new_package"
+
+    %% Wallet relationships
+    USERS ||--|| WALLETS : "owns one"
+    WALLETS ||--o{ WALLET_LEDGER_ENTRIES : "has entries"
+    WALLETS ||--o{ CREDIT_LEDGER : "has credit entries"
+
+    %% Payment relationships
+    USERS ||--o{ PAYMENT_METHODS : "saves"
+    USERS ||--o{ TRANSACTIONS : "makes"
+    PAYMENT_METHODS ||--o{ TRANSACTIONS : "used in"
+    PAYMENT_METHODS ||--o{ USER_SUBSCRIPTIONS : "renews via"
+    TRANSACTIONS ||--o{ WEBHOOK_EVENTS : "confirmed by"
+
+    %% Billing relationships
+    USERS ||--o{ INVOICES : "receives"
+    USERS ||--o{ RECEIPTS : "receives"
+    USER_SUBSCRIPTIONS ||--o{ INVOICES : "generates"
+    TRANSACTIONS ||--o| INVOICES : "funds"
+    TRANSACTIONS ||--o| RECEIPTS : "produces"
+    PROMO_CODES ||--o{ USER_PROMO_USAGE : "used in"
+    USERS ||--o{ USER_PROMO_USAGE : "redeems"
+    TRANSACTIONS ||--o{ USER_PROMO_USAGE : "applied to"
+
+    %% AI Gateway relationships
+    AI_MODELS ||--o{ MODEL_PRICING : "has pricing"
+    AI_MODELS ||--o{ USAGE_LOGS : "logs usage"
+    AI_MODELS ||--o{ PROVIDER_FALLBACK_RULES : "primary for"
+    AI_MODELS ||--o{ PROVIDER_FALLBACK_RULES : "fallback for"
+    AI_MODELS ||--|| CIRCUIT_BREAKER_STATE : "tracks health"
+
+    %% Chat relationships
+    USERS ||--o{ CHAT_SESSIONS : "starts"
+    AI_MODELS ||--o{ CHAT_SESSIONS : "used in"
+    CHAT_SESSIONS ||--o{ CHAT_MESSAGES : "contains"
+    CHAT_MESSAGES ||--o{ FILE_ATTACHMENTS : "has files"
+    CHAT_SESSIONS ||--o{ FILE_ATTACHMENTS : "contains files"
+    USAGE_LOGS ||--o| CHAT_MESSAGES : "linked to"
+
+    %% Notification relationships
+    USERS ||--o{ NOTIFICATIONS : "receives"
+    USERS ||--|| NOTIFICATION_PREFERENCES : "configures"
+
+    %% Support relationships
+    USERS ||--o{ TICKETS : "submits"
+    ADMIN_USERS ||--o{ TICKETS : "handles"
+    TICKETS ||--o{ TICKET_MESSAGES : "has replies"
