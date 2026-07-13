@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+services/**/.env
+frontend/.env.local
+frontend/.env.production
+
+# Laravel
+services/**/storage/logs/*.log
+services/**/storage/framework/cache/*
+services/**/storage/framework/sessions/*
+services/**/storage/framework/views/*
+services/**/bootstrap/cache/*.php
+services/**/.phpunit.cache
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# Docker volumes
+postgres-data/
+redis-data/
+
+# Test coverage
+coverage/
+.nyc_output/
+services/**/coverage/

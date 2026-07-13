@@ -183,6 +183,74 @@ This document specifies the complete functional and non-functional requirements 
 3. System issues new JWT token
 4. System optionally rotates refresh token
 
+#### FR-AUTH-6: Google OAuth Login / Register
+**Actor:** Guest User or Registered User  
+**Description:** User signs in or registers using their Google account  
+**Preconditions:** Google OAuth2 credentials configured (Client ID + Secret)  
+**Flow:**
+1. User clicks "Continue with Google" on login or register page
+2. Frontend redirects to `GET /auth/google/redirect` (Auth Service)
+3. Auth Service redirects user to Google OAuth consent screen
+4. User approves, Google redirects back to `GET /auth/google/callback` with auth code
+5. Auth Service exchanges code for Google access token + ID token
+6. Auth Service extracts from Google profile:
+   - `google_id`, `email`, `name`, `avatar_url`, `email_verified`
+7. **User lookup logic:**
+   - Check `social_accounts` table: `provider = 'google'` AND `provider_user_id = google_id`
+   - If found → load linked user, proceed to step 9
+   - If not found → check `users` table by `email`
+     - If email exists (existing email/password user) → **link accounts**: insert `social_accounts` row for this user
+     - If email does not exist → **auto-register**: create new `users` record (no password, `status = 'active'`, `email_verified_at = now()`), then insert `social_accounts`
+8. Update `social_accounts`: store latest `access_token`, `refresh_token`, `token_expires_at`
+9. Issue platform JWT token + refresh token (same as FR-AUTH-3 step 4–5)
+10. Redirect frontend to dashboard with tokens in URL fragment or HTTP-only cookie
+11. Publish `user.registered` event (only if new user was created in step 7)
+
+**Postconditions:** User is authenticated, JWT issued, new users have wallet created  
+**Business Rules:**
+- Google-authenticated users skip email verification (Google has already verified it)
+- A single user account can have both email/password AND Google linked simultaneously
+- If Google email matches an existing account, accounts are merged (not duplicated)
+- Google avatar is stored but user can override it later in settings
+- `users.password` is `NULL` for Google-only users — password login is blocked until user sets a password
+
+#### FR-AUTH-7: Link / Unlink Google Account (Settings)
+**Actor:** Authenticated User  
+**Description:** User manages social account connections in profile settings  
+**Link Flow:**
+1. User navigates to Settings → Connected Accounts
+2. User clicks "Connect Google"
+3. Same OAuth flow as FR-AUTH-6, but user is already authenticated
+4. System inserts `social_accounts` record linking to existing user
+5. Confirm success message
+
+**Unlink Flow:**
+1. User clicks "Disconnect Google"
+2. **Guard check:** User must have a password set before unlinking (prevents account lockout)
+   - If no password: Return error "Set a password first before disconnecting Google"
+3. Delete `social_accounts` row for `user_id + provider = 'google'`
+4. Confirm success
+
+**Social Accounts Table (Auth Service owns this):**
+```sql
+CREATE TABLE auth_svc.social_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES auth_svc.users(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL,           -- 'google', 'github' (future), etc.
+    provider_user_id VARCHAR(255) NOT NULL,  -- Google's sub / user ID
+    access_token TEXT NULL,                  -- Encrypted at rest
+    refresh_token TEXT NULL,                 -- Encrypted at rest
+    token_expires_at TIMESTAMP NULL,
+    avatar_url TEXT NULL,
+    raw_data JSONB NULL,                     -- Full Google profile payload
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider, provider_user_id)       -- One Google account per platform user
+);
+CREATE INDEX idx_social_accounts_user ON auth_svc.social_accounts(user_id);
+CREATE INDEX idx_social_accounts_provider ON auth_svc.social_accounts(provider, provider_user_id);
+```
+
 ---
 
 ### 3.2 Subscription Service

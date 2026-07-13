@@ -1,0 +1,78 @@
+-- ─────────────────────────────────────────────
+-- AI ChatHub — PostgreSQL Initialization
+-- Runs once on first container start
+-- ─────────────────────────────────────────────
+
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Service schemas
+CREATE SCHEMA IF NOT EXISTS auth_svc;
+CREATE SCHEMA IF NOT EXISTS subscription_svc;
+CREATE SCHEMA IF NOT EXISTS wallet_svc;
+CREATE SCHEMA IF NOT EXISTS payment_svc;
+CREATE SCHEMA IF NOT EXISTS billing_svc;
+CREATE SCHEMA IF NOT EXISTS ai_svc;
+CREATE SCHEMA IF NOT EXISTS chat_svc;
+CREATE SCHEMA IF NOT EXISTS notification_svc;
+CREATE SCHEMA IF NOT EXISTS support_svc;
+
+-- Dedicated DB users (least privilege per service)
+CREATE USER auth_app     WITH PASSWORD 'auth_secret';
+CREATE USER sub_app      WITH PASSWORD 'sub_secret';
+CREATE USER wallet_app   WITH PASSWORD 'wallet_secret';
+CREATE USER payment_app  WITH PASSWORD 'payment_secret';
+CREATE USER billing_app  WITH PASSWORD 'billing_secret';
+CREATE USER ai_app       WITH PASSWORD 'ai_secret';
+CREATE USER chat_app     WITH PASSWORD 'chat_secret';
+CREATE USER notif_app    WITH PASSWORD 'notif_secret';
+
+-- Grant each user access to only their schema
+GRANT USAGE, CREATE ON SCHEMA auth_svc         TO auth_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA auth_svc     TO auth_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA auth_svc  TO auth_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth_svc GRANT ALL ON TABLES TO auth_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth_svc GRANT ALL ON SEQUENCES TO auth_app;
+
+GRANT USAGE, CREATE ON SCHEMA subscription_svc TO sub_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA subscription_svc    TO sub_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA subscription_svc TO sub_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA subscription_svc GRANT ALL ON TABLES TO sub_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA subscription_svc GRANT ALL ON SEQUENCES TO sub_app;
+
+GRANT USAGE, CREATE ON SCHEMA wallet_svc       TO wallet_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA wallet_svc    TO wallet_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA wallet_svc TO wallet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA wallet_svc GRANT ALL ON TABLES TO wallet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA wallet_svc GRANT ALL ON SEQUENCES TO wallet_app;
+
+GRANT USAGE, CREATE ON SCHEMA payment_svc      TO payment_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA payment_svc    TO payment_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA payment_svc TO payment_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA payment_svc GRANT ALL ON TABLES TO payment_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA payment_svc GRANT ALL ON SEQUENCES TO payment_app;
+
+GRANT USAGE, CREATE ON SCHEMA billing_svc      TO billing_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA billing_svc    TO billing_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA billing_svc TO billing_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA billing_svc GRANT ALL ON TABLES TO billing_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA billing_svc GRANT ALL ON SEQUENCES TO billing_app;
+
+GRANT USAGE, CREATE ON SCHEMA ai_svc           TO ai_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ai_svc    TO ai_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ai_svc TO ai_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ai_svc GRANT ALL ON TABLES TO ai_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA ai_svc GRANT ALL ON SEQUENCES TO ai_app;
+
+GRANT USAGE, CREATE ON SCHEMA chat_svc         TO chat_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA chat_svc    TO chat_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA chat_svc TO chat_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA chat_svc GRANT ALL ON TABLES TO chat_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA chat_svc GRANT ALL ON SEQUENCES TO chat_app;
+
+GRANT USAGE, CREATE ON SCHEMA notification_svc TO notif_app;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA notification_svc    TO notif_app;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA notification_svc TO notif_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA notification_svc GRANT ALL ON TABLES TO notif_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA notification_svc GRANT ALL ON SEQUENCES TO notif_app;

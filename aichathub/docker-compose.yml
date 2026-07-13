@@ -1,0 +1,337 @@
+version: '3.8'
+
+# ─────────────────────────────────────────────
+# AI ChatHub — Local Development Environment
+# ─────────────────────────────────────────────
+
+networks:
+  aichathub:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  storage-data:
+
+services:
+
+  # ─── INFRASTRUCTURE ───────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aichathub-postgres
+    restart: unless-stopped
+    networks: [aichathub]
+    environment:
+      POSTGRES_DB: ai_chathub_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    image: redis:7-alpine
+    container_name: aichathub-redis
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: aichathub-mailpit
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI → http://localhost:8025
+
+  minio:
+    image: minio/minio:latest
+    container_name: aichathub-minio
+    restart: unless-stopped
+    networks: [aichathub]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # Web UI → http://localhost:9001
+    volumes:
+      - storage-data:/data
+    command: server /data --console-address ":9001"
+
+  # ─── AUTH SERVICE ─────────────────────────
+
+  auth-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-auth
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/auth-service:/var/www
+    env_file:
+      - ./services/auth-service/.env
+    depends_on: [postgres, redis]
+
+  auth-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-auth-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8001:80"
+    volumes:
+      - ./services/auth-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [auth-service]
+
+  # ─── SUBSCRIPTION SERVICE ─────────────────
+
+  subscription-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-subscription
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/subscription-service:/var/www
+    env_file:
+      - ./services/subscription-service/.env
+    depends_on: [postgres, redis]
+
+  subscription-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-subscription-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8002:80"
+    volumes:
+      - ./services/subscription-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [subscription-service]
+
+  # ─── WALLET SERVICE ───────────────────────
+
+  wallet-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-wallet
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/wallet-service:/var/www
+    env_file:
+      - ./services/wallet-service/.env
+    depends_on: [postgres, redis]
+
+  wallet-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-wallet-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8003:80"
+    volumes:
+      - ./services/wallet-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [wallet-service]
+
+  # ─── PAYMENT SERVICE ──────────────────────
+
+  payment-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-payment
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/payment-service:/var/www
+    env_file:
+      - ./services/payment-service/.env
+    depends_on: [postgres, redis]
+
+  payment-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-payment-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8004:80"
+    volumes:
+      - ./services/payment-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [payment-service]
+
+  # ─── AI GATEWAY SERVICE ───────────────────
+
+  ai-gateway-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-ai-gateway
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/ai-gateway-service:/var/www
+    env_file:
+      - ./services/ai-gateway-service/.env
+    depends_on: [postgres, redis]
+
+  ai-gateway-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-ai-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8005:80"
+    volumes:
+      - ./services/ai-gateway-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [ai-gateway-service]
+
+  # ─── CHAT SERVICE ─────────────────────────
+
+  chat-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-chat
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/chat-service:/var/www
+    env_file:
+      - ./services/chat-service/.env
+    depends_on: [postgres, redis]
+
+  chat-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-chat-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8006:80"
+    volumes:
+      - ./services/chat-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [chat-service]
+
+  # ─── BILLING SERVICE ──────────────────────
+
+  billing-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-billing
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/billing-service:/var/www
+    env_file:
+      - ./services/billing-service/.env
+    depends_on: [postgres, redis]
+
+  billing-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-billing-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8007:80"
+    volumes:
+      - ./services/billing-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [billing-service]
+
+  # ─── NOTIFICATION SERVICE ─────────────────
+
+  notification-service:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-notification
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/notification-service:/var/www
+    env_file:
+      - ./services/notification-service/.env
+    depends_on: [postgres, redis]
+
+  notification-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-notification-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8008:80"
+    volumes:
+      - ./services/notification-service:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [notification-service]
+
+  # ─── API GATEWAY ──────────────────────────
+
+  api-gateway:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-api-gateway
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/api-gateway:/var/www
+    env_file:
+      - ./services/api-gateway/.env
+    depends_on:
+      - auth-service
+      - subscription-service
+      - wallet-service
+      - payment-service
+      - ai-gateway-service
+      - chat-service
+
+  api-gateway-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-gateway-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "8000:80"
+    volumes:
+      - ./services/api-gateway:/var/www
+      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [api-gateway]
+
+  # ─── FRONTEND ─────────────────────────────
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aichathub-frontend
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on: [api-gateway]
