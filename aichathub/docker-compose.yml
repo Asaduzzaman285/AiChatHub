@@ -91,7 +91,7 @@ services:
       - "8001:80"
     volumes:
       - ./services/auth-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/auth.conf:/etc/nginx/conf.d/default.conf
     depends_on: [auth-service]
 
   # ─── SUBSCRIPTION SERVICE ─────────────────
@@ -118,7 +118,7 @@ services:
       - "8002:80"
     volumes:
       - ./services/subscription-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/subscription.conf:/etc/nginx/conf.d/default.conf
     depends_on: [subscription-service]
 
   # ─── WALLET SERVICE ───────────────────────
@@ -145,7 +145,7 @@ services:
       - "8003:80"
     volumes:
       - ./services/wallet-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/wallet.conf:/etc/nginx/conf.d/default.conf
     depends_on: [wallet-service]
 
   # ─── PAYMENT SERVICE ──────────────────────
@@ -172,7 +172,7 @@ services:
       - "8004:80"
     volumes:
       - ./services/payment-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/payment.conf:/etc/nginx/conf.d/default.conf
     depends_on: [payment-service]
 
   # ─── AI GATEWAY SERVICE ───────────────────
@@ -199,7 +199,7 @@ services:
       - "8005:80"
     volumes:
       - ./services/ai-gateway-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/ai.conf:/etc/nginx/conf.d/default.conf
     depends_on: [ai-gateway-service]
 
   # ─── CHAT SERVICE ─────────────────────────
@@ -226,7 +226,7 @@ services:
       - "8006:80"
     volumes:
       - ./services/chat-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/chat.conf:/etc/nginx/conf.d/default.conf
     depends_on: [chat-service]
 
   # ─── BILLING SERVICE ──────────────────────
@@ -253,7 +253,7 @@ services:
       - "8007:80"
     volumes:
       - ./services/billing-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/billing.conf:/etc/nginx/conf.d/default.conf
     depends_on: [billing-service]
 
   # ─── NOTIFICATION SERVICE ─────────────────
@@ -280,7 +280,7 @@ services:
       - "8008:80"
     volumes:
       - ./services/notification-service:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/notification.conf:/etc/nginx/conf.d/default.conf
     depends_on: [notification-service]
 
   # ─── API GATEWAY ──────────────────────────
@@ -313,7 +313,7 @@ services:
       - "8000:80"
     volumes:
       - ./services/api-gateway:/var/www
-      - ./infrastructure/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./infrastructure/docker/nginx/gateway.conf:/etc/nginx/conf.d/default.conf
     depends_on: [api-gateway]
 
   # ─── FRONTEND ─────────────────────────────

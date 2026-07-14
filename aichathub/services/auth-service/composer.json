@@ -4,13 +4,14 @@
     "type": "project",
     "require": {
         "php": "^8.3",
+        "illuminate/redis": "^12.0",
+        "kreait/laravel-firebase": "^6.0",
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.0",
-        "tymon/jwt-auth": "^2.1",
-        "socialiteproviders/google": "^4.1",
         "laravel/socialite": "^5.16",
+        "socialiteproviders/google": "^4.1",
         "spatie/laravel-permission": "^6.0",
-        "illuminate/redis": "^12.0"
+        "tymon/jwt-auth": "^2.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

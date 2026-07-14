@@ -10,6 +10,10 @@ services/**/.env
 frontend/.env.local
 frontend/.env.production
 
+# Firebase service account keys — NEVER commit
+services/**/firebase-service-account.json
+**/firebase-service-account.json
+
 # Laravel
 services/**/storage/logs/*.log
 services/**/storage/framework/cache/*
