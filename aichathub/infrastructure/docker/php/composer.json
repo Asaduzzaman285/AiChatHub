@@ -1,0 +1,19 @@
+{
+    "name": "aichathub/base-php",
+    "description": "Base PHP image for AI ChatHub services",
+    "type": "project",
+    "require": {
+        "php": "^8.3"
+    },
+    "require-dev": {},
+    "autoload": {
+        "psr-4": {}
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist",
+        "sort-packages": true
+    }
+}
