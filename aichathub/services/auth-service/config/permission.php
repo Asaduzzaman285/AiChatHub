@@ -196,11 +196,11 @@ return [
         'key' => 'spatie.permission.cache',
 
         /*
-         * You may optionally indicate a specific cache driver to use for permission and
-         * role caching using any of the `store` drivers listed in the cache.php config
-         * file. Using 'default' here means to use the `default` set in cache.php.
+         * Force redis — never use the 'database' cache store.
+         * This prevents Spatie from trying to access a 'cache' DB table
+         * which does not exist in this service.
          */
 
-        'store' => 'default',
+        'store' => 'redis',
     ],
 ];
