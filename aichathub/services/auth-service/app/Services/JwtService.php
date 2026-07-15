@@ -21,14 +21,14 @@ class JwtService
         RefreshToken::create([
             'user_id'    => $user->id,
             'token_hash' => hash('sha256', $rawRefreshToken),
-            'expires_at' => now()->addMinutes(config('jwt.refresh_ttl', 43200)),
+            'expires_at' => now()->addMinutes((int) config('jwt.refresh_ttl', 43200)),
         ]);
 
         return [
             'access_token'  => $accessToken,
             'refresh_token' => $rawRefreshToken,
             'token_type'    => 'bearer',
-            'expires_in'    => config('jwt.ttl', 1440) * 60,
+            'expires_in'    => (int) config('jwt.ttl', 1440) * 60,
         ];
     }
 
