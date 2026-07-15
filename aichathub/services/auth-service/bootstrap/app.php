@@ -9,6 +9,9 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\URL;
 
 return Application::configure(basePath: dirname(__DIR__))
+    ->withProviders([
+        \App\Providers\EventServiceProvider::class,
+    ])
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
         apiPrefix: 'api/v1',
