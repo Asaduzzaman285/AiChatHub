@@ -18,23 +18,21 @@ return Application::configure(basePath: dirname(__DIR__))
         }
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Treat all requests as API — never redirect, always return JSON
-        $middleware->statefulApi();
+        // Pure API service — no sessions, no cookies, no redirects ever.
+        // Do NOT call statefulApi() — that enables Sanctum session middleware
+        // which redirects unauthenticated requests instead of returning JSON.
 
-        // Register custom middleware aliases
         $middleware->alias([
             'auth.jwt'      => \App\Http\Middleware\JwtAuthMiddleware::class,
             'auth.internal' => \App\Http\Middleware\InternalServiceMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        // Any unauthenticated request on API routes → JSON 401, never redirect
+        // Always return JSON for API routes — never redirect
         $exceptions->render(function (AuthenticationException $e, Request $request) {
-            if ($request->is('api/*') || $request->expectsJson()) {
-                return response()->json([
-                    'message' => 'Unauthenticated.',
-                    'error'   => 'unauthenticated',
-                ], 401);
-            }
+            return response()->json([
+                'message' => 'Unauthenticated.',
+                'error'   => 'unauthenticated',
+            ], 401);
         });
     })->create();
