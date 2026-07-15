@@ -6,12 +6,16 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\URL;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
         apiPrefix: 'api/v1',
         then: function () {
+            // Force root URL so redirects never use internal container hostname
+            URL::forceRootUrl(config('app.url'));
+
             Route::prefix('api/internal')
                 ->middleware('auth.internal')
                 ->group(base_path('routes/internal.php'));
