@@ -58,9 +58,8 @@ class SendVerificationEmail implements ShouldQueue
             Http::withHeaders([
                 'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
                 'Accept'                 => 'application/json',
-                'Host'                   => 'wallet-nginx',
             ])->timeout(10)->post("{$walletUrl}/api/internal/wallet/create", [
-                'user_id'  => $user->id,
+                'user_id'  => (string) $user->id,
                 'currency' => $user->preferred_currency ?? 'USD',
             ]);
         } catch (\Exception $e) {

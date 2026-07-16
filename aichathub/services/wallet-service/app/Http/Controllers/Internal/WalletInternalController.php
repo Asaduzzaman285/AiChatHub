@@ -16,7 +16,7 @@ class WalletInternalController extends Controller
     public function create(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'  => 'required|uuid',
+            'user_id'  => 'required|string|min:36|max:36',
             'currency' => 'nullable|string|size:3',
         ]);
 
@@ -38,11 +38,11 @@ class WalletInternalController extends Controller
     public function credit(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'        => 'required|uuid',
+            'user_id'        => 'required|string|min:36|max:36',
             'amount'         => 'required|numeric|min:0.000001',
             'description'    => 'required|string',
             'reference_type' => 'nullable|string',
-            'reference_id'   => 'nullable|uuid',
+            'reference_id'   => 'nullable|string',
         ]);
 
         $wallet = $this->walletService->credit(
