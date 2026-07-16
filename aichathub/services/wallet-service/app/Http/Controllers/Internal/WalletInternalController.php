@@ -12,6 +12,28 @@ class WalletInternalController extends Controller
 {
     public function __construct(private WalletService $walletService) {}
 
+    /** POST /internal/wallet/create — called by auth-service on user registration */
+    public function create(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'user_id'  => 'required|uuid',
+            'currency' => 'nullable|string|size:3',
+        ]);
+
+        $wallet = $this->walletService->createForUser(
+            $data['user_id'],
+            $data['currency'] ?? 'USD'
+        );
+
+        return response()->json([
+            'wallet_id' => $wallet->id,
+            'user_id'   => $wallet->user_id,
+            'balance'   => (float) $wallet->balance,
+            'currency'  => $wallet->currency,
+            'created'   => $wallet->wasRecentlyCreated,
+        ], 201);
+    }
+
     /** POST /internal/wallet/credit — top-up or subscription credit */
     public function credit(Request $request): JsonResponse
     {

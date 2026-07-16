@@ -5,6 +5,8 @@ namespace App\Listeners;
 use App\Events\UserRegistered;
 use App\Models\EmailVerification;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
@@ -14,12 +16,11 @@ class SendVerificationEmail implements ShouldQueue
     {
         $user = $event->user;
 
-        // Delete any existing unused tokens for this user
+        // ── 1. Send email verification ────────────────────────────────
         EmailVerification::where('user_id', $user->id)
             ->where('used', false)
             ->delete();
 
-        // Create a new verification token (valid for 24 hours)
         $token = Str::random(64);
 
         EmailVerification::create([
@@ -29,11 +30,9 @@ class SendVerificationEmail implements ShouldQueue
             'expires_at' => now()->addHours(24),
         ]);
 
-        $verifyUrl   = config('app.url') . '/api/v1/auth/verify/' . $token;
-        $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+        $verifyUrl = config('app.url') . '/api/v1/auth/verify/' . $token;
 
-        // Send via Mailpit (SMTP on port 1025 in dev)
-        Mail::send([], [], function ($message) use ($user, $verifyUrl, $frontendUrl) {
+        Mail::send([], [], function ($message) use ($user, $verifyUrl) {
             $message->to($user->email, $user->name)
                 ->from(config('mail.from.address'), config('mail.from.name'))
                 ->subject('Verify your AI ChatHub account')
@@ -49,8 +48,27 @@ class SendVerificationEmail implements ShouldQueue
                     </p>
                     <p>Or copy this link: <br><code>{$verifyUrl}</code></p>
                     <p>This link expires in 24 hours.</p>
-                    <p>If you didn't create an account, ignore this email.</p>
                 ");
         });
+
+        // ── 2. Call wallet-service to auto-create wallet ──────────────
+        // Uses internal service key — wallet-service validates via InternalServiceMiddleware.
+        try {
+            $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
+
+            Http::withHeaders([
+                'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
+                'Accept'                 => 'application/json',
+            ])->timeout(10)->post("{$walletUrl}/api/internal/wallet/create", [
+                'user_id'  => $user->id,
+                'currency' => $user->preferred_currency ?? 'USD',
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Wallet auto-create call failed', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+            // Don't fail the whole listener — wallet can be created on first login
+        }
     }
 }
