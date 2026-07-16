@@ -178,33 +178,60 @@ src/lib/api-client.ts       — Axios instance with JWT interceptor
 
 ## What Is NOT Yet Built (Phase 1 Remaining)
 
-### High Priority — Build Next
+### 🔴 Critical — Must Build Before Next Feature Works
 
-**1. SubscriptionController** (`services/subscription-service/app/Http/Controllers/V1/SubscriptionController.php`)
+**1. AI Models Seeder** (`services/ai-gateway-service/`)
+- Run: `docker exec aichathub-ai-gateway php artisan db:seed --class=ModelSeeder`
+- Seeds 12 models (GPT-4o-mini, Claude Haiku, Gemini Flash, etc.) into `ai_svc.ai_models`
+- After seeding, copy the printed model UUIDs into packages.model_access
+- Without this, model access checks in chat will fail
+
+**2. SubscriptionController** (`services/subscription-service/app/Http/Controllers/V1/SubscriptionController.php`)
 - `POST /api/v1/subscription/subscribe` — subscribe user to a package
-- Needs: validate package slug, check if already subscribed, create subscription record, fire subscription.purchased event, wallet-service credits the user
+- Needs: validate package slug, check if already subscribed, create subscription record
+- Fire `subscription.purchased` event → wallet-service credits the user
+- This is the gateway to the entire payment + chat flow
 
-**2. Frontend `/chat` page** (`frontend/src/app/(dashboard)/chat/page.tsx`)
+**3. Queue Workers for ALL services** (not just auth)
+```bash
+# Must run these for events to flow between services
+docker exec -d aichathub-wallet       php artisan queue:work redis --queue=subscription-events,payment-events --tries=3
+docker exec -d aichathub-notification php artisan queue:work redis --queue=subscription-events,payment-events,wallet-events --tries=3
+docker exec -d aichathub-billing      php artisan queue:work redis --queue=subscription-events,payment-events --tries=3
+docker exec -d aichathub-subscription php artisan queue:work redis --tries=3
+```
+
+### 🟡 High Priority — Next After Subscription
+
+**4. Frontend `/chat` page** (`frontend/src/app/(dashboard)/chat/page.tsx`)
 - Session list sidebar
 - Message display area
 - Model selector dropdown
 - Message input with send button
 - SSE streaming support
 
-**3. AI Gateway — OpenAI streaming** (`services/ai-gateway-service/`)
+**5. Frontend route protection middleware** (`frontend/src/middleware.ts`)
+- Redirect unauthenticated users from `/chat` to `/login`
+- Redirect authenticated users away from `/login`
+
+**6. AI Gateway — OpenAI streaming** (`services/ai-gateway-service/`)
 - `POST /api/v1/chat/stream` → streams GPT-4o-mini response via SSE
 - Balance check → reserve → stream → deduct flow
-- Model list endpoint
+- Model list endpoint filtered by subscription tier
+- Needs `OPENAI_API_KEY` in ai-gateway-service `.env`
 
-**4. Payment Service** — Stripe top-up flow
+**7. Payment Service — Stripe top-up**
 - `POST /api/v1/topup` → Stripe charge
 - Webhook handler → wallet credit
+- Needs `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in payment-service `.env`
 
-### Medium Priority
-- Password reset flow (forgot/reset endpoints are stubbed)
-- `GET /api/v1/auth/me` returns full profile but missing `avatar_url` field
-- Notification service email templates (welcome email, receipt, low balance)
-- Billing service invoice generation
+### 🟢 Medium Priority
+
+**8. Password reset flow** — endpoints exist but `PasswordResetController` is a stub
+**9. WalletController** — `GET /api/v1/wallet` for frontend balance display (stub)
+**10. LedgerController** — `GET /api/v1/wallet/ledger` for transaction history (stub)
+**11. Notification email templates** — welcome email, receipt, low balance alert
+**12. Billing service invoice generation** — triggered by subscription.purchased event
 
 ---
 
@@ -296,7 +323,102 @@ Week 9-10: Polish                          ← LAST
 
 ---
 
-## Quick Test Commands (Always Use These, Not PowerShell curl)
+## Service Implementation Checklist
+*(Aligned with PHASE1_DEV_GUIDE.md — updated to reflect actual current state)*
+
+### Auth Service ✅ COMPLETE
+- [x] RegisterController — user creation + afterResponse() for email + wallet
+- [x] LoginController — email/password + JWT issuance
+- [x] EmailVerificationController — verify token + resend
+- [x] LogoutController — invalidate JWT + revoke refresh tokens
+- [x] TokenRefreshController — rotate refresh token pair
+- [x] PasswordResetController — STUB (routes exist, logic not implemented)
+- [x] SocialAccountController — list + unlink Google (wired, basic impl)
+- [x] GoogleOAuthController — Socialite redirect (kept but unused — Firebase used instead)
+- [x] FirebaseAuthController — Google Sign-In via Firebase token ← NEW vs Dev Guide
+- [x] Internal UserController — show, findByEmail, suspend, unsuspend
+- [x] JwtAuthMiddleware — validates JWT on protected routes
+- [x] InternalServiceMiddleware — validates X-Internal-Service-Key
+- [x] JwtService — issueTokens(), rotateRefreshToken(), revokeAll()
+- [x] UserRegistered event + SendVerificationEmail listener
+- [ ] PasswordResetController full implementation
+- [ ] Welcome email on first social login
+
+### Subscription Service ⬜ PARTIAL
+- [x] PackageController — index() + show() ← DONE
+- [x] PackageSeeder — Basic/Standard/Pro seeded ← DONE
+- [ ] SubscriptionController — current, subscribe, upgrade, downgrade, cancel, history
+- [ ] ProcessRenewalJob
+- [ ] RetryRenewalJob
+- [ ] Event listener: payment.succeeded → activate subscription
+- [ ] Renewal scheduler
+
+### Wallet Service ⬜ PARTIAL
+- [x] WalletService — createForUser(), credit(), debit(), reserve(), refund() ← already scaffolded
+- [x] WalletInternalController — create(), show(), credit(), reserve(), deduct(), refund() ← DONE
+- [x] Wallet auto-created on registration via afterResponse() HTTP call ← DONE
+- [ ] WalletController — GET /wallet (balance display for frontend)
+- [ ] LedgerController — GET /wallet/ledger (paginated history)
+- [ ] Event listener: subscription.purchased → credit wallet
+
+### Payment Service ⬜ NOT STARTED
+- [ ] PaymentMethodController — CRUD Stripe payment methods
+- [ ] TopupController — initiate + status
+- [ ] TransactionController — list + show
+- [ ] StripeWebhookController — validate signature + process events
+- [ ] BkashWebhookController (Bangladesh gateway)
+
+### AI Gateway Service ⬜ NOT STARTED
+- [ ] ModelController — list models filtered by subscription tier
+- [ ] ChatController — streaming SSE via OpenAI GPT-4o-mini
+- [ ] ImageController — DALL-E 3 (Pro tier)
+- [ ] AudioController — TTS (Pro tier)
+- [ ] TranscriptionController — Whisper
+- [ ] CostTrackingMiddleware — reserve/deduct wallet balance per request
+- [ ] ModelSeeder — seed 12 AI models ← MUST DO BEFORE SUBSCRIPTION WORKS
+
+### Chat Service ⬜ NOT STARTED
+- [ ] SessionController — CRUD + export
+- [ ] MessageController — list + store
+- [ ] FileAttachmentController — upload + delete
+- [ ] Event listener: ai_request.completed → store messages
+
+### Billing Service ⬜ NOT STARTED
+- [ ] InvoiceController — list + show + download
+- [ ] ReceiptController — list + show
+- [ ] Event listener: subscription.purchased/renewed → create invoice
+
+### Notification Service ⬜ NOT STARTED
+- [ ] WelcomeMail Mailable
+- [ ] SubscriptionReceiptMail Mailable
+- [ ] RenewalFailedMail Mailable
+- [ ] LowBalanceMail Mailable
+- [ ] Event listeners wired for all above
+
+### API Gateway ✅ COMPLETE (for current scope)
+- [x] ProxyController — forwards all routes to downstream services
+- [x] config/services.php — all downstream URLs mapped
+- [x] JwtGatewayMiddleware — validates JWT, passes X-User-Id header
+- [ ] Rate limiting middleware (Week 9-10)
+- [ ] CORS configuration (currently handled by Laravel defaults)
+
+### Frontend ⬜ PARTIAL
+- [x] Login page — email/password form + Google Sign-In button ← DONE
+- [x] Register page — name/email/password/currency form ← DONE
+- [x] GoogleSignInButton component — Firebase popup flow ← DONE
+- [x] useFirebaseAuth hook — sends token to backend, stores JWT ← DONE
+- [x] Auth store (Zustand) — persists JWT, isAuthenticated ← DONE
+- [x] API client (Axios) — JWT interceptor, token refresh ← DONE
+- [x] Firebase SDK initialized ← DONE
+- [x] Tailwind CSS working ← DONE
+- [ ] Route protection middleware (src/middleware.ts) — redirect /chat to /login
+- [ ] Dashboard layout with sidebar
+- [ ] Chat interface (session list + message stream + model selector)
+- [ ] Auth callback page — handle Google redirect (/auth/callback)
+- [ ] Wallet page (balance card + ledger table)
+- [ ] Billing page (subscription card + invoice list)
+- [ ] Settings page (profile + connected accounts)
+- [ ] Pricing/subscribe page
 
 ```bash
 # Test registration through API Gateway
@@ -314,4 +436,81 @@ docker exec aichathub-auth sh /tc.sh
 # Check DB state
 docker exec aichathub-postgres psql -U postgres -d ai_chathub_db -c "SELECT COUNT(*) FROM wallet_svc.wallets;"
 docker exec aichathub-postgres psql -U postgres -d ai_chathub_db -c "SELECT slug, monthly_price_usd FROM subscription_svc.packages;"
+```
+
+---
+
+## Deviations from Original PHASE1_DEV_GUIDE.md
+
+These are intentional changes made during implementation:
+
+| Dev Guide Said | What We Actually Built | Why |
+|---|---|---|
+| Google OAuth via Socialite redirect | Firebase Auth SDK popup | Firebase handles Google + future providers in one SDK |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in frontend .env | Firebase config vars instead | Firebase SDK replaces direct OAuth handling |
+| Wallet service listens to Redis queue events | Wallet created via direct HTTP call from auth-service | Simpler, no cross-service serialization issues |
+| Queue workers for all services from Day 1 | Only auth queue worker running | Other services have no active listeners yet |
+| `php artisan` commands run locally | All artisan via `docker exec` | Docker-only setup, no local PHP |
+| Google OAuth Step 10 of Dev Guide | Not needed — Firebase handles this | Firebase console replaces Google Cloud Console OAuth setup |
+
+---
+
+## Important: What Antigravity Must Know Before Starting
+
+1. **Never use `php artisan` directly** — it hangs on WSL2. Always use:
+   ```bash
+   docker exec aichathub-{service} php artisan {command}
+   ```
+
+2. **Never use PowerShell `curl` with JSON** — quoting breaks. Always write a `.sh` script and `docker cp` it:
+   ```bash
+   docker cp scripts/your-test.sh aichathub-auth-nginx:/t.sh
+   docker exec aichathub-auth-nginx sh /t.sh
+   ```
+
+3. **Firebase service account is NOT in git** — must be manually copied to `services/auth-service/firebase-service-account.json` on any new machine.
+
+4. **JWT_SECRET must be the same in ALL service `.env` files** — if you change it in one, change all.
+
+5. **Run queue worker after `docker-compose up -d`**:
+   ```bash
+   docker exec -d aichathub-auth php artisan queue:work redis --tries=3 --sleep=3
+   ```
+
+6. **Seed AI models before implementing subscription subscribe**:
+   ```bash
+   docker exec aichathub-ai-gateway php artisan db:seed --class=ModelSeeder
+   ```
+
+7. **Config cache must be cleared after any .env or config file change**:
+   ```bash
+   docker exec aichathub-{service} sh -c "rm -f /var/www/bootstrap/cache/config.php"
+   ```
+
+8. **Restart api-gateway after config changes**:
+   ```bash
+   docker-compose restart api-gateway api-gateway-nginx
+   ```
+
+---
+
+## Quick Test Commands (Always Use These, Not PowerShell curl)
+
+```bash
+# Test registration through API Gateway
+docker cp scripts/test-gateway-register.sh aichathub-gateway-nginx:/tgr.sh
+docker exec aichathub-gateway-nginx sh /tgr.sh
+
+# Test full auth flow (login, /me, firebase, refresh)
+docker cp scripts/test-full-auth.sh aichathub-auth-nginx:/tfa.sh
+docker exec aichathub-auth-nginx sh /tfa.sh
+
+# Test wallet internal API
+docker cp scripts/test-cross-service.sh aichathub-auth:/tc.sh
+docker exec aichathub-auth sh /tc.sh
+
+# Check DB state
+docker exec aichathub-postgres psql -U postgres -d ai_chathub_db -c "SELECT COUNT(*) FROM wallet_svc.wallets;"
+docker exec aichathub-postgres psql -U postgres -d ai_chathub_db -c "SELECT slug, monthly_price_usd FROM subscription_svc.packages;"
+docker exec aichathub-postgres psql -U postgres -d ai_chathub_db -c "\dt auth_svc.*"
 ```
