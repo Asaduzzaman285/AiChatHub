@@ -10,9 +10,10 @@ class InternalServiceMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $key = $request->header('X-Internal-Service-Key');
+        $key      = $request->header('X-Internal-Service-Key');
+        $expected = env('INTERNAL_SERVICE_KEY', '');
 
-        if ($key !== config('app.internal_service_key')) {
+        if (! $expected || $key !== $expected) {
             return response()->json([
                 'message' => 'Unauthorized. Internal service key required.',
                 'error'   => 'internal_auth_required',
