@@ -51,22 +51,8 @@ class SendVerificationEmail implements ShouldQueue
                 ");
         });
 
-        // ── 2. Call wallet-service to auto-create wallet ──────────────
-        try {
-            $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
-
-            Http::withHeaders([
-                'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
-                'Accept'                 => 'application/json',
-            ])->timeout(10)->post("{$walletUrl}/api/internal/wallet/create", [
-                'user_id'  => (string) $user->id,
-                'currency' => $user->preferred_currency ?? 'USD',
-            ]);
-        } catch (\Exception $e) {
-            Log::warning('Wallet auto-create call failed', [
-                'user_id' => $user->id,
-                'error'   => $e->getMessage(),
-            ]);
-        }
+        // ── 2. Wallet creation is handled by RegisterController via afterResponse ──
+        // Nothing needed here — wallet HTTP call is dispatched after HTTP response
+        // to avoid blocking the registration request.
     }
 }

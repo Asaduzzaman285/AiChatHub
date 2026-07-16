@@ -121,7 +121,25 @@ class FirebaseAuthController extends Controller
             'last_login_ip' => $request->ip(),
         ]);
 
-        // 5. Issue our own JWT pair
+        // 5. Auto-create wallet if user is new (after response to avoid blocking)
+        if ($user->wasRecentlyCreated) {
+            dispatch(function () use ($user) {
+                try {
+                    $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
+                    \Illuminate\Support\Facades\Http::withHeaders([
+                        'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
+                        'Accept'                 => 'application/json',
+                    ])->timeout(5)->post("{$walletUrl}/api/internal/wallet/create", [
+                        'user_id'  => (string) $user->id,
+                        'currency' => $user->preferred_currency ?? 'USD',
+                    ]);
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('Firebase wallet create: ' . $e->getMessage());
+                }
+            })->afterResponse();
+        }
+
+        // 6. Issue our own JWT pair
         $tokens = $this->jwtService->issueTokens($user);
 
         return response()->json(array_merge($tokens, [
