@@ -9,6 +9,10 @@ return [
         'redirect'      => env('GOOGLE_REDIRECT_URI'),
     ],
 
+    // ── Internal service URLs ─────────────────────────────────────────────
+    'wallet_url'   => env('WALLET_SERVICE_URL', 'http://wallet-nginx'),
+    'internal_key' => env('INTERNAL_SERVICE_KEY', ''),
+
     // ── Internal Service URLs ────────────────────────────────────────────
     // Used by Auth Service to call other services internally
     'internal_key'         => env('INTERNAL_SERVICE_KEY', 'change-in-production'),

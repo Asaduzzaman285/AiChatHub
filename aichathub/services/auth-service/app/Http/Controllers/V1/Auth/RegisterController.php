@@ -8,6 +8,8 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\User;
 use App\Services\JwtService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class RegisterController extends Controller
 {
@@ -23,31 +25,36 @@ class RegisterController extends Controller
             'status'             => 'pending_verification',
         ]);
 
-        $userId   = $user->id;
-        $email    = $user->email;
-        $name     = $user->name;
-        $currency = $user->preferred_currency ?? 'USD';
+        // Resolve env values NOW (before closure) so they are available inside it
+        $userId      = (string) $user->id;
+        $currency    = $user->preferred_currency ?? 'USD';
+        $walletUrl   = rtrim(config('services.wallet_url', 'http://wallet-nginx'), '/');
+        $internalKey = config('services.internal_key', '');
 
-        // Fire everything AFTER the HTTP response is sent — never block registration
-        dispatch(function () use ($userId, $email, $name, $currency) {
+        // Fire event + wallet creation AFTER response is sent — never block registration
+        dispatch(function () use ($userId, $currency, $walletUrl, $internalKey) {
+
+            // 1. Send verification email via event
             $user = \App\Models\User::find($userId);
             if ($user) {
                 event(new UserRegistered($user));
             }
 
-            // Wallet creation
-            try {
-                $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
-                \Illuminate\Support\Facades\Http::withHeaders([
-                    'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
-                    'Accept'                 => 'application/json',
-                ])->timeout(5)->post("{$walletUrl}/api/internal/wallet/create", [
-                    'user_id'  => $userId,
-                    'currency' => $currency,
-                ]);
-            } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Wallet create: ' . $e->getMessage());
+            // 2. Auto-create wallet in wallet-service
+            if ($walletUrl && $internalKey) {
+                try {
+                    Http::withHeaders([
+                        'X-Internal-Service-Key' => $internalKey,
+                        'Accept'                 => 'application/json',
+                    ])->timeout(5)->post("{$walletUrl}/api/internal/wallet/create", [
+                        'user_id'  => $userId,
+                        'currency' => $currency,
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Wallet auto-create failed: ' . $e->getMessage(), ['user_id' => $userId]);
+                }
             }
+
         })->afterResponse();
 
         return response()->json([
