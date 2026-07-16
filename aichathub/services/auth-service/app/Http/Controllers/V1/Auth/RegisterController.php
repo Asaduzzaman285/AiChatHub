@@ -23,22 +23,30 @@ class RegisterController extends Controller
             'status'             => 'pending_verification',
         ]);
 
-        event(new UserRegistered($user));
+        $userId   = $user->id;
+        $email    = $user->email;
+        $name     = $user->name;
+        $currency = $user->preferred_currency ?? 'USD';
 
-        // Immediately create wallet via direct HTTP call (sync, fast)
-        // This runs AFTER the response is returned via deferred dispatch
-        dispatch(function () use ($user) {
+        // Fire everything AFTER the HTTP response is sent — never block registration
+        dispatch(function () use ($userId, $email, $name, $currency) {
+            $user = \App\Models\User::find($userId);
+            if ($user) {
+                event(new UserRegistered($user));
+            }
+
+            // Wallet creation
             try {
                 $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
                 \Illuminate\Support\Facades\Http::withHeaders([
                     'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
                     'Accept'                 => 'application/json',
                 ])->timeout(5)->post("{$walletUrl}/api/internal/wallet/create", [
-                    'user_id'  => (string) $user->id,
-                    'currency' => $user->preferred_currency ?? 'USD',
+                    'user_id'  => $userId,
+                    'currency' => $currency,
                 ]);
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Wallet create failed: ' . $e->getMessage());
+                \Illuminate\Support\Facades\Log::error('Wallet create: ' . $e->getMessage());
             }
         })->afterResponse();
 
