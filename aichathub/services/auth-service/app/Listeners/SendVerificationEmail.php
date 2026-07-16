@@ -52,13 +52,13 @@ class SendVerificationEmail implements ShouldQueue
         });
 
         // ── 2. Call wallet-service to auto-create wallet ──────────────
-        // Uses internal service key — wallet-service validates via InternalServiceMiddleware.
         try {
             $walletUrl = rtrim(env('WALLET_SERVICE_URL', 'http://wallet-nginx'), '/');
 
             Http::withHeaders([
                 'X-Internal-Service-Key' => env('INTERNAL_SERVICE_KEY'),
                 'Accept'                 => 'application/json',
+                'Host'                   => 'wallet-nginx',
             ])->timeout(10)->post("{$walletUrl}/api/internal/wallet/create", [
                 'user_id'  => $user->id,
                 'currency' => $user->preferred_currency ?? 'USD',
@@ -68,7 +68,6 @@ class SendVerificationEmail implements ShouldQueue
                 'user_id' => $user->id,
                 'error'   => $e->getMessage(),
             ]);
-            // Don't fail the whole listener — wallet can be created on first login
         }
     }
 }
