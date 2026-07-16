@@ -1,9 +1,7 @@
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   reactStrictMode: true,
 
-  // Proxy /api/* to the API Gateway so we don't expose service URLs to browser
   async rewrites() {
     return [
       {
@@ -15,7 +13,7 @@ const nextConfig: NextConfig = {
 
   images: {
     remotePatterns: [
-      { protocol: 'https', hostname: 'lh3.googleusercontent.com' }, // Google avatars
+      { protocol: 'https', hostname: 'lh3.googleusercontent.com' },
       { protocol: 'http',  hostname: 'localhost' },
     ],
   },
