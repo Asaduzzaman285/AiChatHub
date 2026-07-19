@@ -5,32 +5,26 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Tymon\JWTAuth\Exceptions\JWTException;
-use Tymon\JWTAuth\Exceptions\TokenExpiredException;
-use Tymon\JWTAuth\Exceptions\TokenInvalidException;
-use Tymon\JWTAuth\Facades\JWTAuth;
 
+/**
+ * This service has no local user store — the API Gateway validates the JWT
+ * (see api-gateway/app/Http/Middleware/JwtGatewayMiddleware.php) and forwards
+ * the decoded identity as X-User-Id / X-User-Email / X-User-Status headers.
+ * Requests that bypass the gateway (e.g. direct internal test scripts) will
+ * not carry these headers and are correctly rejected here.
+ */
 class JwtAuthMiddleware
 {
     public function handle(Request $request, Closure $next): Response
     {
-        try {
-            $user = JWTAuth::parseToken()->authenticate();
+        $userId = $request->header('X-User-Id');
 
-            if (! $user) {
-                return response()->json(['message' => 'User not found.', 'error' => 'user_not_found'], 401);
-            }
-
-            // Inject user into request so controllers can use $request->user()
-            $request->setUserResolver(fn () => $user);
-
-        } catch (TokenExpiredException) {
-            return response()->json(['message' => 'Token expired.', 'error' => 'token_expired'], 401);
-        } catch (TokenInvalidException) {
-            return response()->json(['message' => 'Token invalid.', 'error' => 'token_invalid'], 401);
-        } catch (JWTException) {
+        if (! $userId) {
             return response()->json(['message' => 'Token not provided.', 'error' => 'token_missing'], 401);
         }
+
+        $request->attributes->set('auth_user_id', $userId);
+        $request->attributes->set('auth_user_email', $request->header('X-User-Email'));
 
         return $next($request);
     }

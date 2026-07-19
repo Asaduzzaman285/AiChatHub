@@ -14,7 +14,7 @@ class SubscriptionService
      * Subscribe a user to a new package.
      * Called after payment is confirmed.
      */
-    public function subscribe(string $userId, Package $package, string $transactionId, string $currency, float $exchangeRate, string $paymentMethodId): UserSubscription
+    public function subscribe(string $userId, Package $package, string $transactionId, string $currency, float $exchangeRate, ?string $paymentMethodId = null): UserSubscription
     {
         return DB::transaction(function () use ($userId, $package, $transactionId, $currency, $exchangeRate, $paymentMethodId) {
             $now = now();

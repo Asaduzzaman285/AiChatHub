@@ -6,6 +6,8 @@ import { useFirebaseAuth } from '@/hooks/useFirebaseAuth'
 interface Props {
   onSuccess?: () => void
   label?: string
+  /** Cosmetic only for now — Firebase's Google popup flow is identical either way. */
+  mode?: 'signin' | 'signup'
 }
 
 export function GoogleSignInButton({ onSuccess, label = 'Continue with Google' }: Props) {

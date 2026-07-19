@@ -9,7 +9,10 @@ const apiClient: AxiosInstance = axios.create({
     'Content-Type': 'application/json',
     Accept: 'application/json',
   },
-  timeout: 15000,
+  // Cold Docker/WSL2 starts can push a single request (incl. CORS preflight) past 15-20s —
+  // see HANDOFF.md "Environment gotchas". Kept below the gateway's own 45s proxy timeout so a
+  // truly hung request still resolves before the user gives up waiting.
+  timeout: 40000,
 })
 
 // ─── Request interceptor — attach JWT ──────────────────────────────────────

@@ -38,11 +38,12 @@ class WalletInternalController extends Controller
     public function credit(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'        => 'required|string|min:36|max:36',
-            'amount'         => 'required|numeric|min:0.000001',
-            'description'    => 'required|string',
-            'reference_type' => 'nullable|string',
-            'reference_id'   => 'nullable|string',
+            'user_id'                => 'required|string|min:36|max:36',
+            'amount'                 => 'required|numeric|min:0.000001',
+            'description'            => 'required|string',
+            'reference_type'         => 'nullable|string',
+            'reference_id'           => 'nullable|string',
+            'activate_credit_buffer' => 'nullable|boolean',
         ]);
 
         $wallet = $this->walletService->credit(
@@ -51,11 +52,13 @@ class WalletInternalController extends Controller
             $data['description'],
             $data['reference_type'] ?? null,
             $data['reference_id'] ?? null,
+            (bool) ($data['activate_credit_buffer'] ?? false),
         );
 
         return response()->json([
-            'success' => true,
-            'balance' => (float) $wallet->balance,
+            'success'      => true,
+            'balance'      => (float) $wallet->balance,
+            'credit_limit' => (float) $wallet->credit_limit,
         ]);
     }
 

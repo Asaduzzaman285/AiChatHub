@@ -16,21 +16,49 @@ class WalletService
      */
     public function createForUser(string $userId, string $currency = 'USD'): Wallet
     {
+        // No credit buffer until the user actually buys a package — see credit()'s
+        // $activateCreditBuffer param, called from subscription-service's subscribe().
         return Wallet::firstOrCreate(
             ['user_id' => $userId],
-            ['currency' => $currency, 'credit_limit' => config('wallet.credit_buffer_default', 3.00)]
+            ['currency' => $currency, 'credit_limit' => 0]
         );
     }
 
     /**
      * Credit wallet — settles any outstanding credit first, then adds remainder.
      * Used for: top-up, subscription purchase/renewal, refund.
+     *
+     * Idempotent on (reference_type, reference_id) when both are given: callers
+     * (e.g. subscription-service, the Stripe webhook job) time out and retry on
+     * a slow response even when the credit already landed server-side — without
+     * this guard a retry double-credits the wallet.
      */
-    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null): Wallet
+    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null, bool $activateCreditBuffer = false): Wallet
     {
-        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId) {
+        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId, $activateCreditBuffer) {
             /** @var Wallet $wallet */
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
+
+            // Idempotency check happens after the row lock so two concurrent
+            // retries for the same reference serialize correctly instead of
+            // racing past the check together.
+            if ($referenceType && $referenceId) {
+                $alreadyCredited = WalletLedgerEntry::where('type', 'credit')
+                    ->where('reference_type', $referenceType)
+                    ->where('reference_id', $referenceId)
+                    ->exists();
+
+                if ($alreadyCredited) {
+                    return $wallet;
+                }
+            }
+
+            // Package buyers get a small grace buffer so a mid-cycle $0 balance
+            // doesn't hard-block a request — see WalletService::deduct(). Only
+            // activated on a real purchase, never for an unsubscribed user.
+            if ($activateCreditBuffer && (float) $wallet->credit_limit <= 0) {
+                $wallet->credit_limit = config('wallet.credit_buffer_default', 3.00);
+            }
 
             $balanceBefore = (float) $wallet->balance;
             $remaining     = $amount;

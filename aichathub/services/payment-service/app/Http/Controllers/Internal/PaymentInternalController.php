@@ -106,6 +106,49 @@ class PaymentInternalController extends Controller
         return response()->json($txn);
     }
 
+    /** POST /internal/payments/refund — called when a subscription/topup needs to be reversed */
+    public function refund(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'transaction_id' => 'required|uuid',
+            'amount'         => 'nullable|numeric|min:0.01',
+        ]);
+
+        $transaction = Transaction::findOrFail($data['transaction_id']);
+
+        if ($transaction->status !== 'completed') {
+            return response()->json(['error' => 'transaction_not_completed'], 422);
+        }
+
+        if (! $transaction->gateway_reference) {
+            return response()->json(['error' => 'no_gateway_reference'], 422);
+        }
+
+        $amount = (float) ($data['amount'] ?? $transaction->amount);
+        $result = $this->stripe->refund($transaction->gateway_reference, $amount);
+
+        if (! $result['success']) {
+            return response()->json(['error' => $result['error']], 422);
+        }
+
+        $transaction->update([
+            'status'       => 'refunded',
+            'refunded_at'  => now(),
+        ]);
+
+        $this->publishEvent('payment.refunded', [
+            'transaction_id' => $transaction->id,
+            'user_id'        => $transaction->user_id,
+            'amount'         => $amount,
+        ]);
+
+        return response()->json([
+            'transaction_id' => $transaction->id,
+            'status'         => 'refunded',
+            'refund_id'      => $result['refund_id'],
+        ]);
+    }
+
     private function publishEvent(string $event, array $payload): void
     {
         Redis::publish('payment-events', json_encode([

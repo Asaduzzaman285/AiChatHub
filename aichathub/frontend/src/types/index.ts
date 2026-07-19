@@ -19,59 +19,134 @@ export interface AuthTokens {
 }
 
 // ─── Subscription ──────────────────────────────────────────────────────────
+// Shapes below match services/subscription-service/app/Http/Controllers/V1/*
+// exactly (PackageController + SubscriptionController::formatSubscription()).
+
+export interface PackageFeatures {
+  file_upload: boolean
+  api_access: boolean
+  comparison: boolean
+  image_gen: boolean
+  audio: boolean
+  vision: boolean
+}
 
 export interface Package {
   id: string
   name: string
   slug: 'basic' | 'standard' | 'pro'
   description: string
-  monthly_price_usd: number
-  monthly_price_bdt: number
-  monthly_wallet_credit_usd: number
+  price: { usd: number; bdt: number | null }
+  wallet_credit_usd: number
+  features: PackageFeatures
   model_access: string[]
-  features: {
-    file_upload: boolean
-    api_access: boolean
-    comparison: boolean
-    image_gen: boolean
-    audio: boolean
-    vision: boolean
-  }
-  is_active: boolean
-  sort_order: number
+}
+
+/** Package shape as embedded inside a Subscription — a narrower projection than the standalone Package. */
+export interface SubscriptionPackage {
+  id: string
+  name: string
+  slug: 'basic' | 'standard' | 'pro'
+  monthly_price_usd: number
+  model_access: string[]
+  features: PackageFeatures
 }
 
 export interface Subscription {
-  subscription_id: string
+  id: string
   status: 'active' | 'past_due' | 'cancelled' | 'expired'
-  renews_at: string
   auto_renew: boolean
-  package: Package
+  currency: string
+  activated_at: string
+  renews_at: string
+  cancelled_at: string | null
+  package: SubscriptionPackage | null
 }
 
 // ─── Wallet ────────────────────────────────────────────────────────────────
+// GET /wallet and GET /wallet/credit are two separate endpoints — combine
+// client-side if a page needs both balance and credit-buffer info at once.
 
 export interface WalletBalance {
   balance: number
   reserved_balance: number
+  available_balance: number
+  currency: string
+}
+
+export interface WalletCreditStatus {
   credit_balance: number
   credit_limit: number
-  available_balance: number
   remaining_credit: number
-  currency: string
+  in_credit: boolean
 }
 
 export interface LedgerEntry {
   id: string
-  type: 'credit' | 'debit' | 'refund' | 'credit_recovery'
-  amount: number
-  balance_before: number
-  balance_after: number
+  wallet_id: string
+  user_id: string
+  type: 'credit' | 'debit' | 'refund' | 'credit_recovered' | 'credit_used'
+  amount: string
+  balance_before: string
+  balance_after: string
   description: string
   reference_type: string | null
   reference_id: string | null
   currency: string
+  exchange_rate: string
   created_at: string
+}
+
+// ─── Payment ───────────────────────────────────────────────────────────────
+
+export interface Transaction {
+  id: string
+  user_id: string
+  type: 'subscription_purchase' | 'wallet_topup' | 'refund'
+  status: 'pending' | 'completed' | 'failed' | 'refunded'
+  amount: string
+  currency: string
+  gateway: string
+  gateway_reference: string | null
+  description: string | null
+  error_message: string | null
+  completed_at: string | null
+  failed_at: string | null
+  created_at: string
+}
+
+export interface PaymentMethod {
+  id: string
+  gateway: string
+  type: string
+  last_four: string | null
+  card_brand: string | null
+  expires_at: string | null
+  is_default: boolean
+  is_active: boolean
+  created_at: string
+}
+
+// ─── Billing ───────────────────────────────────────────────────────────────
+
+export interface Invoice {
+  id: string
+  invoice_number: string
+  type: string
+  amount: string
+  currency: string
+  total_amount: string
+  status: string
+  issued_at: string
+}
+
+export interface Receipt {
+  id: string
+  receipt_number: string
+  type: string
+  amount: string
+  currency: string
+  issued_at: string
 }
 
 // ─── AI Models ─────────────────────────────────────────────────────────────
@@ -82,14 +157,16 @@ export interface AiModel {
   name: string
   model_id: string
   type: 'text' | 'image_generation' | 'audio_tts' | 'audio_stt' | 'embedding'
+  description: string | null
   context_window: number | null
+  max_output_tokens: number | null
   capabilities: {
     streaming: boolean
     function_calling: boolean
     vision: boolean
     file_upload: boolean
   }
-  is_accessible: boolean  // Based on user's subscription
+  available: boolean  // Based on the caller's current subscription package
 }
 
 // ─── Chat ──────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -20,8 +20,12 @@ type LoginForm = z.infer<typeof loginSchema>
 
 export default function LoginPage() {
   const router = useRouter()
-  const { setAuth } = useAuthStore()
+  const { setAuth, isAuthenticated } = useAuthStore()
   const [serverError, setServerError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isAuthenticated) router.replace('/chat')
+  }, [isAuthenticated, router])
 
   const {
     register,

@@ -46,7 +46,7 @@ class RegisterController extends Controller
                     Http::withHeaders([
                         'X-Internal-Service-Key' => $internalKey,
                         'Accept'                 => 'application/json',
-                    ])->timeout(5)->post("{$walletUrl}/api/internal/wallet/create", [
+                    ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/create", [
                         'user_id'  => $userId,
                         'currency' => $currency,
                     ]);

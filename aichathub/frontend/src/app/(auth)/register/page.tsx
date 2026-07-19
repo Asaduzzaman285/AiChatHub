@@ -1,13 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
+import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
+import { describeError } from '@/lib/errors'
 
 const registerSchema = z.object({
   name:             z.string().min(2, 'Name must be at least 2 characters'),
@@ -27,20 +29,31 @@ type RegisterForm = z.infer<typeof registerSchema>
 
 export default function RegisterPage() {
   const router = useRouter()
+  const { isAuthenticated } = useAuthStore()
   const [serverError, setServerError] = useState<string | null>(null)
+  const [ambiguous, setAmbiguous] = useState(false)
   const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    if (isAuthenticated) router.replace('/chat')
+  }, [isAuthenticated, router])
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } =
     useForm<RegisterForm>({ resolver: zodResolver(registerSchema) })
 
   const onSubmit = async (data: RegisterForm) => {
     setServerError(null)
+    setAmbiguous(false)
     try {
       await apiClient.post('/api/v1/auth/register', data)
       setSuccess(true)
     } catch (err: unknown) {
-      const apiErr = err as { response?: { data?: { message?: string } } }
-      setServerError(apiErr?.response?.data?.message ?? 'Registration failed.')
+      const { ambiguous, message } = describeError(
+        err,
+        "We didn't hear back in time, but your account may have already been created."
+      )
+      setAmbiguous(ambiguous)
+      setServerError(message)
     }
   }
 
@@ -80,7 +93,18 @@ export default function RegisterPage() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {serverError && (
+          {serverError && ambiguous && (
+            <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 space-y-1">
+              <p>{serverError}</p>
+              <p>
+                Check your email for a verification link, or{' '}
+                <Link href="/login" className="font-medium underline">try logging in</Link>{' '}
+                before submitting again — resubmitting with the same email may show &quot;already exists&quot;
+                if it did go through.
+              </p>
+            </div>
+          )}
+          {serverError && !ambiguous && (
             <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{serverError}</div>
           )}
 

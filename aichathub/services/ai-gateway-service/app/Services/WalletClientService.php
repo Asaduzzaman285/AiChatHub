@@ -19,9 +19,9 @@ class WalletClientService
     public function reserve(string $userId, float $amount): bool
     {
         try {
-            $response = Http::timeout(5)
-                ->withHeaders(['X-Internal-Key' => $this->internalKey])
-                ->post("{$this->baseUrl}/internal/wallet/reserve", [
+            $response = Http::timeout(15)
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->post("{$this->baseUrl}/api/internal/wallet/reserve", [
                     'user_id' => $userId,
                     'amount'  => $amount,
                 ]);
@@ -36,9 +36,9 @@ class WalletClientService
     public function deduct(string $userId, float $actual, float $reserved, string $description, ?string $referenceId = null): void
     {
         try {
-            Http::timeout(5)
-                ->withHeaders(['X-Internal-Key' => $this->internalKey])
-                ->post("{$this->baseUrl}/internal/wallet/deduct", [
+            Http::timeout(15)
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->post("{$this->baseUrl}/api/internal/wallet/deduct", [
                     'user_id'         => $userId,
                     'amount'          => $actual,
                     'reserved_amount' => $reserved,
@@ -53,9 +53,9 @@ class WalletClientService
     public function refund(string $userId, float $amount, float $reserved, string $reason, ?string $referenceId = null): void
     {
         try {
-            Http::timeout(5)
-                ->withHeaders(['X-Internal-Key' => $this->internalKey])
-                ->post("{$this->baseUrl}/internal/wallet/refund", [
+            Http::timeout(15)
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->post("{$this->baseUrl}/api/internal/wallet/refund", [
                     'user_id'         => $userId,
                     'amount'          => $amount,
                     'reserved_amount' => $reserved,

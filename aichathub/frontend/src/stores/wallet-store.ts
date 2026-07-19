@@ -1,10 +1,14 @@
 import { create } from 'zustand'
-import type { WalletBalance } from '@/types'
+import type { WalletBalance, WalletCreditStatus } from '@/types'
+
+// GET /wallet and GET /wallet/credit are separate backend endpoints (see
+// types/index.ts) — this store's real-time balance updates need both combined.
+type WalletState_ = WalletBalance & WalletCreditStatus
 
 interface WalletState {
-  wallet: WalletBalance | null
+  wallet: WalletState_ | null
   isLoading: boolean
-  setWallet: (wallet: WalletBalance) => void
+  setWallet: (wallet: WalletState_) => void
   setLoading: (loading: boolean) => void
   updateBalance: (balance: number, creditBalance: number) => void
 }

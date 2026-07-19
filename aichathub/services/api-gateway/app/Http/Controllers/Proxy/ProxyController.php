@@ -53,10 +53,13 @@ class ProxyController extends Controller
         // Disable SSL verify for local docker networking
         $http = Http::withHeaders($headers)->withoutVerifying();
 
-        // Stream SSE responses (chat/stream endpoint)
-        if (str_contains($path, 'stream') || str_contains($path, 'compare')) {
-            $http = $http->timeout(120);
-        }
+        // Stream SSE responses (chat/stream endpoint) get a long timeout for the
+        // whole streamed exchange; other routes still get more than Laravel's 30s
+        // default — local Docker Desktop + WSL2 bind-mounted volumes make even a
+        // single downstream request noticeably slower than a native filesystem.
+        $http = str_contains($path, 'stream') || str_contains($path, 'compare')
+            ? $http->timeout(120)
+            : $http->timeout(45);
 
         $response = $http->{$method}($targetUrl, $request->all());
 

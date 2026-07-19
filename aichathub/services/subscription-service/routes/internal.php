@@ -3,8 +3,8 @@
 use App\Http\Controllers\Internal\SubscriptionCheckController;
 use Illuminate\Support\Facades\Route;
 
-// Called by AI Gateway, Chat Service to validate model access
-Route::prefix('internal')->middleware('auth.internal')->group(function () {
-    Route::get('/subscriptions/{userId}/current',  [SubscriptionCheckController::class, 'current']);
-    Route::get('/subscriptions/{userId}/can-access/{modelId}', [SubscriptionCheckController::class, 'canAccess']);
-});
+// Called by AI Gateway, Chat Service to validate model access.
+// Already mounted at api/internal with auth.internal middleware by bootstrap/app.php —
+// do not add another prefix/middleware group here, it would double the path segment.
+Route::get('/subscriptions/{userId}/current', [SubscriptionCheckController::class, 'current']);
+Route::get('/subscriptions/{userId}/can-access/{modelId}', [SubscriptionCheckController::class, 'canAccess']);
