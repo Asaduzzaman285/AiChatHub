@@ -194,6 +194,16 @@ export interface ChatMessage {
   created_at: string
 }
 
+export interface FileAttachment {
+  id: string
+  session_id: string | null
+  original_name: string
+  mime_type: string
+  file_size: number
+  storage_url: string
+  created_at: string
+}
+
 // ─── API Responses ─────────────────────────────────────────────────────────
 
 export interface ApiError {

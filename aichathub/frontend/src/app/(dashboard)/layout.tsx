@@ -3,15 +3,16 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { CreditCard, LogOut, MessageSquare, Receipt, Sparkles, Wallet } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import type { User } from '@/types'
 
 const NAV_ITEMS = [
-  { href: '/chat', label: 'Home' },
-  { href: '/pricing', label: 'Pricing' },
-  { href: '/wallet', label: 'Wallet' },
-  { href: '/billing', label: 'Billing' },
+  { href: '/chat', label: 'Chat', icon: MessageSquare },
+  { href: '/pricing', label: 'Pricing', icon: CreditCard },
+  { href: '/wallet', label: 'Wallet', icon: Wallet },
+  { href: '/billing', label: 'Billing', icon: Receipt },
 ]
 
 /**
@@ -67,23 +68,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-56 shrink-0 border-r border-border bg-card sm:block">
-        <div className="p-6">
+      <aside className="hidden w-56 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
+        <div className="flex items-center gap-2 p-6">
+          <Sparkles className="h-5 w-5 text-primary" />
           <span className="text-lg font-bold tracking-tight">AI ChatHub</span>
         </div>
         <nav className="space-y-1 px-3">
           {NAV_ITEMS.map((item) => {
             const active = pathname === item.href
+            const Icon = item.icon
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`block rounded-md px-3 py-2 text-sm font-medium ${
+                className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   active
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                 }`}
               >
+                <Icon className="h-4 w-4" />
                 {item.label}
               </Link>
             )
@@ -93,11 +97,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <div className="flex-1">
         <header className="flex items-center justify-between border-b border-border px-6 py-4">
-          <span className="text-sm text-muted-foreground">{user?.email}</span>
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {user?.email?.[0]?.toUpperCase() ?? '?'}
+            </div>
+            <span className="text-sm text-muted-foreground">{user?.email}</span>
+          </div>
           <button
             onClick={handleLogout}
-            className="text-sm font-medium text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
+            <LogOut className="h-4 w-4" />
             Sign out
           </button>
         </header>

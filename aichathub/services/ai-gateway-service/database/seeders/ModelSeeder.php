@@ -14,12 +14,18 @@ class ModelSeeder extends Seeder
             ['provider' => 'openai',    'name' => 'GPT-4o Mini',        'model_id' => 'gpt-4o-mini',                  'type' => 'text', 'context_window' => 128000, 'tier' => 'basic'],
             ['provider' => 'anthropic', 'name' => 'Claude 3 Haiku',     'model_id' => 'claude-3-haiku-20240307',       'type' => 'text', 'context_window' => 200000, 'tier' => 'basic'],
             ['provider' => 'gemini',    'name' => 'Gemini 2.5 Flash',   'model_id' => 'gemini-2.5-flash',              'type' => 'text', 'context_window' => 1000000,'tier' => 'basic'],
+            // grok-beta is UNVERIFIED — xAI's /v1/models couldn't be checked (account has
+            // zero credits, 403s on everything including listing). Re-check this model_id
+            // against https://api.x.ai/v1/models once billing is set up, same way
+            // gemini-1.5-* turned out to be stale — see 2026-07-19 session notes.
             ['provider' => 'xai',       'name' => 'Grok Beta',          'model_id' => 'grok-beta',                     'type' => 'text', 'context_window' => 131072, 'tier' => 'basic'],
+            ['provider' => 'deepseek',  'name' => 'DeepSeek V4 Flash',  'model_id' => 'deepseek-v4-flash',             'type' => 'text', 'context_window' => 128000, 'tier' => 'basic'],
 
             // Standard tier additional models
             ['provider' => 'openai',    'name' => 'GPT-4o',             'model_id' => 'gpt-4o',                        'type' => 'text', 'context_window' => 128000, 'tier' => 'standard'],
             ['provider' => 'anthropic', 'name' => 'Claude 3.5 Sonnet',  'model_id' => 'claude-3-5-sonnet-20241022',    'type' => 'text', 'context_window' => 200000, 'tier' => 'standard'],
             ['provider' => 'gemini',    'name' => 'Gemini 2.5 Pro',     'model_id' => 'gemini-2.5-pro',                'type' => 'text', 'context_window' => 1048576,'tier' => 'standard'],
+            ['provider' => 'deepseek',  'name' => 'DeepSeek V4 Pro',    'model_id' => 'deepseek-v4-pro',               'type' => 'text', 'context_window' => 128000, 'tier' => 'standard'],
 
             // Pro tier additional models
             ['provider' => 'openai',    'name' => 'GPT-4 Turbo',        'model_id' => 'gpt-4-turbo',                   'type' => 'text', 'context_window' => 128000, 'tier' => 'pro'],
@@ -74,6 +80,8 @@ class ModelSeeder extends Seeder
             'gemini-2.5-pro'              => ['input' => 1.25,  'output' => 5.00],
             'gemini-2.5-flash'            => ['input' => 0.075, 'output' => 0.30],
             'grok-beta'                   => ['input' => 5.00,  'output' => 15.00],
+            'deepseek-v4-flash'           => ['input' => 0.28,  'output' => 0.42],
+            'deepseek-v4-pro'             => ['input' => 0.56,  'output' => 1.68],
         ];
 
         foreach ($textPricing as $modelId => $rates) {

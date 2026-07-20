@@ -39,8 +39,15 @@ class ProxyController extends Controller
         if ($queryString) $targetUrl .= "?{$queryString}";
 
         $method  = strtolower($request->method());
+        // content-type is dropped unconditionally, not just for file uploads: when
+        // Http::attach() builds a fresh multipart body it generates its own boundary,
+        // so forwarding the original client's Content-Type (with the OLD boundary)
+        // makes the header and the actual body disagree — the receiving service's
+        // multipart parser then silently finds no files at all. For the non-file
+        // case, Laravel's HTTP client sets an appropriate Content-Type on its own
+        // (application/json for an array body) so dropping it here is harmless.
         $headers = collect($request->headers->all())
-            ->except(['host', 'content-length'])
+            ->except(['host', 'content-length', 'content-type'])
             ->map(fn ($v) => $v[0])
             ->all();
 
@@ -61,7 +68,19 @@ class ProxyController extends Controller
             ? $http->timeout(120)
             : $http->timeout(45);
 
-        $response = $http->{$method}($targetUrl, $request->all());
+        // $request->all() only carries text fields — an UploadedFile in there gets
+        // silently dropped (Laravel's HTTP client has no idea it should become a
+        // multipart part), so any downstream file upload just sees "file required"
+        // with no obvious cause. Every endpoint proxied before now was JSON-only,
+        // so this never surfaced until the chat attachment upload needed it.
+        if ($request->allFiles()) {
+            foreach ($request->allFiles() as $key => $file) {
+                $http = $http->attach($key, file_get_contents($file->getRealPath()), $file->getClientOriginalName());
+            }
+            $response = $http->{$method}($targetUrl, $request->except(array_keys($request->allFiles())));
+        } else {
+            $response = $http->{$method}($targetUrl, $request->all());
+        }
 
         return response(
             $response->body(),

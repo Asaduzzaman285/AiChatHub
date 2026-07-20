@@ -237,17 +237,41 @@ class WalletService
     {
         $lowThreshold      = (float) config('wallet.low_balance_threshold', 5.00);
         $criticalThreshold = (float) config('wallet.critical_balance_threshold', 1.00);
+        $balance           = (float) $wallet->balance;
 
-        if ((float) $wallet->balance <= $criticalThreshold) {
+        if ($balance <= $criticalThreshold) {
             Redis::publish('wallet-events', json_encode([
                 'event'   => 'wallet.balance_critical',
-                'payload' => ['user_id' => $userId, 'balance' => (float) $wallet->balance],
+                'payload' => ['user_id' => $userId, 'balance' => $balance],
             ]));
-        } elseif ((float) $wallet->balance <= $lowThreshold) {
+            $this->notifyLowBalance($userId, $balance, critical: true);
+        } elseif ($balance <= $lowThreshold) {
             Redis::publish('wallet-events', json_encode([
                 'event'   => 'wallet.balance_low',
-                'payload' => ['user_id' => $userId, 'balance' => (float) $wallet->balance, 'threshold' => $lowThreshold],
+                'payload' => ['user_id' => $userId, 'balance' => $balance, 'threshold' => $lowThreshold],
             ]));
+            $this->notifyLowBalance($userId, $balance, critical: false);
         }
+    }
+
+    /**
+     * At most one email per threshold level per day — this fires on every deduct()
+     * while the balance stays under threshold, not just the moment it crosses it.
+     */
+    private function notifyLowBalance(string $userId, float $balance, bool $critical): void
+    {
+        $user = app(AuthServiceClient::class)->findUser($userId);
+        if (! $user) {
+            return;
+        }
+
+        $level = $critical ? 'critical' : 'low';
+        app(NotificationClient::class)->send(
+            'low_balance',
+            $userId,
+            $user['email'],
+            ['name' => $user['name'], 'balance' => $balance, 'critical' => $critical],
+            "low_balance:{$userId}:{$level}:".now()->format('Y-m-d'),
+        );
     }
 }

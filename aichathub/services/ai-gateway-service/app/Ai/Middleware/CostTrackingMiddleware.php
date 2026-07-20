@@ -3,6 +3,7 @@
 namespace App\Ai\Middleware;
 
 use App\Models\AiModel;
+use App\Services\PendingReservationTracker;
 use App\Services\WalletClientService;
 use Closure;
 use Laravel\Ai\Prompts\AgentPrompt;
@@ -30,15 +31,27 @@ class CostTrackingMiddleware
         $estimatedOutput     = 1000;
         $this->estimatedCost = $this->calculateCost($inputTokens, $estimatedOutput, $inputRate, $outputRate);
 
-        // Reserve balance — abort if insufficient
+        // Reserve balance — abort if insufficient (402) or if wallet-service couldn't be
+        // reached at all (503) — those are different problems and should say so; telling
+        // someone to "top up" when the real issue is a transient timeout is misleading.
         $walletClient = app(WalletClientService::class);
-        $this->reserved = $walletClient->reserve($this->userId, $this->estimatedCost);
+        $reserveResult = $walletClient->reserve($this->userId, $this->estimatedCost);
+        $this->reserved = $reserveResult === true;
 
-        if (! $this->reserved) {
+        if ($reserveResult === null) {
+            throw new \RuntimeException('Could not reach the wallet service. Please try again.', 503);
+        }
+        if ($reserveResult === false) {
             throw new \RuntimeException('Insufficient wallet balance', 402);
         }
 
-        // Execute the AI call
+        // The actual provider HTTP call runs inside a StreamedResponse's lazy generator,
+        // invoked by Symfony after this method has already returned — a try/catch here
+        // cannot see that failure. Mark the reservation pending and let the terminating()
+        // callback in bootstrap/app.php release it if it's still unsettled once the
+        // request actually finishes, regardless of how it ended.
+        app(PendingReservationTracker::class)->mark($this->userId, $this->estimatedCost);
+
         return $next($prompt)->then(function (AgentResponse $response) use ($walletClient, $inputRate, $outputRate) {
             $actualCost = $this->calculateCost(
                 $response->usage?->promptTokens ?? 0,
@@ -53,6 +66,7 @@ class CostTrackingMiddleware
                 $this->estimatedCost,
                 'AI Chat Request'
             );
+            app(PendingReservationTracker::class)->clear();
 
             return $response;
         });

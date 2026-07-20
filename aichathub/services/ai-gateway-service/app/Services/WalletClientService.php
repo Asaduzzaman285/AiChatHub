@@ -16,7 +16,13 @@ class WalletClientService
         $this->internalKey = config('services.internal_key');
     }
 
-    public function reserve(string $userId, float $amount): bool
+    /**
+     * True = reserved. False = wallet-service responded and genuinely denied it (real
+     * insufficient-balance case). Null = we couldn't reach wallet-service at all (timeout /
+     * network error) — distinct from a real denial so the caller doesn't tell the user
+     * "top up your wallet" when the actual problem is a transient infrastructure hiccup.
+     */
+    public function reserve(string $userId, float $amount): ?bool
     {
         try {
             $response = Http::timeout(15)
@@ -26,10 +32,16 @@ class WalletClientService
                     'amount'  => $amount,
                 ]);
 
-            return $response->successful() && $response->json('success') === true;
+            if (! $response->successful()) {
+                // 422 insufficient_balance is the one genuine-denial case; anything else
+                // (500, unexpected shape) is treated as unreachable, same as a network error.
+                return $response->status() === 422 ? false : null;
+            }
+
+            return $response->json('success') === true;
         } catch (\Exception $e) {
             Log::error('WalletClientService::reserve failed', ['error' => $e->getMessage()]);
-            return false;
+            return null;
         }
     }
 

@@ -6,11 +6,14 @@ use App\Events\UserRegistered;
 use App\Http\Controllers\Controller;
 use App\Models\EmailVerification;
 use App\Models\User;
+use App\Services\NotificationClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class EmailVerificationController extends Controller
 {
+    public function __construct(private NotificationClient $notificationClient) {}
+
     /**
      * GET /api/v1/auth/verify/{token}
      * Verify email address using the token sent by email.
@@ -42,6 +45,15 @@ class EmailVerificationController extends Controller
             'email_verified_at' => now(),
             'status'            => 'active',
         ]);
+
+        // Non-blocking — the user shouldn't wait on an SMTP round-trip just to see
+        // "verified successfully", same reasoning as invoice creation elsewhere.
+        $userId = $verification->user->id;
+        $email  = $verification->user->email;
+        $name   = $verification->user->name;
+        dispatch(function () use ($userId, $email, $name) {
+            $this->notificationClient->send('welcome', $userId, $email, ['name' => $name], "welcome:{$userId}");
+        })->afterResponse();
 
         return response()->json([
             'message' => 'Email verified successfully. You can now sign in.',

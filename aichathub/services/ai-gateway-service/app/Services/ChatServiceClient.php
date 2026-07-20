@@ -32,4 +32,26 @@ class ChatServiceClient
             Log::error('ChatServiceClient::appendMessage failed', ['error' => $e->getMessage(), 'session_id' => $sessionId]);
         }
     }
+
+    /**
+     * @param string[] $ids
+     * @return array<int, array{id: string, base64: string, mime_type: string, original_name: string}>
+     */
+    public function resolveAttachments(array $ids): array
+    {
+        if (empty($ids)) {
+            return [];
+        }
+
+        try {
+            $response = Http::timeout(20)
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->post("{$this->baseUrl}/api/internal/attachments/resolve", ['ids' => $ids]);
+
+            return $response->successful() ? ($response->json('attachments') ?? []) : [];
+        } catch (\Exception $e) {
+            Log::error('ChatServiceClient::resolveAttachments failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
 }

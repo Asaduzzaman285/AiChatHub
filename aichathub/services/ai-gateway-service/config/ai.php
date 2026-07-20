@@ -21,6 +21,10 @@ return [
             'driver' => 'xai',
             'key'    => env('XAI_API_KEY'),
         ],
+        'deepseek' => [
+            'driver' => 'deepseek',
+            'key'    => env('DEEPSEEK_API_KEY'),
+        ],
         'elevenlabs' => [
             'driver' => 'elevenlabs',
             'key'    => env('ELEVENLABS_API_KEY'),

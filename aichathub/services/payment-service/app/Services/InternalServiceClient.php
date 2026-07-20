@@ -73,4 +73,35 @@ class InternalServiceClient
             return false;
         }
     }
+
+    public function sendReceiptEmail(string $userId, float $amount, string $currency, string $description, string $idempotencyKey): void
+    {
+        $authUrl         = rtrim((string) config('services.auth_url'), '/');
+        $notificationUrl = rtrim((string) config('services.notification_url'), '/');
+        $internalKey     = config('services.internal_key');
+
+        if (! $authUrl || ! $notificationUrl || ! $internalKey) {
+            return;
+        }
+
+        try {
+            $user = Http::withHeaders(['X-Internal-Service-Key' => $internalKey, 'Accept' => 'application/json'])
+                ->timeout(15)->get("{$authUrl}/api/internal/users/{$userId}");
+
+            if (! $user->successful()) {
+                return;
+            }
+
+            Http::withHeaders(['X-Internal-Service-Key' => $internalKey, 'Accept' => 'application/json'])
+                ->timeout(15)->post("{$notificationUrl}/api/internal/notifications/send", [
+                    'type'            => 'receipt',
+                    'user_id'         => $userId,
+                    'email'           => $user->json('email'),
+                    'data'            => ['name' => $user->json('name'), 'amount' => $amount, 'currency' => $currency, 'description' => $description],
+                    'idempotency_key' => $idempotencyKey,
+                ]);
+        } catch (\Exception $e) {
+            Log::error('Receipt email failed: '.$e->getMessage(), ['user_id' => $userId]);
+        }
+    }
 }

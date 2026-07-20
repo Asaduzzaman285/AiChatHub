@@ -94,6 +94,24 @@ services:
       - ./infrastructure/docker/nginx/auth.conf:/etc/nginx/conf.d/default.conf
     depends_on: [auth-service]
 
+  # Same image/code as auth-service, just runs `queue:work` instead of php-fpm.
+  # Without this, the SendVerificationEmail listener (ShouldQueue) never actually
+  # runs — verification emails silently never get created — and used to require
+  # manually `docker exec -d`-ing a worker in by hand after every `up`.
+  auth-queue-worker:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-auth-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/auth-service:/var/www
+    env_file:
+      - ./services/auth-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --tries=3 --sleep=3
+
   # ─── SUBSCRIPTION SERVICE ─────────────────
 
   subscription-service:
@@ -201,6 +219,25 @@ services:
       - ./services/ai-gateway-service:/var/www
       - ./infrastructure/docker/nginx/ai.conf:/etc/nginx/conf.d/default.conf
     depends_on: [ai-gateway-service]
+
+  # Runs ReleaseWalletReservationJob — releases a wallet reservation left over from
+  # a chat request that failed (bad provider key, rate limit, etc.). See
+  # bootstrap/app.php's register_shutdown_function() for why this has to be a
+  # queued job rather than a direct call. Without this worker, failed chat
+  # requests silently leave money "stuck" in reserved_balance forever.
+  ai-gateway-queue-worker:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-ai-gateway-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/ai-gateway-service:/var/www
+    env_file:
+      - ./services/ai-gateway-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --tries=3 --sleep=1
 
   # ─── CHAT SERVICE ─────────────────────────
 

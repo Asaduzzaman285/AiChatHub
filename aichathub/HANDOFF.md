@@ -261,18 +261,210 @@ rename/delete has no UI (backend endpoints exist), Notification Mailables (M7) s
 
 ---
 
+## 2026-07-20 Session — Fixed real bugs found by actually clicking "Send" in the chat UI
+
+User tried GPT-4o Mini (no real key configured) and reported "nothing appears." Chasing that down
+surfaced a chain of real bugs, each hiding the next one:
+
+1. **Misleading error message.** `WalletClientService::reserve()` collapsed two very different
+   outcomes into the same `false`: wallet-service genuinely denying the request (real insufficient
+   balance) vs. the HTTP call to wallet-service itself timing out. Both produced "Insufficient wallet
+   balance. Please top up." — actively wrong when the real problem was a cold container. Now returns
+   `?bool` (`true`/`false`/`null`) and `CostTrackingMiddleware` reports each case accurately (402 vs
+   503).
+2. **Stack trace leakage.** Once reserve() actually succeeded, the real OpenAI call (401, invalid
+   placeholder key) threw `Illuminate\Http\Client\RequestException` — a type ChatController's
+   `catch (\RuntimeException $e)` never catches, so it fell through to Laravel's default handler and
+   returned a raw stack trace (internal file paths, provider request details) as the JSON body.
+   **Root architectural cause**, worth understanding for any future work in this controller: the
+   actual provider HTTP call runs inside a `StreamedResponse`'s lazily-invoked generator, which
+   `Illuminate\Foundation\Application::handleRequest()` only triggers via `$kernel->handle($request)
+   ->send()` — *after* the controller method has already returned. No controller-level try/catch can
+   ever see an exception thrown there; only a global `$exceptions->render()` handler
+   (`bootstrap/app.php`) can. Added one for `RequestException`.
+3. **Reservations were leaking money-tracking state on every failed request.** `CostTrackingMiddleware`
+   only released a reservation in its success path (`.then()` → `deduct()`) — any provider failure
+   left the reserved amount stuck in `reserved_balance` forever, invisible from `GET /wallet` (which
+   only surfaces `available_balance`, itself computed from `balance`+credit, never subtracting
+   `reserved_balance`). Confirmed live: repeated failed test requests grew a wallet's
+   `reserved_balance` from 0 to 0.003+ with zero user-visible symptom.
+   - First fix attempt (a try/catch around `$next($prompt)` in the middleware) **did not work** —
+     same root cause as #2, that code path is also outside the generator's actual execution window.
+   - Second attempt (`$app->terminating()` in bootstrap/app.php) **also did not work** — confirmed via
+     direct Laravel source inspection: `Application::handleRequest()` is `$kernel->handle($request)
+     ->send(); $kernel->terminate(...)` with zero exception handling of its own. An exception escaping
+     `.send()` propagates all the way out as truly uncaught, so `terminate()` on the next line is
+     simply never reached.
+   - Third attempt (`register_shutdown_function()`, which PHP guarantees runs no matter how the script
+     ends) **got further but still didn't work** — confirmed live via logging that the refund HTTP
+     call started but never logged completion. PHP-FPM does not reliably give a shutdown function time
+     to finish a *new* outbound network call once the response has already been sent to the client.
+   - **What actually worked:** dispatch a queued job (`ReleaseWalletReservationJob`) from the shutdown
+     function instead of calling `WalletClientService::refund()` directly — a Redis `RPUSH` completes
+     fast enough to survive the shutdown window; the actual wallet HTTP call happens later in a
+     separate, unhurried queue-worker process. Verified live: `reserved_balance` stayed exactly flat
+     across a repeat of the same failing request, instead of growing.
+   - **New requirement:** ai-gateway-service now needs its own running queue worker, same as
+     auth-service already does: `docker exec -d aichathub-ai-gateway php artisan queue:work redis
+     --tries=3`. Not started automatically — start it manually each session (see start-everything
+     commands below).
+4. **The queue worker itself was silently crashing on startup**, which is *why* the queued-job fix
+   initially looked broken too. `services/ai-gateway-service/config/cache.php` didn't exist at all
+   (same "missing config file" pattern as several earlier fixes this project) — Laravel's zero-config
+   default falls back to the **database** cache store, and `queue:work` checks that cache for a
+   `queue:restart` signal before pulling its first job. The `cache` table was never migrated for this
+   service, so every worker start-attempt crashed immediately and silently (visible only by running
+   it in the foreground — `docker exec -d` swallows the crash). Added `config/cache.php` defaulting to
+   redis (matching the `.env`'s `CACHE_DRIVER=redis`, which Laravel 12 doesn't actually read without
+   an explicit config file backing it).
+5. Cleaned up ~0.0036 in stuck `reserved_balance` left over from repeated test failures during this
+   debugging session (`UPDATE wallet_svc.wallets SET reserved_balance = 0` for the affected test user
+   — confirmed no other wallet had nonzero `reserved_balance` needing the same cleanup).
+
+**Net result:** GPT-4o Mini (and any other model without a real key) now fails with a single clear
+message (`"This model is not configured correctly (invalid provider API key). Please try a different
+model."`, HTTP 502) instead of hanging silently, leaking a stack trace, or quietly corrupting wallet
+state. Real key still needed for OpenAI/Anthropic/xAI/ElevenLabs — only Gemini works today.
+
+### Same day, later: Grok + DeepSeek keys added — surfaced one more gap, confirmed the fixes above generalize
+User supplied real xAI and DeepSeek keys. Verified both directly against their providers before
+wiring anything in (same approach as the Gemini key check):
+- **xAI (Grok): key is valid but the account has zero credits/billing** — `/v1/models` 403s with
+  `permission-denied`. Set `XAI_API_KEY` anyway so it's ready the moment billing is added at
+  console.x.ai; `grok-beta` stays in `packages.model_access` (Pro tier) but will fail on every real
+  request until then. Also: `grok-beta`'s `/v1/models` couldn't be checked (same 403), so unlike
+  Gemini this model_id is **unverified** — flagged with a comment in `ModelSeeder.php`, re-check once
+  billing is set up.
+- **DeepSeek: key works.** Live model list returned `deepseek-v4-flash` / `deepseek-v4-pro` — newer
+  naming than expected from training data, confirming (again) that checking the live API beats
+  assuming a remembered model name is still current. Added the `deepseek` provider to
+  `config/ai.php` (wasn't listed there — laravel/ai supports it, just needed the config/env
+  entries), seeded both models + approximate pricing, added to `packages.model_access` (Flash on
+  Basic+, Pro on Standard+).
+- Actually generating a completion with the working DeepSeek key still failed —
+  **`Laravel\Ai\Exceptions\InsufficientCreditsException`** (the key can list models but the account
+  isn't funded for generation). This is a **different exception type** than the `RequestException`
+  handled earlier — leaked a stack trace again until handled. Fixed properly this time: all of
+  laravel/ai's own exceptions (`InsufficientCreditsException`, `RateLimitedException`,
+  `ProviderOverloadedException`, `NoSuchToolException`) share one common base class,
+  `Laravel\Ai\Exceptions\AiException` — added a single handler for that base class in
+  `bootstrap/app.php` instead of chasing each subclass individually.
+- **Confirms the earlier fixes generalize, not just patched for OpenAI specifically:** re-tested with
+  a completely different provider/exception type and, on the first try, got a clean error message, no
+  stack trace, and `reserved_balance` stayed exactly flat (the queued-job release fired correctly).
+
+---
+
+## 2026-07-20 Session (cont'd) — File/image upload, notification emails, and a critical infra gotcha
+
+### File/image upload into chat — fully working, including real vision
+Built from near-zero: chat-service had `FILESYSTEM_DISK=s3` / MinIO credentials already sitting in
+`.env` but **no `league/flysystem-aws-s3-v3` package installed, no `config/filesystems.php`, and no
+MinIO bucket created** — none of it had ever actually been exercised.
+- Installed the S3 driver (`composer require league/flysystem-aws-s3-v3` — the `aws/aws-sdk-php`
+  dependency is large enough that it timed out extracting on the first attempt at the default 300s
+  Composer process timeout; needed `COMPOSER_PROCESS_TIMEOUT=900` to actually finish, same WSL2
+  bind-mount I/O slowness theme as everywhere else in this project).
+- Created the `aichathub-files` MinIO bucket (`mc mb` + `mc anonymous set download`) — it never existed.
+- Built `FileAttachment` model, `FileAttachmentController` (`upload`/`destroy`, images only —
+  JPEG/PNG/WebP/GIF, 10MB cap), `config/filesystems.php`.
+- **Two separate browser-facing vs. container-facing URL problem**, worth understanding for any
+  future storage work: `AWS_ENDPOINT=http://minio:9000` is only reachable from other containers, not
+  the browser; `http://localhost:9000` is only reachable from the host, not from other containers —
+  and **neither is reachable from a real AI provider's servers** (no public tunnel in local dev).
+  Added `AWS_URL=http://localhost:9000/aichathub-files` for browser-facing image previews, and made
+  ai-gateway-service fetch attachment bytes through chat-service's own internal API
+  (`POST /internal/attachments/resolve`, returns base64) rather than handing the provider a URL —
+  `Image::fromBase64()` instead of `Image::fromUrl()`. This works regardless of network topology.
+- **Found and fixed a real API Gateway bug while wiring this up**: `ProxyController::forward()` used
+  `$request->all()` to build the outgoing request body, which silently drops any `UploadedFile` — every
+  previous endpoint proxied through the gateway was JSON-only, so this never surfaced before. Fixed by
+  detecting `$request->allFiles()` and re-attaching via `Http::attach()`. That alone wasn't enough:
+  the original client's `Content-Type: multipart/form-data; boundary=OLD` header was also being
+  forwarded verbatim, but `attach()` builds a **new** body with its own boundary — header and body
+  boundary disagreeing meant the receiving service's multipart parser silently found zero files. Fixed
+  by unconditionally dropping `content-type` from the forwarded headers (Laravel's HTTP client sets an
+  appropriate one on its own either way).
+- Vision wiring: `ChatController::stream()` now accepts `attachment_ids` (max 4), checks the target
+  model's `capabilities.vision` before allowing them, resolves them via chat-service, and passes
+  `Image::fromBase64()` objects into `$agent->stream()`. Verified live with `gemini-2.5-pro` (the only
+  vision-capable model with a working key) — hit a `RateLimitedException` from Gemini's free tier on
+  the first attempt (this project has made a *lot* of Gemini calls today) and it resolved on its own
+  after a short wait, not a code issue.
+- Frontend: paperclip attach button (only shown when the active model supports vision), preview chip
+  with remove button, wired into the existing send flow.
+
+### Notification emails (M7) — built from a fully-empty scaffold
+`notification-service` had empty `app/Mail`, `app/Models`, `app/Http/Controllers/Internal`, etc. —
+directories existed, nothing inside them. Also had one pre-existing listener (`SendWelcomeEmail`)
+referencing a `Notification` model and `WelcomeMail` class that **didn't exist anywhere**, and wasn't
+wired to any event in the first place — deleted it as dead code rather than trying to resurrect it,
+since this project's established pattern everywhere else is direct internal HTTP calls, not events.
+- Built `Notification` model, 4 Mailables (`WelcomeMail`, `ReceiptMail`, `LowBalanceMail`,
+  `RenewalFailedMail`) with a shared Blade layout component, `NotificationService` (idempotency via
+  the existing `idempotency_key` unique constraint — Postgres treats multiple `NULL`s as distinct, so
+  omitting a key just means "no idempotency protection," not an error), and one generic
+  `POST /internal/notifications/send` endpoint other services call into.
+- Wired real triggers: welcome email on email verification (auth-service, non-blocking via
+  `afterResponse()`), receipt email on subscription purchase (subscription-service) and on wallet
+  top-up — both the synchronous path (`TopupController`) and the async Stripe-webhook path
+  (`ProcessStripeWebhookJob`), same idempotency key on both so a retry can't double-send — and low/
+  critical balance alerts (wallet-service, at most one email per level per day).
+- Found the exact same "missing config file → env var silently ignored" bug pattern **twice more**
+  while wiring this: `wallet-service` had no `config/services.php` at all (first outbound call this
+  service has ever made) and no `config/wallet.php` (so `LOW_BALANCE_THRESHOLD` in `.env` was never
+  actually read — `checkBalanceThresholds()` always used the hardcoded `5.00`/`1.00` fallbacks
+  regardless of what `.env` said). Both created.
+
+### 🔴 Critical operational gotcha — force-recreating an app container without its nginx sidecar
+Spent a long time chasing what looked like a routing bug (`wallet-service`'s own
+`php artisan route:list` showed `POST api/internal/wallet/create` registered correctly, yet every
+live HTTP request to it 404'd with Laravel's own "route not found" page) before finding the real
+cause: **`docker-compose up -d --force-recreate wallet-service` only recreates the app container, not
+its `wallet-nginx` sidecar.** The sidecar had been running for 3 hours (untouched) while the app
+container it proxies to was 24 minutes old — the sidecar's upstream connection to the old (dead)
+container's IP never got refreshed. Fixed by restarting the nginx sidecar too.
+**Rule going forward: whenever you `--force-recreate` (or otherwise replace) an app container, restart
+its nginx sidecar in the same breath** (`docker restart <service>-nginx`) — a plain `docker restart` of
+the app container does NOT hit this (same IP retained), only recreate/replace does.
+This silently broke wallet auto-creation on registration for a while during this session — worth
+specifically checking `wallet_svc.wallets` has a row after a fresh registration if this class of bug
+is ever suspected again.
+
+### Also fixed while debugging the above
+`RegisterController`'s wallet-creation `catch (\Exception $e)` widened to `catch (\Throwable $e)` —
+the stale-sidecar failure surfaced in a way the narrower catch didn't reliably log, which is part of
+why this took a while to pin down. `\Error`-family throwables don't extend `\Exception` in PHP.
+
+### Queue workers are no longer a manual step
+Every session up to this point required manually `docker exec -d`-ing a `queue:work` process into
+`aichathub-auth` (and, as of today, `aichathub-ai-gateway`) after every `docker-compose up -d` — the
+containers only run `php-fpm` (the Dockerfile's `CMD`), which serves HTTP requests and has no
+awareness of Laravel's queue system at all; `queue:work` is a wholly separate long-running process
+that has to be started explicitly. This was a real, easy-to-forget gap — the actual mechanism the
+user asked to have explained. Fixed properly: added `auth-queue-worker` and
+`ai-gateway-queue-worker` as their own services in `docker-compose.yml` (same image/build/`.env` as
+their app counterparts, just `command: php artisan queue:work redis ...` instead of the default
+`php-fpm`). `restart: unless-stopped` keeps them alive exactly like every other container — `docker-
+compose up -d` alone is now sufficient, forever. If a future service gains a real `ShouldQueue` job,
+it needs the same treatment (copy one of these two blocks, point it at the new service).
+
+---
+
 ## How to Start Everything Tomorrow
 
 ```bash
 cd "C:\Users\IT News\Downloads\aichathub\aichathub"
 
-# 1. Start all backend services
+# 1. Start everything — queue workers included, no manual step needed anymore.
+#    auth-queue-worker and ai-gateway-queue-worker are real docker-compose services
+#    (see docker-compose.yml) that just run `queue:work` instead of php-fpm; Docker's
+#    `restart: unless-stopped` keeps them alive the same as every other container.
+#    (Before 2026-07-20 this required manually `docker exec -d`-ing a worker in after
+#    every restart — that's gone now, don't reintroduce it.)
 docker-compose up -d
 
-# 2. Start auth queue worker (sends emails + creates wallets after registration)
-docker exec -d aichathub-auth php artisan queue:work redis --tries=3 --sleep=3
-
-# 3. Start frontend
+# 2. Start frontend
 cd frontend
 npm run dev
 # Frontend: http://localhost:3000
@@ -504,7 +696,7 @@ all implemented and verified live; `download` (PDF) still not implemented
 |---|---|---|
 | `php artisan` commands hang | Known | WSL2 volume slowness — use sh scripts instead |
 | PowerShell JSON quoting | Known | Always use shell scripts via `docker cp` + `docker exec` |
-| Queue worker must be started manually | Known | Run: `docker exec -d aichathub-auth php artisan queue:work redis --tries=3` |
+| Queue workers need manual starting | ✅ Fixed 2026-07-20 | `auth-queue-worker` / `ai-gateway-queue-worker` are now real docker-compose services, start automatically with `docker-compose up -d` |
 | Firebase service account not in git | By design | Must copy `firebase-service-account.json` to `services/auth-service/` manually |
 | `GOOGLE_CLIENT_ID` warning on docker-compose | Non-issue | Just a warning, not used (we use Firebase instead) |
 | Login timeout in test scripts | Known | Login works fine; the test script timeout is too short for the full flow |
@@ -587,7 +779,8 @@ Week 5-6: AI Chat MVP                      ← DONE (Gemini only — see below)
 ✅ Chat Service: session + message storage — verified live, Session 2
 ✅ Frontend: chat interface with SSE — built, compiles clean, not yet click-tested in a browser
 ✅ packages.model_access populated
-⬜ Real API keys for OpenAI/Anthropic/xAI/ElevenLabs — only Gemini works right now (it's free)
+⬜ Real API keys for OpenAI/Anthropic/ElevenLabs — Gemini and DeepSeek both work now (free/cheap);
+  xAI has a valid key but zero account credits (grok-beta will 502 until billing is added)
 ⬜ WalletService::debit()/refund() idempotency guard (same class of fix credit() already got)
 ⬜ /chat/compare (multi-model comparison) has no frontend UI
 ⬜ File attachments (chat_svc.file_attachments unused, FileAttachmentController still a stub)
@@ -686,7 +879,8 @@ browser.
 - [ ] ImageController — DALL-E 3 (Pro tier) — still a stub
 - [ ] AudioController — TTS (Pro tier) — still a stub
 - [ ] TranscriptionController — Whisper — still a stub
-- [ ] Real API keys for OpenAI/Anthropic/xAI/ElevenLabs — only Gemini has a working key
+- [ ] Real API keys for OpenAI/Anthropic/ElevenLabs — Gemini and DeepSeek have working keys;
+  xAI has a valid key but no account credits (see 2026-07-20 session notes)
 
 ### Chat Service ✅ CORE DONE (Session 2, 2026-07-19) — verified live
 - [x] ChatSession / ChatMessage Eloquent models — didn't exist before
@@ -744,7 +938,12 @@ browser.
 - [x] Chat interface ← DONE Session 2 (`app/(dashboard)/chat/page.tsx`) — session list, message
   thread, model picker (limited to what the user's package grants), hand-rolled SSE streaming.
   Verified via `tsc --noEmit` + compile/curl smoke test only — **not yet click-tested in a browser.**
-- [ ] Chat compare UI (backend /chat/compare exists, nothing calls it)
+- [x] Chat compare UI ← DONE 2026-07-20 — "Compare" tab on `/chat`, pick 2-4 models, one
+  message fans out to all of them, side-by-side streaming columns. Stateless (no session_id,
+  nothing persisted to chat-service, matching the backend endpoint's own design). Not yet
+  click-tested in a browser (compiles clean, dev-server smoke test only).
+- [ ] Real image/file upload into chat (FileAttachmentController still a stub, chat_svc.file_attachments
+  unused, no vision-capable model routing) — next planned build per user request 2026-07-20
 - [ ] Settings page (profile + connected accounts)
 - [ ] Saved payment methods list page (backend done, no UI)
 - [ ] Stripe Elements integration — pricing/wallet pages currently hardcode Stripe's test
@@ -805,10 +1004,9 @@ These are intentional changes made during implementation:
 
 4. **JWT_SECRET must be the same in ALL service `.env` files** — if you change it in one, change all.
 
-5. **Run queue worker after `docker-compose up -d`**:
-   ```bash
-   docker exec -d aichathub-auth php artisan queue:work redis --tries=3 --sleep=3
-   ```
+5. ~~Run queue worker after `docker-compose up -d`~~ — no longer needed as of 2026-07-20;
+   `auth-queue-worker` and `ai-gateway-queue-worker` are dedicated docker-compose services now
+   and start automatically.
 
 6. **Seed AI models before implementing subscription subscribe**:
    ```bash

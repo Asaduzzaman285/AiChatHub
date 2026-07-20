@@ -17,7 +17,7 @@ class PackageSeeder extends Seeder
                 'monthly_price_usd'        => 10.00,
                 'monthly_price_bdt'        => 1100.00,
                 'monthly_wallet_credit_usd'=> 10.00,
-                'model_access'             => json_encode(['gemini-2.5-flash', 'gpt-4o-mini']),
+                'model_access'             => json_encode(['gemini-2.5-flash', 'gpt-4o-mini', 'deepseek-v4-flash']),
                 'features'                 => json_encode([
                     'file_upload'   => false,
                     'api_access'    => false,
@@ -39,8 +39,8 @@ class PackageSeeder extends Seeder
                 'monthly_price_bdt'        => 2200.00,
                 'monthly_wallet_credit_usd'=> 20.00,
                 'model_access'             => json_encode([
-                    'gemini-2.5-flash', 'gpt-4o-mini',
-                    'gemini-2.5-pro', 'gpt-4o', 'claude-3-haiku-20240307',
+                    'gemini-2.5-flash', 'gpt-4o-mini', 'deepseek-v4-flash',
+                    'gemini-2.5-pro', 'gpt-4o', 'claude-3-haiku-20240307', 'deepseek-v4-pro',
                 ]),
                 'features'                 => json_encode([
                     'file_upload'   => true,
@@ -63,8 +63,8 @@ class PackageSeeder extends Seeder
                 'monthly_price_bdt'        => 4400.00,
                 'monthly_wallet_credit_usd'=> 40.00,
                 'model_access'             => json_encode([
-                    'gemini-2.5-flash', 'gpt-4o-mini',
-                    'gemini-2.5-pro', 'gpt-4o', 'claude-3-haiku-20240307',
+                    'gemini-2.5-flash', 'gpt-4o-mini', 'deepseek-v4-flash',
+                    'gemini-2.5-pro', 'gpt-4o', 'claude-3-haiku-20240307', 'deepseek-v4-pro',
                     'gpt-4-turbo', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'grok-beta',
                     'dall-e-3', 'whisper-1', 'eleven_turbo_v2_5',
                 ]),

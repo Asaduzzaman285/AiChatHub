@@ -9,6 +9,7 @@ use App\Services\ChatServiceClient;
 use App\Services\SubscriptionClientService;
 use App\Services\WalletClientService;
 use Illuminate\Http\Request;
+use Laravel\Ai\Files\Image;
 use Laravel\Ai\Responses\AgentResponse;
 
 class ChatController extends Controller
@@ -26,12 +27,14 @@ class ChatController extends Controller
     public function stream(Request $request)
     {
         $data = $request->validate([
-            'message'    => 'required|string|max:10000',
-            'model_id'   => 'required|string',
-            'session_id' => 'nullable|uuid',
-            'history'    => 'nullable|array',
+            'message'         => 'required|string|max:10000',
+            'model_id'        => 'required|string',
+            'session_id'      => 'nullable|uuid',
+            'history'         => 'nullable|array',
             'history.*.role'    => 'required_with:history|in:user,assistant',
             'history.*.content' => 'required_with:history|string',
+            'attachment_ids'   => 'nullable|array|max:4',
+            'attachment_ids.*' => 'uuid',
         ]);
 
         $userId    = $this->authUserId($request);
@@ -58,6 +61,25 @@ class ChatController extends Controller
             return response()->json(['error' => 'Unknown or unsupported model.'], 422);
         }
 
+        // 2b. Resolve any attached images to base64 — not a URL, since MinIO isn't
+        // reachable from a real provider's servers in local dev (see ChatServiceClient).
+        $images = [];
+        if (! empty($data['attachment_ids'])) {
+            if (! ($model->capabilities['vision'] ?? false)) {
+                return response()->json(['error' => "{$model->name} doesn't support image input. Pick a vision-capable model."], 422);
+            }
+
+            $attachments = $this->chatClient->resolveAttachments($data['attachment_ids']);
+            if (count($attachments) !== count($data['attachment_ids'])) {
+                return response()->json(['error' => 'One or more attachments could not be found.'], 422);
+            }
+
+            $images = array_map(
+                fn (array $a) => Image::fromBase64($a['base64'], $a['mime_type']),
+                $attachments
+            );
+        }
+
         $agent = new TextChatAgent(
             userId:    $userId,
             sessionId: $sessionId,
@@ -70,7 +92,7 @@ class ChatController extends Controller
 
         try {
             // 3. Stream response — CostTrackingMiddleware fires reserve before, deduct after
-            $response = $agent->stream($data['message'], provider: $model->provider, model: $model->model_id);
+            $response = $agent->stream($data['message'], $images, provider: $model->provider, model: $model->model_id);
 
             if ($persistToChatService) {
                 $response->then(function (AgentResponse $response) use ($sessionId, $userId, $model) {
@@ -90,6 +112,9 @@ class ChatController extends Controller
         } catch (\RuntimeException $e) {
             if ($e->getCode() === 402) {
                 return response()->json(['error' => 'Insufficient wallet balance. Please top up.'], 402);
+            }
+            if ($e->getCode() === 503) {
+                return response()->json(['error' => $e->getMessage()], 503);
             }
             // Refund is handled inside CostTrackingMiddleware on exception
             return response()->json(['error' => 'AI request failed. Please try again.'], 503);

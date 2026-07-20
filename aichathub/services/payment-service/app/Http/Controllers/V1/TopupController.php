@@ -79,6 +79,7 @@ class TopupController extends Controller
             if ($walletCredited) {
                 $transaction->update(['status' => 'completed', 'completed_at' => now()]);
                 $this->internal->createReceipt($userId, $amount, $currency, $transaction->id);
+                $this->internal->sendReceiptEmail($userId, $amount, $currency, 'Wallet top-up', "receipt:topup:{$transaction->id}");
             }
             // If crediting failed, leave status "pending" — the webhook will retry.
         }

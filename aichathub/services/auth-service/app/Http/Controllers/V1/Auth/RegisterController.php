@@ -50,8 +50,13 @@ class RegisterController extends Controller
                         'user_id'  => $userId,
                         'currency' => $currency,
                     ]);
-                } catch (\Exception $e) {
-                    Log::error('Wallet auto-create failed: ' . $e->getMessage(), ['user_id' => $userId]);
+                } catch (\Throwable $e) {
+                    // \Throwable, not \Exception — a route-not-found / connection-refused
+                    // style failure here (e.g. a stale nginx sidecar after a
+                    // --force-recreate of the app container but not its sidecar) can
+                    // surface as a type that \Exception alone doesn't catch, silently
+                    // killing the rest of this closure with nothing logged.
+                    Log::error('Wallet auto-create failed: ' . $e->getMessage(), ['user_id' => $userId, 'class' => get_class($e)]);
                 }
             }
 

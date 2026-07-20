@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Package;
 use App\Models\SubscriptionHistory;
 use App\Models\UserSubscription;
+use App\Services\AuthServiceClient;
+use App\Services\NotificationClient;
 use App\Services\SubscriptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,7 +17,11 @@ use Illuminate\Support\Str;
 
 class SubscriptionController extends Controller
 {
-    public function __construct(private SubscriptionService $subscriptions) {}
+    public function __construct(
+        private SubscriptionService $subscriptions,
+        private AuthServiceClient $authClient,
+        private NotificationClient $notificationClient,
+    ) {}
 
     /** GET /subscription — current active subscription for the authenticated user */
     public function current(Request $request): JsonResponse
@@ -227,24 +233,33 @@ class SubscriptionController extends Controller
         $packageName = $package->name;
 
         dispatch(function () use ($billingUrl, $internalKey, $userId, $subscriptionId, $packageName, $amount, $currency, $transactionId) {
-            if (! $billingUrl || ! $internalKey) {
-                return;
+            if ($billingUrl && $internalKey) {
+                try {
+                    Http::withHeaders([
+                        'X-Internal-Service-Key' => $internalKey,
+                        'Accept'                 => 'application/json',
+                    ])->timeout(15)->post("{$billingUrl}/api/internal/invoices/create", [
+                        'user_id'         => $userId,
+                        'subscription_id' => $subscriptionId,
+                        'description'     => 'Subscription: '.$packageName,
+                        'amount'          => $amount,
+                        'currency'        => $currency,
+                        'transaction_id'  => $transactionId,
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Invoice creation failed: '.$e->getMessage(), ['user_id' => $userId, 'subscription_id' => $subscriptionId]);
+                }
             }
 
-            try {
-                Http::withHeaders([
-                    'X-Internal-Service-Key' => $internalKey,
-                    'Accept'                 => 'application/json',
-                ])->timeout(15)->post("{$billingUrl}/api/internal/invoices/create", [
-                    'user_id'         => $userId,
-                    'subscription_id' => $subscriptionId,
-                    'description'     => 'Subscription: '.$packageName,
-                    'amount'          => $amount,
-                    'currency'        => $currency,
-                    'transaction_id'  => $transactionId,
-                ]);
-            } catch (\Exception $e) {
-                Log::error('Invoice creation failed: '.$e->getMessage(), ['user_id' => $userId, 'subscription_id' => $subscriptionId]);
+            $user = $this->authClient->findUser($userId);
+            if ($user) {
+                $this->notificationClient->send(
+                    'receipt',
+                    $userId,
+                    $user['email'],
+                    ['name' => $user['name'], 'amount' => $amount, 'currency' => $currency, 'description' => 'Subscription: '.$packageName],
+                    "receipt:subscription:{$transactionId}",
+                );
             }
         })->afterResponse();
     }

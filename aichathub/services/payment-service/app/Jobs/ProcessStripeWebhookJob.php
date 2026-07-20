@@ -81,6 +81,7 @@ class ProcessStripeWebhookJob implements ShouldQueue
         if ($credited) {
             $transaction->update(['status' => 'completed', 'completed_at' => now()]);
             $internal->createReceipt($transaction->user_id, (float) $transaction->amount, $transaction->currency, $transaction->id);
+            $internal->sendReceiptEmail($transaction->user_id, (float) $transaction->amount, $transaction->currency, 'Wallet top-up', "receipt:topup:{$transaction->id}");
         }
         // If crediting failed, leave the transaction pending — retrying this job
         // (tries=3) will attempt the credit again before giving up.
