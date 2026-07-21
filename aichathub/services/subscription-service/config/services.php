@@ -2,6 +2,7 @@
 
 return [
     'wallet_url'       => env('WALLET_SERVICE_URL', 'http://wallet-nginx'),
+    'payment_url'      => env('PAYMENT_SERVICE_URL', 'http://payment-nginx'),
     'billing_url'      => env('BILLING_SERVICE_URL', 'http://billing-nginx'),
     'notification_url' => env('NOTIFICATION_SERVICE_URL', 'http://notification-nginx'),
     'auth_url'         => env('AUTH_SERVICE_URL', 'http://auth-nginx'),

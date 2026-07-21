@@ -11,6 +11,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Laravel\Ai\Exceptions\AiException;
+use Laravel\Ai\Exceptions\InsufficientCreditsException;
+use Laravel\Ai\Exceptions\ProviderOverloadedException;
+use Laravel\Ai\Exceptions\RateLimitedException;
 
 $app = Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -57,12 +60,45 @@ $app = Application::configure(basePath: dirname(__DIR__))
 
         // laravel/ai's own exception family (InsufficientCreditsException,
         // RateLimitedException, ProviderOverloadedException, NoSuchToolException, ...)
-        // all extend this one base class — catch it here instead of one subclass at a
-        // time, same lazy-generator reasoning as the RequestException handler above.
+        // all extend this one base class. Registered most-specific-first — Laravel
+        // matches render() handlers in registration order, so the three specific
+        // ones below fire before the generic AiException catch-all at the bottom
+        // gets a chance to. Each gives the user an actionable message instead of a
+        // flat "temporarily unavailable" for every failure mode.
+        $exceptions->render(function (RateLimitedException $e, Request $request) {
+            $model = $request->input('model_id', 'This model');
+            Log::warning('AI provider rate limited', ['model' => $model]);
+
+            return response()->json([
+                'error' => "{$model} is temporarily rate-limited. Try again in a minute, or switch to another model.",
+                'code'  => 'provider_rate_limited',
+            ], 502);
+        });
+
+        $exceptions->render(function (InsufficientCreditsException $e, Request $request) {
+            $model = $request->input('model_id', 'This model');
+            Log::error('AI provider out of credits', ['model' => $model]);
+
+            return response()->json([
+                'error' => "{$model} isn't available right now (provider account issue). Please switch to another model.",
+                'code'  => 'provider_unavailable',
+            ], 502);
+        });
+
+        $exceptions->render(function (ProviderOverloadedException $e, Request $request) {
+            $model = $request->input('model_id', 'This model');
+            Log::warning('AI provider overloaded', ['model' => $model]);
+
+            return response()->json([
+                'error' => "{$model} is overloaded right now. Try again shortly, or switch to another model.",
+                'code'  => 'provider_overloaded',
+            ], 502);
+        });
+
         $exceptions->render(function (AiException $e, Request $request) {
             Log::error('AI provider call failed', ['exception' => get_class($e), 'error' => $e->getMessage()]);
 
-            return response()->json(['error' => 'This model is temporarily unavailable. Please try a different model.'], 502);
+            return response()->json(['error' => 'This model is temporarily unavailable. Please try a different model.', 'code' => 'provider_error'], 502);
         });
     })->create();
 

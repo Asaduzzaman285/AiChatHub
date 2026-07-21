@@ -74,6 +74,46 @@ class StripeGateway
     }
 
     /**
+     * Create a hosted Stripe Checkout Session. Always mode=payment (one-time) — this
+     * codebase models subscriptions as its own periodic charges rather than Stripe's
+     * native recurring Subscription objects, so there's no Dashboard-created
+     * Product/Price to reference; the line item is built inline via price_data.
+     *
+     * @throws ApiErrorException
+     */
+    public function createCheckoutSession(
+        float  $amount,
+        string $currency,
+        string $description,
+        string $successUrl,
+        string $cancelUrl,
+        array  $metadata,
+        string $idempotencyKey
+    ): \Stripe\Checkout\Session {
+        return $this->stripe->checkout->sessions->create([
+            'mode'                => 'payment',
+            'line_items'          => [[
+                'price_data' => [
+                    'currency'     => strtolower($currency),
+                    'unit_amount'  => (int) round($amount * 100),
+                    'product_data' => ['name' => $description],
+                ],
+                'quantity' => 1,
+            ]],
+            'success_url'         => $successUrl,
+            'cancel_url'          => $cancelUrl,
+            'metadata'            => $metadata,
+            'payment_intent_data' => ['metadata' => $metadata],
+        ], ['idempotency_key' => $idempotencyKey]);
+    }
+
+    /** @throws ApiErrorException */
+    public function retrieveCheckoutSession(string $sessionId): \Stripe\Checkout\Session
+    {
+        return $this->stripe->checkout->sessions->retrieve($sessionId);
+    }
+
+    /**
      * Verify webhook signature to prevent spoofed events.
      */
     public function verifyWebhook(string $payload, string $signature): ?\Stripe\Event

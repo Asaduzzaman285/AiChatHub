@@ -3,92 +3,51 @@
 namespace App\Http\Controllers\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\CreatesCheckoutSessions;
 use App\Models\Transaction;
-use App\Services\InternalServiceClient;
+use App\Services\StripeGateway;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
-use Stripe\Exception\ApiErrorException;
-use Stripe\StripeClient;
 
 class TopupController extends Controller
 {
-    public function __construct(private InternalServiceClient $internal) {}
+    use CreatesCheckoutSessions;
 
     /**
-     * POST /topup — creates + confirms a Stripe PaymentIntent for a wallet top-up.
-     * If Stripe confirms synchronously (common in test mode), the wallet is
-     * credited immediately. Otherwise the transaction stays "pending" and the
-     * Stripe webhook (payment_intent.succeeded → ProcessStripeWebhookJob)
-     * credits it once confirmation completes — that job also acts as a retry
-     * path if the synchronous credit call below fails.
+     * POST /topup — creates a Stripe Checkout Session for a wallet top-up.
+     * The wallet is only credited once the payment is verified, either by the
+     * frontend's return-page call to GET /checkout/{id}/verify or by the Stripe
+     * webhook (checkout.session.completed) — see CheckoutCompletionService.
      */
-    public function initiate(Request $request): JsonResponse
+    public function initiate(Request $request, StripeGateway $stripe): JsonResponse
     {
         $data = $request->validate([
-            'amount'               => 'required|numeric|min:1',
-            'currency'             => 'nullable|string|size:3',
-            'payment_method_token' => 'required|string',
+            'amount'   => 'required|numeric|min:1',
+            'currency' => 'nullable|string|size:3',
         ]);
 
-        $userId         = $this->authUserId($request);
-        $currency       = strtoupper($data['currency'] ?? 'USD');
-        $amount         = (float) $data['amount'];
-        $idempotencyKey = (string) Str::uuid();
+        $userId   = $this->authUserId($request);
+        $currency = strtoupper($data['currency'] ?? 'USD');
+        $amount   = (float) $data['amount'];
 
-        $transaction = Transaction::create([
-            'user_id'         => $userId,
-            'type'            => 'wallet_topup',
-            'status'          => 'pending',
-            'amount'          => $amount,
-            'currency'        => $currency,
-            'gateway'         => 'stripe',
-            'idempotency_key' => $idempotencyKey,
-            'description'     => 'Wallet top-up',
-        ]);
+        $result = $this->beginCheckout(
+            $stripe,
+            $userId,
+            'wallet_topup',
+            $amount,
+            $currency,
+            'AI ChatHub wallet top-up',
+            ['type' => 'wallet_topup'],
+        );
 
-        try {
-            $client = new StripeClient(config('services.stripe.secret'));
-
-            $intent = $client->paymentIntents->create([
-                'amount'                    => (int) round($amount * 100),
-                'currency'                  => strtolower($currency),
-                'payment_method'            => $data['payment_method_token'],
-                'confirm'                   => true,
-                'description'               => 'AI ChatHub wallet top-up',
-                'metadata'                  => ['user_id' => $userId, 'transaction_id' => $transaction->id],
-                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
-            ], ['idempotency_key' => $idempotencyKey]);
-
-            $transaction->update(['gateway_reference' => $intent->id]);
-        } catch (ApiErrorException $e) {
-            $transaction->update([
-                'status'        => 'failed',
-                'error_message' => $e->getMessage(),
-                'failed_at'     => now(),
-            ]);
-
-            return response()->json(['error' => $e->getMessage()], 422);
-        }
-
-        $walletCredited = false;
-
-        if ($intent->status === 'succeeded') {
-            $walletCredited = $this->internal->creditWallet($userId, $amount, 'Wallet top-up', $transaction->id);
-
-            if ($walletCredited) {
-                $transaction->update(['status' => 'completed', 'completed_at' => now()]);
-                $this->internal->createReceipt($userId, $amount, $currency, $transaction->id);
-                $this->internal->sendReceiptEmail($userId, $amount, $currency, 'Wallet top-up', "receipt:topup:{$transaction->id}");
-            }
-            // If crediting failed, leave status "pending" — the webhook will retry.
+        if ($result['error']) {
+            return response()->json(['error' => $result['error']], 422);
         }
 
         return response()->json([
-            'transaction_id'  => $transaction->id,
-            'status'          => $transaction->fresh()->status,
-            'client_secret'   => $intent->client_secret,
-            'wallet_credited' => $walletCredited,
+            'transaction_id' => $result['transaction']->id,
+            'status'         => $result['transaction']->status,
+            'checkout_url'   => $result['checkout_url'],
         ], 201);
     }
 

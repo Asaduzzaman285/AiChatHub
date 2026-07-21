@@ -87,7 +87,7 @@ class ChatController extends Controller
         );
 
         if ($persistToChatService) {
-            $this->chatClient->appendMessage($sessionId, $userId, 'user', $data['message']);
+            $this->chatClient->appendMessage($sessionId, $userId, 'user', $data['message'], ['model_id' => $model->id]);
         }
 
         try {
@@ -100,6 +100,7 @@ class ChatController extends Controller
                     $completionTokens = $response->usage?->completionTokens ?? 0;
 
                     $this->chatClient->appendMessage($sessionId, $userId, 'assistant', $response->text ?? '', [
+                        'model_id'          => $model->id,
                         'prompt_tokens'     => $promptTokens,
                         'completion_tokens' => $completionTokens,
                         'cost'              => $this->calculateCost($model, $promptTokens, $completionTokens),

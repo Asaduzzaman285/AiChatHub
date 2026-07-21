@@ -24,10 +24,17 @@ const NAV_ITEMS = [
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, accessToken, isAuthenticated, setUser, clearAuth } = useAuthStore()
+  const { user, accessToken, isAuthenticated, hasHydrated, setUser, clearAuth } = useAuthStore()
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
+    // Not a real "logged out" reading yet — zustand-persist hasn't finished
+    // reading localStorage. Matters most right after a full page reload (e.g.
+    // returning from an external redirect like Stripe Checkout), where this
+    // effect can otherwise run before rehydration completes and wrongly bounce
+    // an actually-logged-in user to /login.
+    if (!hasHydrated) return
+
     if (!isAuthenticated || !accessToken) {
       router.replace('/login')
       return
@@ -46,7 +53,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         router.replace('/login')
       })
       .finally(() => setChecking(false))
-  }, [isAuthenticated, accessToken, user, setUser, clearAuth, router])
+  }, [hasHydrated, isAuthenticated, accessToken, user, setUser, clearAuth, router])
 
   const handleLogout = async () => {
     try {

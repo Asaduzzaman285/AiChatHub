@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Internal;
 
+use App\Http\Controllers\Concerns\CreatesCheckoutSessions;
 use App\Http\Controllers\Controller;
 use App\Models\Transaction;
 use App\Services\StripeGateway;
@@ -12,11 +13,52 @@ use Illuminate\Support\Str;
 
 class PaymentInternalController extends Controller
 {
+    use CreatesCheckoutSessions;
+
     public function __construct(private StripeGateway $stripe) {}
 
     /**
+     * POST /internal/payments/checkout
+     * Called by Subscription Service to start a Checkout-Session-funded package
+     * purchase. Unlike charge() below, this never activates anything itself —
+     * the caller only gets a checkout_url back; activation happens later via
+     * CheckoutCompletionService once the payment is verified.
+     */
+    public function createCheckoutSession(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'user_id'      => 'required|uuid',
+            'amount'       => 'required|numeric|min:0.01',
+            'currency'     => 'required|string|in:USD,BDT',
+            'description'  => 'required|string',
+            'package_slug' => 'required|string',
+        ]);
+
+        $result = $this->beginCheckout(
+            $this->stripe,
+            $data['user_id'],
+            'subscription_purchase',
+            (float) $data['amount'],
+            $data['currency'],
+            $data['description'],
+            ['package_slug' => $data['package_slug']],
+        );
+
+        if ($result['error']) {
+            return response()->json(['error' => $result['error']], 422);
+        }
+
+        return response()->json([
+            'transaction_id' => $result['transaction']->id,
+            'checkout_url'   => $result['checkout_url'],
+        ], 201);
+    }
+
+    /**
      * POST /internal/payments/charge
-     * Called by Subscription Service for purchases and renewals.
+     * Legacy direct-charge path (synchronous PaymentIntent, caller-supplied
+     * payment method token) — superseded by createCheckoutSession() above for
+     * package purchases, kept as-is for potential future saved-card use.
      */
     public function charge(Request $request): JsonResponse
     {

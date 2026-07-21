@@ -186,6 +186,7 @@ export interface ChatMessage {
   id: string
   session_id: string
   role: 'user' | 'assistant' | 'system'
+  model_id: string | null
   content: string
   prompt_tokens: number
   completion_tokens: number

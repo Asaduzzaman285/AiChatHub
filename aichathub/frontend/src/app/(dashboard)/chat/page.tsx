@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  Bot, Columns3, MessageSquare, Paperclip, Plus, Send, Sparkles, User, X,
+  Bot, Columns3, Loader2, MessageSquare, Paperclip, Pencil, Plus, Send, Sparkles, Trash2, User, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import apiClient from '@/lib/api-client'
@@ -27,12 +27,19 @@ export default function ChatPage() {
   const [mode, setMode] = useState<'chat' | 'compare'>('chat')
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [pendingModelId, setPendingModelId] = useState<string>('')
+  // The model used for the NEXT message sent in the active session — independent of
+  // chat_sessions.model_id (which just reflects the most recently used one, for
+  // display). Switching this does not create a new session or clear history.
+  const [activeModelId, setActiveModelId] = useState<string>('')
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingMessages, setStreamingMessages] = useState<StreamingMessage[]>([])
   const [pendingAttachment, setPendingAttachment] = useState<FileAttachment | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
 
   // Compare mode — separate from the session-based chat above: /chat/compare is a
   // stateless fan-out (no session_id, nothing persisted to chat-service), so it gets
@@ -71,8 +78,20 @@ export default function ChatPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, streamingMessages])
 
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.focus()
+  }, [renamingId])
+
   const activeSession = sessions?.find((s) => s.id === activeSessionId) ?? null
-  const activeModel = models?.find((m) => m.id === activeSession?.model_id) ?? null
+
+  // Switching to a different session resets which model the input box will use back
+  // to that session's most-recently-used one — switching model doesn't follow you
+  // across sessions.
+  useEffect(() => {
+    if (activeSession) setActiveModelId(activeSession.model_id)
+  }, [activeSession?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedModel = models?.find((m) => m.id === activeModelId) ?? null
 
   const createSession = useMutation({
     mutationFn: async (modelId: string) =>
@@ -83,6 +102,42 @@ export default function ChatPage() {
     },
     onError: () => toast.error('Could not start a new chat.'),
   })
+
+  const renameSession = useMutation({
+    mutationFn: async ({ id, title }: { id: string; title: string }) =>
+      apiClient.patch(`/api/v1/sessions/${id}`, { title }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] }),
+    onError: () => toast.error('Could not rename chat.'),
+    onSettled: () => setRenamingId(null),
+  })
+
+  const deleteSession = useMutation({
+    mutationFn: async (id: string) => apiClient.delete(`/api/v1/sessions/${id}`),
+    onSuccess: (_res, id) => {
+      queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] })
+      if (activeSessionId === id) setActiveSessionId(null)
+      toast.success('Chat deleted.')
+    },
+    onError: () => toast.error('Could not delete chat.'),
+  })
+
+  const startRename = (s: ChatSession) => {
+    setRenamingId(s.id)
+    setRenameValue(s.title)
+  }
+
+  const commitRename = () => {
+    const title = renameValue.trim()
+    if (!renamingId) return
+    if (!title) { setRenamingId(null); return }
+    renameSession.mutate({ id: renamingId, title })
+  }
+
+  const confirmDelete = (s: ChatSession) => {
+    if (window.confirm(`Delete "${s.title}"? This can't be undone.`)) {
+      deleteSession.mutate(s.id)
+    }
+  }
 
   const uploadAttachment = useMutation({
     mutationFn: async (file: File) => {
@@ -111,9 +166,17 @@ export default function ChatPage() {
 
   const send = async () => {
     const text = input.trim()
-    if (!text || !activeSession || !activeModel || isStreaming) return
+    if (!text || !activeSession || !selectedModel || isStreaming || uploadAttachment.isPending) return
 
     const attachmentIds = pendingAttachment ? [pendingAttachment.id] : undefined
+    // Conversation context — without this every message was being sent with zero
+    // awareness of prior turns. Cap it to avoid an unbounded prompt as chats grow;
+    // providers will trim further to their own context window regardless.
+    const history = (messages ?? [])
+      .slice(-30)
+      .map((m) => ({ role: m.role, content: m.content }))
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+
     setInput('')
     setPendingAttachment(null)
     setIsStreaming(true)
@@ -135,9 +198,10 @@ export default function ChatPage() {
         },
         body: JSON.stringify({
           message: text,
-          model_id: activeModel.model_id,
+          model_id: selectedModel.model_id,
           session_id: activeSession.id,
           attachment_ids: attachmentIds,
+          history,
         }),
         signal: controller.signal,
       })
@@ -384,19 +448,52 @@ export default function ChatPage() {
             </div>
           ) : (
             sessions.map((s) => (
-              <button
+              <div
                 key={s.id}
-                onClick={() => setActiveSessionId(s.id)}
                 className={cn(
-                  'w-full text-left px-3 py-2.5 text-sm border-b border-border hover:bg-accent transition-colors',
+                  'group w-full flex items-center gap-1 px-3 py-2.5 border-b border-border hover:bg-accent transition-colors',
                   s.id === activeSessionId && 'bg-accent'
                 )}
               >
-                <p className="truncate font-medium">{s.title}</p>
-                <p className="text-xs text-muted-foreground">
-                  {s.message_count} msgs · {formatCurrency(s.total_cost)}
-                </p>
-              </button>
+                {renamingId === s.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename()
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    className="flex-1 min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-sm"
+                  />
+                ) : (
+                  <button onClick={() => setActiveSessionId(s.id)} className="flex-1 min-w-0 text-left">
+                    <p className="truncate text-sm font-medium">{s.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {s.message_count} msgs · {formatCurrency(s.total_cost)}
+                    </p>
+                  </button>
+                )}
+                {renamingId !== s.id && (
+                  <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => startRename(s)}
+                      className="p-1 text-muted-foreground hover:text-foreground"
+                      aria-label="Rename chat"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => confirmDelete(s)}
+                      className="p-1 text-muted-foreground hover:text-destructive"
+                      aria-label="Delete chat"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             ))
           )}
         </div>
@@ -415,9 +512,22 @@ export default function ChatPage() {
           </div>
         ) : (
           <>
-            <div className="border-b border-border px-4 py-2.5">
-              <p className="text-sm font-medium">{activeSession.title}</p>
-              <p className="text-xs text-muted-foreground">{activeModel?.name ?? 'Unknown model'}</p>
+            <div className="border-b border-border px-4 py-2 flex items-center justify-between gap-3">
+              <p className="text-sm font-medium truncate">{activeSession.title}</p>
+              {/* Model stays switchable for the rest of the conversation — this does
+                  NOT create a new session or clear history, just changes which model
+                  answers the next message. */}
+              <select
+                value={activeModelId}
+                onChange={(e) => setActiveModelId(e.target.value)}
+                disabled={isStreaming}
+                className="shrink-0 rounded-md border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              >
+                {availableModels.length === 0 && <option value="">No models available</option>}
+                {availableModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
             </div>
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -428,18 +538,35 @@ export default function ChatPage() {
                 </div>
               )}
               {messages?.map((m) => (
-                <MessageBubble key={m.id} role={m.role} content={m.content} />
+                <MessageBubble
+                  key={m.id}
+                  role={m.role}
+                  content={m.content}
+                  modelName={m.model_id ? models?.find((mo) => mo.id === m.model_id)?.name : undefined}
+                />
               ))}
               {streamingMessages.map((m, i) => (
-                <MessageBubble key={`streaming-${i}`} role={m.role} content={m.content || '…'} />
+                <MessageBubble
+                  key={`streaming-${i}`}
+                  role={m.role}
+                  content={m.content || '…'}
+                  modelName={m.role === 'assistant' ? selectedModel?.name : undefined}
+                />
               ))}
             </div>
 
             <div className="border-t border-border p-3 space-y-2">
-              {pendingAttachment && (
+              {uploadAttachment.isPending && (
+                <div className="inline-flex items-center gap-2 rounded-md border border-border bg-accent/50 px-2 py-1 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Uploading…
+                </div>
+              )}
+              {pendingAttachment && !uploadAttachment.isPending && (
                 <div className="inline-flex items-center gap-2 rounded-md border border-border bg-accent/50 px-2 py-1 text-xs">
                   <img src={pendingAttachment.storage_url} alt="" className="h-6 w-6 rounded object-cover" />
                   <span className="max-w-[160px] truncate">{pendingAttachment.original_name}</span>
+                  <span className="text-green-600">✓</span>
                   <button
                     type="button"
                     onClick={() => setPendingAttachment(null)}
@@ -454,7 +581,7 @@ export default function ChatPage() {
                 onSubmit={(e) => { e.preventDefault(); send() }}
                 className="flex gap-2"
               >
-                {activeModel?.capabilities.vision && (
+                {selectedModel?.capabilities.vision && (
                   <>
                     <input
                       ref={fileInputRef}
@@ -470,7 +597,7 @@ export default function ChatPage() {
                       onClick={() => fileInputRef.current?.click()}
                       aria-label="Attach image"
                     >
-                      <Paperclip className="h-4 w-4" />
+                      {uploadAttachment.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                     </Button>
                   </>
                 )}
@@ -481,7 +608,7 @@ export default function ChatPage() {
                   placeholder="Message the model…"
                   className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                 />
-                <Button type="submit" disabled={isStreaming || !input.trim()} className="gap-1.5">
+                <Button type="submit" disabled={isStreaming || uploadAttachment.isPending || !input.trim()} className="gap-1.5">
                   <Send className="h-4 w-4" />
                   {isStreaming ? 'Sending…' : 'Send'}
                 </Button>
@@ -496,7 +623,7 @@ export default function ChatPage() {
   )
 }
 
-function MessageBubble({ role, content }: { role: string; content: string }) {
+function MessageBubble({ role, content, modelName }: { role: string; content: string; modelName?: string }) {
   const isUser = role === 'user'
   return (
     <div className={cn('flex items-start gap-2', isUser ? 'justify-end' : 'justify-start')}>
@@ -505,13 +632,16 @@ function MessageBubble({ role, content }: { role: string; content: string }) {
           <Bot className="h-4 w-4 text-muted-foreground" />
         </div>
       )}
-      <div
-        className={cn(
-          'max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-card border border-border'
-        )}
-      >
-        {content}
+      <div className={cn('max-w-[75%] space-y-1', isUser && 'flex flex-col items-end')}>
+        {!isUser && modelName && <p className="text-[11px] text-muted-foreground px-1">{modelName}</p>}
+        <div
+          className={cn(
+            'rounded-lg px-3 py-2 text-sm whitespace-pre-wrap',
+            isUser ? 'bg-primary text-primary-foreground' : 'bg-card border border-border'
+          )}
+        >
+          {content}
+        </div>
       </div>
       {isUser && (
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10">

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, type FormEvent } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -10,13 +10,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import type { LedgerEntry, WalletBalance } from '@/types'
 
-// See pricing/page.tsx — same Phase 1 test-mode Stripe PaymentMethod id.
-const TEST_PAYMENT_METHOD = 'pm_card_visa'
-
 export default function WalletPage() {
-  const queryClient = useQueryClient()
   const [amount, setAmount] = useState('10')
-  const [ambiguousWarning, setAmbiguousWarning] = useState<string | null>(null)
 
   const { data: wallet, isLoading: walletLoading } = useQuery({
     queryKey: ['wallet', 'balance'],
@@ -30,41 +25,23 @@ export default function WalletPage() {
 
   const topup = useMutation({
     mutationFn: async (amountUsd: number) =>
-      apiClient.post('/api/v1/topup', {
+      apiClient.post<{ checkout_url: string }>('/api/v1/topup', {
         amount: amountUsd,
         currency: 'USD',
-        payment_method_token: TEST_PAYMENT_METHOD,
       }),
     onSuccess: (res) => {
-      const credited = (res.data as { wallet_credited?: boolean })?.wallet_credited
-      toast.success(
-        credited
-          ? 'Top-up successful — wallet credited.'
-          : 'Payment succeeded, wallet credit is processing (check back shortly).'
-      )
-      setAmbiguousWarning(null)
-      queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      // No wallet credit happens here — Stripe's hosted page collects the card, and
+      // /billing/checkout-callback verifies + credits once payment actually completes.
+      window.location.href = res.data.checkout_url
     },
     onError: (err: unknown) => {
-      const { ambiguous, message } = describeError(
-        err,
-        "We didn't hear back from the server in time. Your card may still have been charged."
-      )
-      if (ambiguous) {
-        // A real Stripe charge may have already gone through server-side — do NOT let the
-        // toast (which auto-dismisses) be the only signal, or a retry click risks a second
-        // charge. Keep a persistent banner and refresh the ledger so they can check first.
-        setAmbiguousWarning(message)
-        queryClient.invalidateQueries({ queryKey: ['wallet'] })
-      } else {
-        toast.error(message)
-      }
+      const { message } = describeError(err, "We didn't hear back from the server in time. Please try again.")
+      toast.error(message)
     },
   })
 
   const handleTopup = (e: FormEvent) => {
     e.preventDefault()
-    setAmbiguousWarning(null)
     const value = parseFloat(amount)
     if (!value || value <= 0) {
       toast.error('Enter a valid amount.')
@@ -78,7 +55,7 @@ export default function WalletPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Wallet</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Top-ups run a real Stripe test-mode charge against your sandbox account (no real money moves).
+          Top up via Stripe&apos;s hosted checkout (test mode) — you&apos;ll be redirected to enter a card, and your balance updates once payment is confirmed.
         </p>
       </div>
 
@@ -110,12 +87,6 @@ export default function WalletPage() {
             <CardTitle>Top up</CardTitle>
           </CardHeader>
           <CardContent>
-            {ambiguousWarning && (
-              <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 space-y-1">
-                <p>{ambiguousWarning}</p>
-                <p>Check the transaction history below before topping up again to avoid a duplicate charge.</p>
-              </div>
-            )}
             <form onSubmit={handleTopup} className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">$</span>

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\V1\CheckoutController;
 use App\Http\Controllers\V1\PaymentMethodController;
 use App\Http\Controllers\V1\TopupController;
 use App\Http\Controllers\V1\TransactionController;
@@ -25,6 +26,8 @@ Route::middleware('auth.jwt')->group(function () {
 
     Route::post('/topup',            [TopupController::class, 'initiate']);
     Route::get('/topup/{id}/status', [TopupController::class, 'status']);
+
+    Route::get('/checkout/{sessionId}/verify', [CheckoutController::class, 'verify']);
 
     Route::get('/transactions',      [TransactionController::class, 'index']);
     Route::get('/transactions/{id}', [TransactionController::class, 'show']);

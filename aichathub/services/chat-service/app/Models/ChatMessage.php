@@ -13,7 +13,7 @@ class ChatMessage extends Model
     const UPDATED_AT = null;
 
     protected $fillable = [
-        'session_id', 'user_id', 'role', 'content',
+        'session_id', 'user_id', 'role', 'model_id', 'content',
         'prompt_tokens', 'completion_tokens', 'total_tokens', 'cost',
         'usage_log_id', 'provider_message_id', 'is_streaming', 'metadata',
     ];

@@ -8,16 +8,14 @@ import { Button } from '@/components/ui/Button'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
-import type { Package, Subscription } from '@/types'
-
-// Phase 1 has no Stripe Elements integration yet — subscribe() doesn't
-// actually charge a card (see SubscriptionController, services/subscription-service).
-// This is Stripe's well-known test PaymentMethod id, safe to hardcode for test mode.
-const TEST_PAYMENT_METHOD = 'pm_card_visa'
+import type { Package, Subscription, WalletBalance } from '@/types'
 
 export default function PricingPage() {
   const queryClient = useQueryClient()
   const [pendingSlug, setPendingSlug] = useState<string | null>(null)
+  // Which package the payment-source picker is currently open for — null means
+  // no picker is showing (either nothing clicked yet, or a single-option package).
+  const [choosingSlug, setChoosingSlug] = useState<string | null>(null)
 
   const { data: packages, isLoading } = useQuery({
     queryKey: ['packages'],
@@ -29,17 +27,29 @@ export default function PricingPage() {
     queryFn: async () => (await apiClient.get<{ subscription: Subscription | null }>('/api/v1/subscription')).data.subscription,
   })
 
+  const { data: wallet } = useQuery({
+    queryKey: ['wallet', 'balance'],
+    queryFn: async () => (await apiClient.get<WalletBalance>('/api/v1/wallet')).data,
+  })
+
   const subscribe = useMutation({
-    mutationFn: async (slug: string) => {
+    mutationFn: async ({ slug, source }: { slug: string; source: 'wallet' | 'card' }) => {
       setPendingSlug(slug)
-      return apiClient.post('/api/v1/subscription/subscribe', {
+      return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
-        payment_method_token: TEST_PAYMENT_METHOD,
+        payment_source: source,
         currency: 'USD',
       })
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (res.data.checkout_url) {
+        // Card path — nothing is activated yet, /billing/checkout-callback verifies
+        // the payment and activates the package once Stripe confirms it.
+        window.location.href = res.data.checkout_url
+        return
+      }
       toast.success('Subscribed! Your wallet has been credited.')
+      setChoosingSlug(null)
       queryClient.invalidateQueries({ queryKey: ['subscription'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
     },
@@ -50,6 +60,7 @@ export default function PricingPage() {
       )
       toast.error(message)
       if (ambiguous) {
+        setChoosingSlug(null)
         queryClient.invalidateQueries({ queryKey: ['subscription'] })
         queryClient.invalidateQueries({ queryKey: ['wallet'] })
       }
@@ -95,7 +106,8 @@ export default function PricingPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Pricing</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Test mode — subscribing uses Stripe&apos;s test card ({TEST_PAYMENT_METHOD}), no real charge occurs.
+          Pay from your wallet balance if you have enough, or with a card via Stripe&apos;s hosted checkout
+          (test mode — no real money moves).
         </p>
       </div>
 
@@ -108,6 +120,8 @@ export default function PricingPage() {
             const currentPrice = subscription?.package?.monthly_price_usd
             const isUpgrade = currentPrice !== undefined && pkg.price.usd > currentPrice
             const isPending = (subscribe.isPending || changePlan.isPending) && pendingSlug === pkg.slug
+            const canUseWallet = (wallet?.available_balance ?? 0) >= pkg.price.usd
+            const isChoosing = choosingSlug === pkg.slug
 
             return (
               <Card key={pkg.id} className={isCurrent ? 'border-primary' : ''}>
@@ -132,9 +146,43 @@ export default function PricingPage() {
                       Current plan
                     </Button>
                   ) : !subscription ? (
-                    <Button className="w-full" disabled={isPending} onClick={() => subscribe.mutate(pkg.slug)}>
-                      {isPending ? 'Subscribing…' : 'Subscribe'}
-                    </Button>
+                    isChoosing ? (
+                      <div className="space-y-2">
+                        <Button
+                          className="w-full"
+                          disabled={isPending}
+                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'wallet' })}
+                        >
+                          {isPending ? 'Subscribing…' : `Use Wallet Balance (${formatCurrency(wallet?.available_balance ?? 0)} Available)`}
+                        </Button>
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          disabled={isPending}
+                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'card' })}
+                        >
+                          {isPending ? 'Subscribing…' : 'Pay with Card'}
+                        </Button>
+                        <button
+                          type="button"
+                          className="w-full text-xs text-muted-foreground hover:text-foreground"
+                          disabled={isPending}
+                          onClick={() => setChoosingSlug(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <Button
+                        className="w-full"
+                        disabled={isPending}
+                        onClick={() =>
+                          canUseWallet ? setChoosingSlug(pkg.slug) : subscribe.mutate({ slug: pkg.slug, source: 'card' })
+                        }
+                      >
+                        {isPending ? 'Subscribing…' : 'Subscribe'}
+                      </Button>
+                    )
                   ) : (
                     <Button
                       className="w-full"

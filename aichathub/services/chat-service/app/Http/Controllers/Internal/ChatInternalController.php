@@ -23,6 +23,7 @@ class ChatInternalController extends Controller
         $data = $request->validate([
             'user_id'             => 'required|uuid',
             'role'                => 'required|in:user,assistant,system',
+            'model_id'            => 'nullable|uuid',
             'content'             => 'required|string',
             'prompt_tokens'       => 'nullable|integer|min:0',
             'completion_tokens'   => 'nullable|integer|min:0',
@@ -45,6 +46,7 @@ class ChatInternalController extends Controller
                 'session_id'          => $session->id,
                 'user_id'             => $data['user_id'],
                 'role'                => $data['role'],
+                'model_id'            => $data['model_id'] ?? null,
                 'content'             => $data['content'],
                 'prompt_tokens'       => $promptTokens,
                 'completion_tokens'   => $completionTokens,
@@ -57,6 +59,12 @@ class ChatInternalController extends Controller
             $session->increment('message_count');
             $session->increment('total_tokens', $promptTokens + $completionTokens);
             $session->increment('total_cost', $cost);
+
+            // Session's model_id tracks "most recently used model" now that a
+            // conversation can span several — the sidebar/header shows this.
+            if (! empty($data['model_id']) && $data['model_id'] !== $session->model_id) {
+                $session->update(['model_id' => $data['model_id']]);
+            }
 
             return $message;
         });

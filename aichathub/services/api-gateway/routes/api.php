@@ -25,6 +25,7 @@ Route::middleware('auth.jwt.gateway')->group(function () {
     Route::any('/wallet/{path?}',         [ProxyController::class, 'proxyWallet'])->where('path', '.*');
     Route::any('/payment-methods/{path?}',[ProxyController::class, 'proxyPayment'])->where('path', '.*');
     Route::any('/topup/{path?}',          [ProxyController::class, 'proxyPayment'])->where('path', '.*');
+    Route::any('/checkout/{path?}',       [ProxyController::class, 'proxyPayment'])->where('path', '.*');
     Route::any('/transactions/{path?}',   [ProxyController::class, 'proxyPayment'])->where('path', '.*');
     Route::any('/models/{path?}',         [ProxyController::class, 'proxyAiGateway'])->where('path', '.*');
     Route::any('/chat/{path?}',           [ProxyController::class, 'proxyAiGateway'])->where('path', '.*');
