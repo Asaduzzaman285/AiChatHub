@@ -55,6 +55,10 @@ class WalletClientService
                     'amount'          => $actual,
                     'reserved_amount' => $reserved,
                     'description'     => $description,
+                    // wallet-service's idempotency guard only engages when both are present —
+                    // reference_type is a fixed constant for this call site, reference_id is
+                    // per-request (see CostTrackingMiddleware).
+                    'reference_type'  => $referenceId ? 'ai_usage' : null,
                     'reference_id'    => $referenceId,
                 ]);
         } catch (\Exception $e) {

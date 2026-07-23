@@ -7,6 +7,7 @@ use App\Models\Package;
 use App\Models\SubscriptionHistory;
 use App\Models\UserSubscription;
 use App\Services\PackageActivationService;
+use App\Services\PaymentChargeService;
 use App\Services\SubscriptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +20,7 @@ class SubscriptionController extends Controller
     public function __construct(
         private SubscriptionService $subscriptions,
         private PackageActivationService $activation,
+        private PaymentChargeService $charges,
     ) {}
 
     /** GET /subscription — current active subscription for the authenticated user */
@@ -42,7 +44,7 @@ class SubscriptionController extends Controller
     {
         $data = $request->validate([
             'package_slug'   => 'required|string|exists:packages,slug',
-            'payment_source' => 'required|in:wallet,card',
+            'payment_source' => 'required|in:wallet,card,bkash',
             'currency'       => 'nullable|string|size:3',
         ]);
 
@@ -60,11 +62,11 @@ class SubscriptionController extends Controller
         $currency = $data['currency'] ?? 'USD';
         $price    = (float) $package->monthly_price_usd;
 
-        if ($price > 0 && $data['payment_source'] === 'card') {
-            $checkoutUrl = $this->createCardCheckout($userId, $price, $currency, $package);
+        if ($price > 0 && in_array($data['payment_source'], ['card', 'bkash'], true)) {
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source']);
 
             if (! $checkoutUrl) {
-                return response()->json(['message' => 'Could not start card checkout. Please try again.', 'error' => 'checkout_failed'], 502);
+                return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
             }
 
             return response()->json(['checkout_url' => $checkoutUrl]);
@@ -73,7 +75,7 @@ class SubscriptionController extends Controller
         $transactionId = (string) Str::uuid();
 
         if ($price > 0) {
-            $charged = $this->chargeWallet($userId, $price, $transactionId, 'Subscription: '.$package->name);
+            $charged = $this->charges->chargeWallet($userId, $price, $transactionId, 'Subscription: '.$package->name);
 
             if (! $charged) {
                 return response()->json(['message' => 'Insufficient wallet balance for this package.', 'error' => 'insufficient_wallet_balance'], 402);
@@ -185,57 +187,14 @@ class SubscriptionController extends Controller
         ]);
     }
 
-    /** Reserve+deduct against the wallet — same two-step Wallet Service uses for AI cost, reused here for a synchronous purchase charge. */
-    private function chargeWallet(string $userId, float $amount, string $transactionId, string $description): bool
-    {
-        $walletUrl   = rtrim(config('services.wallet_url'), '/');
-        $internalKey = config('services.internal_key');
-
-        if (! $walletUrl || ! $internalKey) {
-            Log::error('Wallet charge skipped — wallet_url/internal_key not configured.', ['user_id' => $userId]);
-            return false;
-        }
-
-        try {
-            $reserve = Http::withHeaders([
-                'X-Internal-Service-Key' => $internalKey,
-                'Accept'                 => 'application/json',
-            ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/reserve", [
-                'user_id' => $userId,
-                'amount'  => $amount,
-            ]);
-
-            if (! $reserve->successful()) {
-                return false;
-            }
-
-            $deduct = Http::withHeaders([
-                'X-Internal-Service-Key' => $internalKey,
-                'Accept'                 => 'application/json',
-            ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/deduct", [
-                'user_id'         => $userId,
-                'amount'          => $amount,
-                'reserved_amount' => $amount,
-                'description'     => $description,
-                'reference_type'  => 'subscription_purchase',
-                'reference_id'    => $transactionId,
-            ]);
-
-            return $deduct->successful();
-        } catch (\Exception $e) {
-            Log::error('Wallet charge failed: '.$e->getMessage(), ['user_id' => $userId]);
-            return false;
-        }
-    }
-
-    /** Asks Payment Service to open a Stripe Checkout Session for this package purchase. */
-    private function createCardCheckout(string $userId, float $amount, string $currency, Package $package): ?string
+    /** Asks Payment Service to open a Checkout Session (Stripe or bKash) for this package purchase. */
+    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $gateway): ?string
     {
         $paymentUrl  = rtrim(config('services.payment_url'), '/');
         $internalKey = config('services.internal_key');
 
         if (! $paymentUrl || ! $internalKey) {
-            Log::error('Card checkout skipped — payment_url/internal_key not configured.', ['user_id' => $userId]);
+            Log::error('Checkout skipped — payment_url/internal_key not configured.', ['user_id' => $userId]);
             return null;
         }
 
@@ -247,13 +206,14 @@ class SubscriptionController extends Controller
                 'user_id'      => $userId,
                 'amount'       => $amount,
                 'currency'     => $currency,
+                'gateway'      => $gateway,
                 'description'  => 'Subscription: '.$package->name,
                 'package_slug' => $package->slug,
             ]);
 
             return $response->successful() ? $response->json('checkout_url') : null;
         } catch (\Exception $e) {
-            Log::error('Card checkout creation failed: '.$e->getMessage(), ['user_id' => $userId]);
+            Log::error('Checkout creation failed: '.$e->getMessage(), ['user_id' => $userId, 'gateway' => $gateway]);
             return null;
         }
     }

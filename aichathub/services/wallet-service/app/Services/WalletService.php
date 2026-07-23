@@ -129,11 +129,26 @@ class WalletService
     /**
      * Deduct actual cost after AI request completes.
      * Releases reservation and charges actual amount.
+     *
+     * Idempotent on (reference_type, reference_id) when both are given — same
+     * reasoning as credit(): a caller can time out waiting for this call even
+     * though it completed server-side, and a naive retry would double-deduct.
      */
     public function deduct(string $userId, float $actualCost, float $reservedAmount, string $description, string $referenceType = null, string $referenceId = null): void
     {
         DB::transaction(function () use ($userId, $actualCost, $reservedAmount, $description, $referenceType, $referenceId) {
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
+
+            if ($referenceType && $referenceId) {
+                $alreadyDeducted = WalletLedgerEntry::where('type', 'debit')
+                    ->where('reference_type', $referenceType)
+                    ->where('reference_id', $referenceId)
+                    ->exists();
+
+                if ($alreadyDeducted) {
+                    return;
+                }
+            }
 
             $balanceBefore = (float) $wallet->balance;
 
@@ -185,11 +200,27 @@ class WalletService
 
     /**
      * Refund cost on failed AI request.
+     *
+     * Idempotent on reference_id (type is always 'usage_log' for a refund) —
+     * ReleaseWalletReservationJob retries up to 3 times on failure, and without
+     * this guard a retry that actually succeeded server-side but timed out
+     * client-side would refund the same reservation twice.
      */
     public function refund(string $userId, float $amount, float $reservedAmount, string $reason, string $referenceId = null): void
     {
         DB::transaction(function () use ($userId, $amount, $reservedAmount, $reason, $referenceId) {
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
+
+            if ($referenceId) {
+                $alreadyRefunded = WalletLedgerEntry::where('type', 'refund')
+                    ->where('reference_type', 'usage_log')
+                    ->where('reference_id', $referenceId)
+                    ->exists();
+
+                if ($alreadyRefunded) {
+                    return;
+                }
+            }
 
             $balanceBefore = (float) $wallet->balance;
             $wallet->reserved_balance = max(0, (float) $wallet->reserved_balance - $reservedAmount);

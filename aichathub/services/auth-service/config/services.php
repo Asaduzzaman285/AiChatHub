@@ -18,5 +18,6 @@ return [
     'internal_key'         => env('INTERNAL_SERVICE_KEY', 'change-in-production'),
     'notification_url'     => env('NOTIFICATION_SERVICE_URL', 'http://notification-nginx'),
     'subscription_url'     => env('SUBSCRIPTION_SERVICE_URL', 'http://subscription-nginx'),
+    'frontend_url'         => env('FRONTEND_URL', 'http://localhost:3000'),
 
 ];

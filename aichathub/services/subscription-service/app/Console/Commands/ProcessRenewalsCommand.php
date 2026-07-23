@@ -24,7 +24,7 @@ class ProcessRenewalsCommand extends Command
         }
 
         foreach ($due as $subscription) {
-            ProcessRenewalJob::dispatch($subscription);
+            ProcessRenewalJob::dispatch($subscription->id);
         }
 
         $this->info("Dispatched {$due->count()} renewal job(s).");

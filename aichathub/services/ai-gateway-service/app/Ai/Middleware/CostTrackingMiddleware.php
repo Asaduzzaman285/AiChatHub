@@ -6,6 +6,7 @@ use App\Models\AiModel;
 use App\Services\PendingReservationTracker;
 use App\Services\WalletClientService;
 use Closure;
+use Illuminate\Support\Str;
 use Laravel\Ai\Prompts\AgentPrompt;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\StreamableAgentResponse;
@@ -14,13 +15,19 @@ class CostTrackingMiddleware
 {
     private float $estimatedCost = 0.0;
     private bool  $reserved      = false;
+    // Generated once per request, reused for the deduct() call below — gives
+    // wallet-service's idempotency guard something stable to check against.
+    private string $requestId;
+
+    public function __construct(private string $userId)
+    {
+        $this->requestId = (string) Str::uuid();
+    }
 
     // Fallback only for a model with no model_pricing row yet — should not
     // normally be hit once pricing is seeded for every active model.
     private const FALLBACK_INPUT_RATE  = 2.50;
     private const FALLBACK_OUTPUT_RATE = 10.00;
-
-    public function __construct(private string $userId) {}
 
     public function handle(AgentPrompt $prompt, Closure $next): AgentResponse|StreamableAgentResponse
     {
@@ -64,7 +71,8 @@ class CostTrackingMiddleware
                 $this->userId,
                 $actualCost,
                 $this->estimatedCost,
-                'AI Chat Request'
+                'AI Chat Request',
+                $this->requestId
             );
             app(PendingReservationTracker::class)->clear();
 

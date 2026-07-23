@@ -13,11 +13,17 @@ const MAX_ATTEMPTS = 5
 const POLL_INTERVAL_MS = 1500
 
 /**
- * Where Stripe Checkout redirects back to after payment, for both wallet
- * top-ups and card-funded package purchases. Verification (not this page's
- * own state) is what actually credits/activates — this just asks
+ * Where the gateway's hosted page redirects back to after payment, for both
+ * wallet top-ups and card/bKash-funded package purchases. Verification (not
+ * this page's own state) is what actually credits/activates — this just asks
  * GET /checkout/{id}/verify and reflects whatever it reports, retrying a
  * few times since the webhook/verify race can take a moment either way.
+ *
+ * Stripe appends `session_id` (via a `{CHECKOUT_SESSION_ID}` template we
+ * control) and uses `status=success|cancelled`. bKash appends its own
+ * `paymentID` and `status=success|failure|cancel` regardless of outcome —
+ * normalized below to the same vocabulary so the rest of this page doesn't
+ * need to know which gateway sent it here.
  */
 export default function CheckoutCallbackPage() {
   const router = useRouter()
@@ -33,15 +39,20 @@ export default function CheckoutCallbackPage() {
     if (hasRun.current) return
     hasRun.current = true
 
-    const status = searchParams.get('status')
-    const sessionId = searchParams.get('session_id')
+    const rawStatus = searchParams.get('status')
+    const status = rawStatus === 'cancel' ? 'cancelled' : rawStatus === 'failure' ? 'failed' : rawStatus
+    const sessionId = searchParams.get('session_id') ?? searchParams.get('paymentID')
 
-    if (status === 'cancelled') {
+    // Stripe's cancel_url carries no session_id (nothing to reconcile — it never
+    // reached a Checkout Session). bKash always includes paymentID even on
+    // cancel/failure, and it's our only completion path (no webhook backup), so
+    // those cases fall through to verify() below instead of resolving here.
+    if (status === 'cancelled' && !sessionId) {
       setPhase('cancelled')
       return
     }
 
-    if (status !== 'success' || !sessionId) {
+    if (!sessionId || (status !== 'success' && status !== 'cancelled' && status !== 'failed')) {
       setPhase('error')
       setMessage("We couldn't tell whether that payment went through. Check your wallet or plan status before trying again.")
       return

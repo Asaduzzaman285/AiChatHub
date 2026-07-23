@@ -7,6 +7,10 @@ return [
         'publishable_key' => env('STRIPE_PUBLISHABLE_KEY'),
     ],
 
+    'bkash' => [
+        'usd_to_bdt_rate' => (float) env('BKASH_USD_TO_BDT_RATE', 122),
+    ],
+
     'wallet_url'       => env('WALLET_SERVICE_URL', 'http://wallet-nginx'),
     'billing_url'      => env('BILLING_SERVICE_URL', 'http://billing-nginx'),
     'notification_url' => env('NOTIFICATION_SERVICE_URL', 'http://notification-nginx'),

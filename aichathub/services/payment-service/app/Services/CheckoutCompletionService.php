@@ -3,15 +3,19 @@
 namespace App\Services;
 
 use App\Models\Transaction;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
  * The single place a Checkout Session actually gets turned into a credited
  * wallet or an activated subscription. Called from two independent triggers —
- * the frontend's verify-on-return call and the Stripe webhook — so every step
- * is guarded by the transaction's current status rather than assuming it's
- * the only caller that will ever run.
+ * the frontend's verify-on-return call and the Stripe webhook — plus, in
+ * practice, potentially several browser tabs each independently polling
+ * verify-on-return for the same session. The completed-status guard alone
+ * only protects against *sequential* re-entry; two calls landing at nearly
+ * the same instant can both pass it before either has updated the row. The
+ * claim step below closes that gap with a real row lock.
  */
 class CheckoutCompletionService
 {
@@ -19,26 +23,45 @@ class CheckoutCompletionService
 
     public function complete(Transaction $transaction): void
     {
-        if ($transaction->status === 'completed') {
+        // Claim the row under lock — only one concurrent caller can win this,
+        // everyone else sees 'processing' (still claimed) or 'completed' and
+        // returns immediately instead of racing into completeTopup()/
+        // completeSubscription() (and double-creating a receipt) together.
+        $claimed = DB::transaction(function () use ($transaction) {
+            $locked = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
+
+            if (! $locked || in_array($locked->status, ['completed', 'processing'], true)) {
+                return null;
+            }
+
+            $locked->update(['status' => 'processing']);
+
+            return $locked;
+        });
+
+        if (! $claimed) {
             return;
         }
 
-        $transaction->update(['status' => 'processing']);
-
-        $credited = match ($transaction->type) {
-            'wallet_topup'          => $this->completeTopup($transaction),
-            'subscription_purchase' => $this->completeSubscription($transaction),
+        $credited = match ($claimed->type) {
+            'wallet_topup'          => $this->completeTopup($claimed),
+            'subscription_purchase' => $this->completeSubscription($claimed),
             default                 => false,
         };
 
         if (! $credited) {
-            // Leave at "processing" — safe to retry, both the webhook redelivery
-            // and the user reloading the return page call complete() again, and
-            // the completed-status guard above makes that idempotent once it works.
+            // Revert the claim, not leave it at 'processing' — 'processing' must
+            // only ever mean "actively in flight right now". Reverting to
+            // 'pending' lets a genuine retry (webhook redelivery, the user
+            // reloading the return page) claim and try again; leaving it at
+            // 'processing' would permanently block every future retry, since
+            // the claim check above treats 'processing' as "someone else has
+            // this."
+            $claimed->update(['status' => 'pending']);
             return;
         }
 
-        $transaction->update(['status' => 'completed', 'completed_at' => now()]);
+        $claimed->update(['status' => 'completed', 'completed_at' => now()]);
     }
 
     public function cancel(Transaction $transaction): void

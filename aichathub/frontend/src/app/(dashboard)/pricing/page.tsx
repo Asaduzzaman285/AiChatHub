@@ -33,7 +33,7 @@ export default function PricingPage() {
   })
 
   const subscribe = useMutation({
-    mutationFn: async ({ slug, source }: { slug: string; source: 'wallet' | 'card' }) => {
+    mutationFn: async ({ slug, source }: { slug: string; source: 'wallet' | 'card' | 'bkash' }) => {
       setPendingSlug(slug)
       return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
@@ -43,8 +43,8 @@ export default function PricingPage() {
     },
     onSuccess: (res) => {
       if (res.data.checkout_url) {
-        // Card path — nothing is activated yet, /billing/checkout-callback verifies
-        // the payment and activates the package once Stripe confirms it.
+        // Card/bKash path — nothing is activated yet, /billing/checkout-callback
+        // verifies the payment and activates the package once the gateway confirms it.
         window.location.href = res.data.checkout_url
         return
       }
@@ -106,8 +106,8 @@ export default function PricingPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Pricing</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pay from your wallet balance if you have enough, or with a card via Stripe&apos;s hosted checkout
-          (test mode — no real money moves).
+          Pay from your wallet balance if you have enough, or via Stripe (test mode) or bKash (sandbox) —
+          no real money moves.
         </p>
       </div>
 
@@ -148,20 +148,30 @@ export default function PricingPage() {
                   ) : !subscription ? (
                     isChoosing ? (
                       <div className="space-y-2">
-                        <Button
-                          className="w-full"
-                          disabled={isPending}
-                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'wallet' })}
-                        >
-                          {isPending ? 'Subscribing…' : `Use Wallet Balance (${formatCurrency(wallet?.available_balance ?? 0)} Available)`}
-                        </Button>
+                        {canUseWallet && (
+                          <Button
+                            className="w-full"
+                            disabled={isPending}
+                            onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'wallet' })}
+                          >
+                            {isPending ? 'Subscribing…' : `Use Wallet Balance (${formatCurrency(wallet?.available_balance ?? 0)} Available)`}
+                          </Button>
+                        )}
                         <Button
                           className="w-full"
                           variant="outline"
                           disabled={isPending}
                           onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'card' })}
                         >
-                          {isPending ? 'Subscribing…' : 'Pay with Card'}
+                          {isPending ? 'Subscribing…' : 'Pay with Card (Stripe)'}
+                        </Button>
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          disabled={isPending}
+                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'bkash' })}
+                        >
+                          {isPending ? 'Subscribing…' : 'Pay with bKash'}
                         </Button>
                         <button
                           type="button"
@@ -173,13 +183,7 @@ export default function PricingPage() {
                         </button>
                       </div>
                     ) : (
-                      <Button
-                        className="w-full"
-                        disabled={isPending}
-                        onClick={() =>
-                          canUseWallet ? setChoosingSlug(pkg.slug) : subscribe.mutate({ slug: pkg.slug, source: 'card' })
-                        }
-                      >
+                      <Button className="w-full" disabled={isPending} onClick={() => setChoosingSlug(pkg.slug)}>
                         {isPending ? 'Subscribing…' : 'Subscribe'}
                       </Button>
                     )

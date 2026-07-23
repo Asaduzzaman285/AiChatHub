@@ -55,6 +55,78 @@ class SubscriptionService
         });
     }
 
+    /** Extends a subscription for another cycle after a successful renewal charge. */
+    public function renewSuccess(UserSubscription $subscription): UserSubscription
+    {
+        return DB::transaction(function () use ($subscription) {
+            $oldStatus = $subscription->status;
+
+            $subscription->update([
+                'status'      => 'active',
+                'past_due_at' => null,
+                'renews_at'   => now()->addDays(30),
+            ]);
+
+            SubscriptionHistory::create([
+                'subscription_id' => $subscription->id,
+                'user_id'         => $subscription->user_id,
+                'action'          => 'renewed',
+                'old_status'      => $oldStatus,
+                'new_status'      => 'active',
+            ]);
+
+            return $subscription;
+        });
+    }
+
+    /** Marks a subscription past_due after a failed renewal attempt that will be retried. */
+    public function markPastDue(UserSubscription $subscription): UserSubscription
+    {
+        return DB::transaction(function () use ($subscription) {
+            $oldStatus = $subscription->status;
+
+            $subscription->update([
+                'status'      => 'past_due',
+                'past_due_at' => $subscription->past_due_at ?? now(),
+            ]);
+
+            SubscriptionHistory::create([
+                'subscription_id' => $subscription->id,
+                'user_id'         => $subscription->user_id,
+                'action'          => 'renewal_failed',
+                'old_status'      => $oldStatus,
+                'new_status'      => 'past_due',
+            ]);
+
+            return $subscription;
+        });
+    }
+
+    /** Cancels a subscription after the final renewal retry has also failed. */
+    public function cancelForFailedRenewal(UserSubscription $subscription): UserSubscription
+    {
+        return DB::transaction(function () use ($subscription) {
+            $oldStatus = $subscription->status;
+
+            $subscription->update([
+                'status'               => 'cancelled',
+                'cancelled_at'         => now(),
+                'cancellation_reason'  => 'Renewal payment failed after 3 attempts',
+            ]);
+
+            SubscriptionHistory::create([
+                'subscription_id' => $subscription->id,
+                'user_id'         => $subscription->user_id,
+                'action'          => 'cancelled',
+                'old_status'      => $oldStatus,
+                'new_status'      => 'cancelled',
+                'metadata'        => ['reason' => 'renewal_failed'],
+            ]);
+
+            return $subscription;
+        });
+    }
+
     /**
      * Upgrade to a higher package. Charges full new price.
      */

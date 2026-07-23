@@ -14,4 +14,7 @@ return [
     // Internal service auth key
     'internal_key'     => env('INTERNAL_SERVICE_KEY', ''),
 
+    // The frontend's own origin — used by config/cors.php as the sole allowed origin.
+    'frontend_url'     => env('FRONTEND_URL', 'http://localhost:3000'),
+
 ];

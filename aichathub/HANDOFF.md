@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-07-19  
+**Last updated:** 2026-07-23  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -451,6 +451,455 @@ it needs the same treatment (copy one of these two blocks, point it at the new s
 
 ---
 
+## 2026-07-21 Session — Model switching, wallet-vs-card payment, chat management, upload UX
+
+Picked up from a feature-request/bug-report doc the user provided. All items verified live, not just
+compiled.
+
+### Chat: model tracking, mid-conversation switching, and a real conversation-history bug
+- `chat_messages` gained a nullable `model_id` column (migration `0002_add_model_id_to_chat_messages.php`);
+  `ai-gateway-service`'s `ChatController::stream()` now passes it on every `appendMessage()` call (both
+  the user and assistant message), and `chat-service`'s `ChatInternalController::appendMessage()`
+  syncs `chat_sessions.model_id` to "most recently used" on every message rather than a fixed
+  session-creation-time value.
+- Frontend `/chat` page rewritten: the model selector in the conversation header is now always visible
+  and editable mid-conversation (previously only selectable at "New chat" time) — switching does not
+  create a new session or clear history. Assistant messages show a small model-name badge.
+- **Found and fixed a real, previously-invisible bug while doing this:** `send()` built the `/chat/stream`
+  request body without a `history` field at all — every multi-turn conversation was silently losing all
+  prior context on every message, for every user, since the chat page was first built. Not caused by
+  the model-switching work; just never noticed because nothing was checking for it. Now sends the last
+  30 messages as `{role, content}` pairs (the backend's `TextChatAgent` already fully supported
+  `history` — it just never received it).
+- Session list gained inline rename (pencil icon) and delete (trash icon, `window.confirm` gate) using
+  the already-existing `PATCH`/`DELETE /sessions/{id}` endpoints — no backend changes needed, UI only.
+- Image upload now shows a spinner + "Uploading…" chip immediately on file selection and disables Send
+  until it completes, instead of giving no feedback during the upload window.
+
+### AI provider error messages — specific instead of generic
+Investigated a user-reported "Gemini 2.5 Pro is temporarily unavailable" 502 by grepping ai-gateway's
+logs for the exact `session_id`/`attachment_id` in the report — confirmed via log evidence it was a
+genuine `Laravel\Ai\Exceptions\RateLimitedException` (Gemini free-tier 429), not a code bug. Per the
+user's request for more actionable messaging, `bootstrap/app.php` now has three specific handlers
+(`RateLimitedException`, `InsufficientCreditsException`, `ProviderOverloadedException`) registered
+before the existing generic `AiException` catch-all — each names the model and suggests switching,
+instead of one generic "try a different model" message for every failure type.
+
+### Wallet balance as a payment option for package purchases
+User asked to verify why the Basic package showed no file-upload option (confirmed via DB: correct,
+by design — Basic's `features.vision = false`) and why there was no upgrade UI (confirmed: genuinely
+missing). Built:
+- Real upgrade/downgrade/cancel UI on the pricing page (previously subscribe-only).
+- `SubscriptionController::subscribe()` now takes `payment_source: wallet|card`. Wallet path reuses
+  the reserve+deduct pair Wallet Service already uses for AI cost (new `chargeWallet()` helper) — a
+  genuine debit, not the "wallet only ever gets credited, subscribing was free" behavior that existed
+  before this session (confirmed via code read: `subscribe()` had a `// Phase 1: no Payment Service
+  charge flow wired in yet` comment that was simply stale — the charge endpoint it was describing as
+  unbuilt already existed and worked, just was never called from here).
+- Frontend shows "Use Wallet Balance ($X Available)" vs "Pay with Card" only when the wallet balance
+  actually covers the price.
+- This `card` path was later fully superseded by the 2026-07-23 Stripe Checkout Session rewrite below —
+  the direct-PaymentIntent-charge version built this session only lived for about two days.
+
+---
+
+## 2026-07-23 Session — Real Stripe Checkout Sessions (replacing the mock/direct-charge flow) + a real auth bug found by using the feature
+
+### Wallet top-up and card-funded package purchases now use real Stripe Checkout Sessions
+Both flows previously charged server-side using a hardcoded test `PaymentMethod` id (`pm_card_visa`) —
+no hosted payment page, no user-entered card, and for subscriptions, activation happened synchronously
+in the same request regardless of whether a real charge occurred. Replaced with genuine Stripe Checkout
+(test mode): the user is redirected to a real `checkout.stripe.com` page, enters a Stripe test card, and
+nothing is credited/activated until the payment is verified.
+
+**Design**: "verify-on-return" (the frontend's return page asks Stripe directly whether the session was
+paid, and completes it immediately) as the primary path, **plus** the `checkout.session.completed`
+webhook as an idempotent authoritative backup — both funnel through one `CheckoutCompletionService`,
+guarded by the transaction's own status, so double-processing is safe regardless of which lands first.
+This means the feature works with zero extra local setup (no `stripe listen` required) while still being
+genuinely webhook-capable for production.
+
+**payment-service** — new/changed:
+- `StripeGateway::createCheckoutSession()` / `retrieveCheckoutSession()` — `mode: 'payment'` with inline
+  `price_data` (no Dashboard-created Products/Prices needed; this project models subscriptions as its
+  own periodic one-time charges, not Stripe's native recurring `Subscription` objects).
+- `CheckoutCompletionService::complete()`/`cancel()` — the single place a Checkout Session actually
+  turns into a wallet credit or an activated subscription. Idempotent (no-ops if already `completed`).
+- `TopupController::initiate()` rewritten — creates a `pending` Transaction + Checkout Session, returns
+  `checkout_url` instead of confirming a charge synchronously.
+- New `CheckoutController::verify()` (`GET /checkout/{sessionId}/verify`) — the frontend's verify-on-return
+  endpoint.
+- New `PaymentInternalController::createCheckoutSession()` (`POST /internal/payments/checkout`) — same
+  create-pending-transaction-then-checkout-session logic, callable by subscription-service for the card
+  path (shared with `TopupController` via a new `CreatesCheckoutSessions` trait).
+- `ProcessStripeWebhookJob` now handles `checkout.session.completed`/`checkout.session.expired` instead
+  of `payment_intent.succeeded`/`payment_intent.payment_failed` — Checkout's own session events are the
+  correct signal for a Checkout-based integration per Stripe's own guidance.
+- `transactions.status` gained `processing`/`cancelled` (kept `completed`, did not rename to `succeeded`
+  — no DB enum, so no migration needed either way).
+- Old direct-charge path (`PaymentInternalController::charge()`, `StripeGateway::charge()`) left in place,
+  unused by the new flows, harmless — kept for a possible future saved-card one-click flow.
+
+**subscription-service** — new/changed:
+- New `PackageActivationService` — extracted the "create+activate a subscription, credit the wallet
+  allowance, dispatch an invoice" sequence out of `SubscriptionController` so it can be called from two
+  places: the existing synchronous wallet-purchase path, and the new webhook/verify-triggered card path.
+- `SubscriptionController::subscribe()`'s `card` branch no longer charges directly — it now asks
+  payment-service for a Checkout Session and returns `checkout_url`; the `wallet` branch is unchanged
+  (still synchronous, deduct-then-activate immediately).
+- New `SubscriptionActivationController::activate()` (`POST /internal/subscriptions/activate`) — called
+  by payment-service once a card-funded purchase is verified paid. Defensively checks for an
+  already-active subscription first and skips (log + 200) rather than erroring, since by the time a
+  webhook fires the user could theoretically have already activated via another path.
+- No new subscription-table migration needed — the pending-until-paid design means no `UserSubscription`
+  row is created at all until activation, rather than creating one in a "pending" status and transitioning
+  it later.
+
+**api-gateway**: added `Route::any('/checkout/{path?}', ...proxyPayment...)`.
+
+**frontend**: new `(dashboard)/billing/checkout-callback/page.tsx` — shared return-landing page for both
+flows (`?type=topup|subscription&status=success|cancelled&session_id=...`), polls the verify endpoint a
+few times with a spinner before falling back to "still confirming." `wallet/page.tsx` and
+`pricing/page.tsx` both redirect to `checkout_url` instead of posting a hardcoded test token.
+
+**Verified live**: Checkout Session creation for both a top-up and a package purchase (confirmed exact
+amount/currency/metadata directly against Stripe's API), `verify()` correctly reports `pending` without
+crediting early, the internal activation endpoint correctly activates + credits and safely no-ops on a
+duplicate call (confirmed via DB), and — critically — a `UserSubscription` row genuinely does not exist
+until activation runs, not just "charges then hopes."
+
+### Real bug found from actual user testing: an auth hydration race that pre-dated this feature
+User reported a real top-up (paid on Stripe, confirmed via Stripe's API: `payment_status: "paid"`) never
+credited the wallet and left no trace in transaction history. Root-caused via server logs: the browser
+never called the verify endpoint at all after returning from Stripe — instead it fetched `/chat` shortly
+after, both times.
+
+**Root cause**: `useAuthStore` (zustand-persist, JWT in `localStorage`) has no way to signal "I've finished
+reading localStorage yet" — `(dashboard)/layout.tsx`'s auth guard checks `isAuthenticated` in a `useEffect`
+that can run *before* rehydration completes. On a normal in-app click this window is irrelevant (the store
+is long since hydrated). Returning from Stripe is a **full page reload** — the entire app restarts from
+scratch — so the guard could see the false default, redirect to `/login`, which then immediately redirects
+an (actually logged-in) user to `/chat` once rehydration catches up a moment later. The `session_id` and
+Checkout return state were lost in that double-bounce. This bug already existed; nothing in the app had
+ever done a real external-domain round-trip before Stripe Checkout, so nothing had exposed it.
+
+**Fixed**: `auth-store.ts` gained a `hasHydrated` flag set via zustand's `onRehydrateStorage` callback;
+`(dashboard)/layout.tsx`'s guard now waits for it before making any redirect decision.
+
+**Also fixed for the user directly**: both of their stuck `pending` transactions were confirmed genuinely
+paid via Stripe's API and manually completed via a new `checkout:complete {transaction_id}` artisan
+command (`services/payment-service/app/Console/Commands/CompleteCheckoutTransaction.php`) — runs the
+exact same `CheckoutCompletionService::complete()` path the frontend/webhook would have, so it's safe to
+keep as a standing manual-reconciliation tool, not a one-off hack.
+
+### Operational gotcha hit *again* this session (same class as 2026-07-20's, worth re-emphasizing)
+`docker-compose up -d --force-recreate` on `payment-service`/`subscription-service`/`api-gateway` (needed
+to pick up the `.env`/route changes above) silently broke *every* route on the gateway — not just the new
+ones — because `gateway-nginx`/`auth-nginx`/`chat-nginx` (their sidecars, not recreated) still pointed at
+the old containers' now-stale IPs. Same root cause and same fix as the 2026-07-20 `wallet-nginx` incident
+already documented below, but it recurred because the rule ("restart the nginx sidecar too") isn't
+automated anywhere — worth actually scripting if this trips someone up a third time.
+
+---
+
+## 2026-07-23 Session (cont'd) — Wallet idempotency completed + renewal automation built, both found real bugs live
+
+Picked the two Priority-1 items from the work-distribution review. Both were built, tested live
+against real failure scenarios (not just the happy path), and both surfaced genuine pre-existing bugs
+that code review alone would not have caught.
+
+### Wallet `deduct()`/`refund()` idempotency — same guard `credit()` already had
+Added the identical `(type, reference_type, reference_id)` existence check to both methods. Wired real
+reference IDs into the two places that actually call them: `CostTrackingMiddleware` now generates one
+UUID per request (constructor) and passes it to `deduct()`; `ReleaseWalletReservationJob` generates one
+at dispatch time (persisted across its `tries=3`, not regenerated per retry) and passes it to `refund()`.
+Verified live: calling `deduct()` and `refund()` twice each with the same reference produced exactly one
+ledger entry per pair, not two.
+
+### Subscription renewal automation — `ProcessRenewalJob` built, wired, and scheduled
+`ProcessRenewalsCommand` existed but dispatched a `ProcessRenewalJob` class that didn't exist — first
+real run would have crashed immediately. Built:
+- `PaymentChargeService` (new, subscription-service) — extracted `chargeWallet()` out of
+  `SubscriptionController` (now shared, not duplicated) and added `chargeSavedCard()`, which charges a
+  user's previously-saved default card directly via the "legacy" `/internal/payments/charge` endpoint
+  kept from the Stripe Checkout rewrite — a background job has no browser to send anyone through
+  Checkout with, so this is exactly the future use case that endpoint was preserved for.
+- New payment-service endpoint `GET /internal/payment-methods/{userId}/default` — looks up a saved
+  card's Stripe token for the renewal job to use.
+- `SubscriptionService` gained `renewSuccess()`/`markPastDue()`/`cancelForFailedRenewal()` — same
+  DB-transaction-plus-history-row pattern as the existing `subscribe()`/`upgrade()`/`downgrade()`.
+- `ProcessRenewalJob` — wallet first, then saved card; 3 attempts total, 24h apart, self-rescheduling
+  (`static::dispatch($id, $attempt+1)->delay(...)`) rather than a separate `RetryRenewalJob` class;
+  cancels the subscription after the 3rd failure. Fixed `ProcessRenewalsCommand`'s dispatch call to
+  pass `$subscription->id` (a string), not the Eloquent model itself — the job's constructor takes an
+  ID + attempt number, not a model.
+- `routes/console.php`: `Schedule::command('renewals:process')->hourly()`.
+- `docker-compose.yml`: new `subscription-queue-worker` and `subscription-scheduler` services (same
+  pattern as the existing `auth-queue-worker`/`ai-gateway-queue-worker` — `restart: unless-stopped`,
+  runs `queue:work`/`schedule:work` instead of `php-fpm`). Also added `services/subscription-service/config/cache.php`
+  proactively — the exact same "missing config file → queue:work silently crashes on the database cache
+  fallback" bug that broke ai-gateway-service's worker on 2026-07-20 would have hit this one too.
+
+### 🔴 Critical bug found live — every queue worker in this project was sharing one Redis queue
+While testing the renewal job, it vanished with zero trace in subscription-service's own logs. Root
+cause: **no service sets `REDIS_QUEUE`, so `auth-queue-worker`, `ai-gateway-queue-worker`, and the new
+`subscription-queue-worker` were all blindly polling the exact same Redis list, `queues:default`.**
+`ai-gateway-queue-worker` won the race, popped `App\Jobs\ProcessRenewalJob` (a class that only exists in
+subscription-service's codebase), failed to unserialize it, and then failed to even log the failure
+because `failed_jobs` isn't migrated in that service either — total silent loss. This is not a new bug
+introduced this session; it's been latent since the very first queue worker was added, invisible only
+because no two services had ever both had real jobs in flight before. **Fixed for every service with a
+dedicated worker**: added `REDIS_QUEUE=<service>` to `auth-service`, `subscription-service`, and
+`ai-gateway-service` (`.env` and `.env.example`), and `--queue=<service>` to each worker's command in
+`docker-compose.yml`. **Any future service that gets its own queue worker needs the same treatment** —
+a distinct `REDIS_QUEUE` value and a matching `--queue=` flag, or it's back to silent cross-service job
+theft.
+
+### Also found live: an ambiguous-timeout-as-failure bug, and a wallet-credit reference collision
+Two more real bugs surfaced only by actually running the renewal job against a real (slow) environment,
+not by reading the code:
+- `chargeWallet()`'s deduct() call timed out client-side after 15s while the deduct had already
+  succeeded server-side — the job correctly saw this as "no response" but incorrectly treated that as
+  "failed," marking a successfully-charged subscription `past_due`. Fixed by retrying the deduct/charge
+  HTTP calls on timeout (`->retry(2, 2000)`) — safe specifically because deduct() is now idempotent, so
+  a retry against an already-completed charge just finds the existing ledger entry and no-ops instead of
+  double-charging. Applied the same retry to `chargeSavedCard()`'s charge call (idempotent via
+  `idempotency_key`) and the default-card lookup (a plain GET, always safe to retry).
+- `ProcessRenewalJob::onSuccess()` originally passed `$subscription->id` as the wallet-credit reference —
+  but that's the *same* reference the original purchase's credit already used, so `credit()`'s own
+  idempotency guard correctly recognized it as "already credited" and silently no-opped every renewal's
+  wallet allowance forever. Fixed by using the renewal's own per-cycle `$transactionId` as the reference
+  instead.
+- Also caught mid-build: `Illuminate\Support\Str::uuid5()` doesn't exist — that's Ramsey's own API
+  (`\Ramsey\Uuid\Uuid::uuid5()`), not a Laravel `Str` facade method. Laravel's `Str::uuid()` (v4, no
+  namespace) is real; `uuid5()` (deterministic, namespaced) is not exposed the same way.
+
+**Verified live end-to-end**, both paths: a due subscription with sufficient wallet balance renews
+correctly (charged, `renews_at` extended 30 days, wallet allowance credited under a distinct reference,
+invoice created); a due subscription with insufficient balance and no saved card correctly goes
+`past_due` with a real error message and a genuine 24h-delayed retry job sitting in the now-isolated
+`queues:subscription:delayed`.
+
+---
+
+## 2026-07-23 Session (cont'd again) — Four real bugs found from actual user testing + password reset/profile built
+
+Picked up right after the renewal-automation work. This pass was almost entirely driven by the user
+actually using the app (not curl/DB verification) and reporting what broke — every one of the four
+issues below was real and is now fixed and verified live, not theorized.
+
+### 🔴 Money-integrity bug — wallet charged for a subscription that was never activated
+Confirmed against the user's real account: wallet ledger showed a genuine `-$10.00 "Subscription:
+Basic"` debit, but `user_subscriptions` had no row at all, and the response the user actually saw was
+"Insufficient Balance" — i.e. they were told the charge failed while it had actually succeeded
+server-side. Root cause: the exact "client times out, server already succeeded" pattern documented
+throughout this project, hitting `SubscriptionController::subscribe()`'s wallet path specifically
+(`PaymentChargeService::chargeWallet()`'s `deduct()` call). This is the *same* code path the renewal
+job's retry fix (earlier today) already covers — this particular incident happened before that fix
+landed, so it's already closed going forward. **Reconciled the user's account directly**: activated their
+Basic subscription using the transaction reference already on record (`POST
+/internal/subscriptions/activate`), confirmed live — subscription now active, wallet back to the
+package's $10 allowance.
+
+### 🔴 Duplicate receipts — a real concurrency bug in `CheckoutCompletionService`
+Same user's Billing page showed 2 receipts for 1 top-up transaction. Root cause: `complete()` had no
+row lock — its `if ($transaction->status === 'completed') return;` guard only protects against
+*sequential* re-entry. Two near-simultaneous calls (verify-on-return racing the webhook, or the same
+session polled from two browser tabs — see the multi-tab bug below) could both pass that check before
+either had updated the row, and both call `createReceipt()`. **Fixed**: `complete()` now claims the row
+under `lockForUpdate()` inside a `DB::transaction()` before doing any work — losing the race means
+seeing `'processing'` (still claimed) or `'completed'` and returning immediately. A failed charge/
+activation now explicitly reverts the claim to `'pending'` (not left at `'processing'`) so a genuine
+retry can still claim it later — leaving it at `'processing'` would have permanently blocked all future
+retries, since the claim check treats `'processing'` as "someone else already has this."
+
+### Multi-tab session sync — real gap, fixed
+Reported: logging in on one tab left a second tab still showing the login page, and navigating to
+Wallet from that second tab bounced to `/login` despite being logged in on the other tab. Root cause:
+zustand-persist writes to `localStorage`, but each browser tab holds its own separate in-memory copy of
+the store and never notices another tab's write. **Fixed**: `auth-store.ts` now listens for the
+browser's `storage` event and calls `useAuthStore.persist.rehydrate()` whenever another tab changes
+`auth-storage` — a tab now picks up a login/logout from any other tab live, no reload needed.
+
+### Post-payment "logged out, then auto-signed-in a few moments later" — real gap, fixed
+Traced with real gateway logs, not guessed: `GET /api/v1/auth/me` returns **499** (client gave up
+waiting) roughly **1 in 5 times** in this environment — not rare. `(dashboard)/layout.tsx`'s guard
+treated *any* failure of that call, timeout included, as "not logged in": it called `clearAuth()` and
+redirected to `/login`, then something else's later success made it look like an "automatic" sign-in a
+moment after — actually just the session recovering from an unnecessary logout. **Fixed**: only a real
+401 (token actually rejected by the server) clears the session now; anything else (timeout, network
+error, 5xx) leaves the session alone and quietly retries up to 3 times (2s apart) instead of logging the
+user out. This is the same "ambiguous vs. definite failure" pattern already used elsewhere in this
+codebase (`WalletClientService::reserve()`, `describeError()`), just newly applied to the profile fetch.
+
+### Google-only accounts have no way to add a password — confirmed, now buildable (see below)
+Verified directly against the reporting user's row: `password IS NULL`, one linked `social_accounts` row
+for `google`. This is correct, safe behavior, not data corruption — `users.email` has a real unique
+constraint, so registering again with that email is correctly rejected ("An account with this email
+already exists"), and logging in with a password against it correctly fails (no hash to check against).
+The actual gap: there was no way to *add* a password to a Google-only account. The backend already had
+half the plumbing for this (`/auth/me` returns `has_password`/`google_connected` specifically for this,
+`SocialAccountController::unlinkGoogle()` already gates on `hasPassword()`) but the piece that lets a
+user actually set one — and the Settings/Profile page that would expose it — didn't exist. Built this
+session (see below).
+
+### Built: password reset + an authenticated "set/change password" endpoint + a Profile page
+- `PasswordReset` model (mirrors `EmailVerification`) — the `password_resets` table already existed,
+  migrated but never used.
+- `PasswordResetController::forgot()`/`reset()` — implemented the two routes that already existed in
+  `routes/api.php` pointing at a `__call() → 501` stub. Same security posture as
+  `EmailVerificationController::resend()` (generic response regardless of whether the email exists,
+  2-minute throttle), same direct-`Mail::send()` pattern as the verification email (not routed through
+  notification-service — this is auth-service's own domain). Token expires in 2 hours.
+- `PasswordResetController::setPassword()` (new) — `POST /api/v1/auth/password/set`, authenticated.
+  One endpoint covers both cases: a Google-only account just sets a password (no current password to
+  check); an account that already has one must confirm the current password first (a real change).
+  Added `services.frontend_url` to auth-service's `config/services.php` (env var already existed,
+  just wasn't wired into config) so the reset email can link to the frontend's `/reset-password` page.
+- Frontend: `(auth)/forgot-password/page.tsx` and `(auth)/reset-password/page.tsx` — both folders
+  existed empty (the login page already linked to `/forgot-password`). Verified live end-to-end:
+  requested a reset, pulled the real email from Mailpit's API, completed the reset, confirmed the new
+  password works and the old one is rejected. Also verified `setPassword()`'s both branches live (wrong
+  current password rejected, correct one accepted; no-current-password-required path confirmed by
+  nulling a test user's password and calling it with only `new_password`).
+- `(dashboard)/profile/page.tsx` (new) — account details, wallet balance overview, subscribed package
+  overview, and a "Sign-in & security" section (Google connection status + unlink, set/change password
+  form) all on one page. This *is* the "Settings" page from the backlog — built as one page rather than
+  two, since a separate empty Settings page would just duplicate it; flagged this interpretation to the
+  user rather than assuming silently.
+- Header dropdown (`(dashboard)/layout.tsx`) — the plain "Sign out" button is now a
+  `@radix-ui/react-dropdown-menu` trigger (already an installed dependency, unused until now) wrapping
+  the avatar/email, with two items: **Profile** and **Sign out**. New reusable
+  `components/ui/DropdownMenu.tsx` wraps Radix's primitives in this project's existing styling
+  conventions (matches `Button.tsx`/`Card.tsx`).
+
+---
+
+## 2026-07-23 Session (cont'd again) — Real bKash Checkout Sessions (theihasan/laravel-bkash)
+
+### bKash added as a third payment_source (wallet top-up + subscription purchase), verified live in bKash's real sandbox
+- `composer require theihasan/laravel-bkash` — wraps bKash's tokenized Checkout API (`createPayment`/
+  `executePayment`/`queryPayment`/`refundPayment`). Package's own built-in routes/controllers/DB tables
+  left unused (`routes.enabled = false` in the published `config/bkash.php`) — this app calls the
+  `Bkash` facade directly from its own controllers, same pattern as `StripeGateway` wrapping the Stripe
+  SDK, keeping `transactions` as the single source of truth instead of the package's own tables.
+- New `App\Services\BkashGateway` (`services/payment-service/app/Services/BkashGateway.php`) — mirrors
+  `StripeGateway`'s role, not its shape (bKash's API is fundamentally different: no Session object, no
+  signed webhooks). Converts USD→BDT via a fixed rate (`BKASH_USD_TO_BDT_RATE`, bKash only settles in BDT).
+- `CreatesCheckoutSessions` trait gained `beginBkashCheckout()` alongside the existing Stripe
+  `beginCheckout()` — same "pending Transaction → call gateway → store gateway_reference" shape, kept as
+  a parallel method rather than a forced shared abstraction since the two gateways' response shapes
+  don't match.
+- `CheckoutController::verify()` now branches on `$transaction->gateway`. bKash's `executePayment()` is a
+  **one-time, non-idempotent mutating call** (unlike Stripe's read-only `retrieveCheckoutSession`) — once
+  a `trx_id` has been recorded, any retry uses the read-only `queryPayment()` instead, never re-executing.
+- Used bKash's own **public sandbox demo credentials** (from the package README / bKash's developer
+  docs) — a shared test-merchant account, not account-specific like Stripe test keys, so no separate
+  signup was needed.
+- **Verified live, twice, with real money-shaped sandbox transactions**: a $10 wallet top-up completed
+  end-to-end (real bKash Checkout URL → real OTP/PIN entry on bKash's hosted page using their public test
+  wallet `01770618575`/OTP `123456`/PIN `12121` → `executePayment` → wallet credited, confirmed via
+  `wallet_ledger_entries`), and the reconciliation sweep (see next section) tested against a second,
+  deliberately-unpaid transaction.
+
+### Real bugs found and fixed while building this
+- **`currency` field silently ignored (and misleading) for bKash requests** — `TopupController`/
+  `PaymentInternalController` computed a `currency` value from the request but only ever passed it into
+  the Stripe branch; bKash always assumed USD internally regardless of what was sent. Caught by a direct
+  question ("isn't it inconsistent?") rather than by testing. Fixed by rejecting (422) any non-USD
+  currency when `gateway: bkash` is requested, rather than silently ignoring it.
+- Also fixed: **payment-service had no `config/cache.php`** — `CACHE_DRIVER=redis` in `.env` had no
+  effect (same bug class already fixed for ai-gateway-service/subscription-service), which meant the
+  bKash package's `Cache::` calls (token caching) crashed with `Undefined table: cache` on the very
+  first checkout attempt.
+
+## 2026-07-23 Session (cont'd again) — Closed 5 real gaps: rate limiting, CORS, route middleware, bKash reconciliation, Stripe webhook infra
+
+### Rate limiting — `api-gateway`, none existed anywhere in the project before this
+- Added `config/cache.php` + `config/database.php` to `api-gateway` (same missing-file bug class as
+  above — `CACHE_DRIVER=redis` was set but inert; api-gateway has no real DB connection at all, so
+  `database.php` only defines the `redis` block).
+- New `app/Providers/AppServiceProvider.php` (+ `bootstrap/providers.php`, neither existed before) — four
+  named limiters: `auth-strict` (10/min/IP — login/register/password-forgot/firebase),
+  `auth-general` (30/min/IP — rest of `/auth/*`), `webhooks` (60/min/IP), `api` (`RATE_LIMIT_PER_MINUTE`
+  env, keyed by `X-User-Id` header since this service has no Auth guard/User model to call `$request->user()` on).
+- **Real bug found live while wiring this**: splitting `/auth/{path?}` into explicit per-endpoint routes
+  (for tiered throttling) initially 404'd — not a routing failure, `ProxyController::proxyAuth(Request
+  $request, string $path = '')` builds the upstream URL from the `path` **route parameter**; the new
+  explicit routes had no `{path}` segment at all, so it silently defaulted to `''`, forwarding to a
+  truncated upstream URL that itself 404'd, and that 404 got faithfully relayed back. Fixed with
+  `->defaults('path', 'login')` etc. on each explicit route.
+- Verified live: 12 rapid `/auth/login` calls → 429s kick in after the 10th, with the auth-service itself
+  still reachable normally through the `api` tier.
+
+### CORS — `api-gateway` only, deliberately not all 9 services
+- No service had `config/cors.php`; Laravel 12's `HandleCors` middleware is in the default stack
+  regardless, silently falling back to the framework's own wide-open `allowed_origins: ['*']`.
+- Scoped to api-gateway only: CORS is a browser-enforced mechanism, and the browser only ever talks to
+  api-gateway — backend-to-backend calls are server-to-server and never subject to it. Locking down the
+  other 8 services would be pure busywork.
+- **Real bug found live**: `config/cors.php`'s `allowed_origins => [config('services.frontend_url')]`
+  came back empty for every request. Laravel loads config files **alphabetically** — `cors.php` loads
+  before `services.php` exists in the container, so cross-referencing another config file from within a
+  config file silently resolves to `null`. Fixed by reading `env('FRONTEND_URL', ...)` directly instead.
+- `supports_credentials` stays `false` — auth is Bearer-token-in-header (localStorage), not cookie-based;
+  unaffected by the new marker cookie below (same-origin, never sent cross-origin to the gateway).
+
+### Frontend route-protection middleware — `frontend/src/middleware.ts` (new)
+- Confirmed first (via a dedicated explore pass) that this was **not** a drop-in addition: JWTs live only
+  in `localStorage` (zustand-persist), no cookie existed anywhere, login never issued `Set-Cookie` — and
+  server-side middleware can only read cookies/headers, never localStorage.
+- Chosen approach (user's explicit choice over a full httpOnly-cookie migration): a lightweight,
+  non-httpOnly `has_session` marker cookie, set/cleared in `auth-store.ts`'s `setAuth`/`clearAuth`. It
+  carries no token and isn't cryptographically verified — it only lets `middleware.ts` make a fast
+  edge-redirect for the "definitely logged out" case. The actual JWT/localStorage/Bearer-token
+  architecture, `(dashboard)/layout.tsx`'s client-side guard, and backend JWT verification are **all
+  unchanged** and remain the real authorization boundary.
+- Verified live in a running dev server: `/wallet` with no cookie → `307` to `/login` before any page
+  renders; `/wallet` with `has_session` cookie present → `200`, page loads normally.
+
+### bKash reconciliation sweep — the gap this gateway inherently has (no webhook, unlike Stripe)
+- New `bkash:reconcile` command (`services/payment-service/app/Console/Commands/ReconcileBkashCommand.php`)
+  + `ReconcileBkashPaymentJob`, mirroring `ProcessRenewalsCommand`/`ProcessRenewalJob`'s shape. Sweeps
+  transactions `gateway=bkash, status=pending, created_at < 15 minutes ago`, resolves each via the
+  **read-only** `queryPayment()` (never re-calls the non-idempotent `executePayment()`). No job-level
+  self-rescheduling needed — the command's own 15-minute schedule is the retry cadence; the job only
+  needs a 24-hour age ceiling so nothing sweeps forever.
+- Verified live end-to-end: created a real (deliberately unpaid) bKash transaction, backdated it past 15
+  minutes, ran the sweep — job correctly left it `pending` (bKash genuinely hadn't completed it, not a
+  false positive). Backdated past 24 hours, re-ran — job correctly `cancelled` it.
+
+### Payment-service queue infrastructure — a real, previously-invisible gap
+- **`ProcessStripeWebhookJob` (`ShouldQueue`) had no queue worker at all** — found during the
+  production-readiness audit, not something anyone had reported. A dispatched Stripe webhook (or the new
+  bKash reconciliation job above) would have sat in Redis forever, never executing — the webhook path was
+  code-complete but functionally inert. Added `payment-queue-worker` + `payment-scheduler` containers to
+  `docker-compose.yml` (mirroring `subscription-queue-worker`/`subscription-scheduler` exactly) and
+  `REDIS_QUEUE=payment` to `.env`/`.env.example` (same per-service queue-isolation fix as auth/
+  subscription/ai-gateway earlier this session). Verified live: manually dispatched job ran and completed
+  via `docker logs aichathub-payment-queue-worker`.
+- **Stripe webhook delivery itself still needs a manual step**: the Stripe CLI isn't installed in this
+  environment, and `stripe login` requires interactive browser OAuth against a real Stripe account — that
+  has to be done by whoever owns the Stripe account, not automatable. Once done: `stripe listen
+  --forward-to http://localhost:8000/api/v1/webhooks/stripe`, paste the printed `whsec_...` into
+  `payment-service/.env`, force-recreate `payment-service` + restart its nginx sidecar, do a real top-up,
+  confirm `webhook_events` gets a `checkout.session.completed` row with `status=processed`.
+
+### Going live: Stripe & bKash — confirmed by this session's audit, no code changes needed
+Both gateways were audited specifically for this. Neither `StripeGateway` nor `BkashGateway` has any
+hardcoded test-mode logic — both are pure `env()`/`config()` reads. **Going live is purely a credentials
+swap:**
+- Stripe: `STRIPE_SECRET_KEY`/`STRIPE_PUBLISHABLE_KEY` → live-mode values (`sk_live_...`/`pk_live_...`,
+  live-vs-test is inherent to the key prefix, no other flag), `STRIPE_WEBHOOK_SECRET` → the real signing
+  secret from the live webhook endpoint (not the CLI-forwarding one used for local testing).
+- bKash: `BKASH_SANDBOX=false` + real production `BKASH_APP_KEY`/`BKASH_APP_SECRET`/`BKASH_USERNAME`/
+  `BKASH_PASSWORD` from a real registered bKash merchant account (the sandbox demo credentials obviously
+  won't move real money).
+- Both: point `FRONTEND_URL` (payment-service *and* the new `api-gateway` CORS config) at the real
+  production domain, not `localhost`.
+
+---
+
 ## How to Start Everything Tomorrow
 
 ```bash
@@ -673,17 +1122,25 @@ configured** (`.env` still has `sk-CHANGE_ME` etc.) — only Gemini actually wor
   low risk right now since nothing retries a chat request client-side, but should get the same fix
   before this goes further than manual testing.
 
-**7. Payment Service — Stripe top-up** — ✅ implemented AND verified live with real Stripe test keys (2026-07-19)
-`POST /api/v1/topup` works end-to-end (PaymentIntent created+confirmed, wallet credited, receipt
-generated). See "2026-07-19 Session" M3 notes above for what was missing and what's still open
-(webhook path untested — needs `stripe listen`).
+**7. Payment Service — Stripe top-up** — ✅ implemented AND verified live (2026-07-19, rebuilt 2026-07-23)
+`POST /api/v1/topup` and card-funded `POST /api/v1/subscription/subscribe` both now use real Stripe
+Checkout Sessions (hosted page, real test-card entry) rather than a server-side direct charge — see
+"2026-07-23 Session" above. `checkout.session.completed` webhook path is code-complete and exercised
+by the design (verify-on-return uses the identical completion code), but genuine Stripe-CLI-forwarded
+webhook delivery is still unconfirmed locally (`STRIPE_WEBHOOK_SECRET` is still `whsec_CHANGE_ME`) —
+needs `stripe listen --forward-to http://localhost:8004/api/v1/webhooks/stripe` to fully verify that
+specific path, though the feature works end-to-end without it.
 
 ### 🟢 Medium Priority
 
-**8. Password reset flow** — endpoints exist but `PasswordResetController` is a stub
+**8. Password reset flow** — ✅ done 2026-07-23, verified live end-to-end (forgot → real email via
+Mailpit → reset → login with new password). Also added an authenticated set/change-password endpoint
+and a Profile page exposing it.
 **9. ~~WalletController~~** — ✅ implemented 2026-07-19 (`balance`, `creditStatus`)
 **10. ~~LedgerController~~** — ✅ implemented 2026-07-19 (`GET /api/v1/wallet/ledger`, paginated)
-**11. Notification email templates** — welcome email, receipt, low balance alert — still stubs, `Mail/` dir empty, no `EventServiceProvider` in notification-service. **This is now the single largest untouched piece of Phase 1.**
+**11. Notification email templates** — ✅ done 2026-07-20: all 4 Mailables (`WelcomeMail`, `ReceiptMail`,
+`LowBalanceMail`, `RenewalFailedMail`) built and wired to real triggers (email verification, subscription
+purchase, wallet top-up, low/critical balance). See "2026-07-20 Session (cont'd)" notes above.
 **12. Billing service invoice/receipt generation** — ✅ done 2026-07-19: `InvoiceInternalController@create`,
 `ReceiptInternalController@create`, public `InvoiceController`/`ReceiptController` (`index`/`show`)
 all implemented and verified live; `download` (PDF) still not implemented
@@ -701,6 +1158,15 @@ all implemented and verified live; `download` (PDF) still not implemented
 | `GOOGLE_CLIENT_ID` warning on docker-compose | Non-issue | Just a warning, not used (we use Firebase instead) |
 | Login timeout in test scripts | Known | Login works fine; the test script timeout is too short for the full flow |
 | Direct-to-service test scripts on `auth.jwt` routes now 401 | New (2026-07-19) | subscription/wallet/ai-gateway/chat/billing/payment now require `X-User-Id` header set by api-gateway's `JwtGatewayMiddleware` — any test script that curls a service's nginx directly (bypassing `localhost:8000`) on an `auth.jwt`-protected route needs to go through the gateway instead |
+| Force-recreating an app container without its nginx sidecar → every route 404s | Known, recurred (2026-07-20, again 2026-07-23) | `docker-compose up -d --force-recreate <service>` gives the container a new internal IP; its `<service>-nginx` sidecar caches the old one at startup and won't notice. Symptom looks like a routing bug (routes are registered correctly, every live request 404s anyway) but is actually the sidecar talking to a dead IP. Fix: `docker restart <service>-nginx` in the same breath as any force-recreate. Has now happened twice — worth scripting if it recurs a third time. |
+| Auth guard could bounce a logged-in user to `/login` after a full page reload | ✅ Fixed 2026-07-23 | zustand-persist's rehydration from `localStorage` isn't instant; `(dashboard)/layout.tsx`'s guard could read the false default before it finished. Only ever exposed by a genuine full-page external round-trip (Stripe Checkout was the first feature to do this) — fixed via a `hasHydrated` flag the guard now waits for. |
+| Every queue worker shared one Redis queue — any worker could steal and silently lose another service's job | ✅ Fixed 2026-07-23 | No service set `REDIS_QUEUE`, so `auth-queue-worker`/`ai-gateway-queue-worker`/`subscription-queue-worker` all polled the same `queues:default`. Fixed with a distinct `REDIS_QUEUE` per service + matching `--queue=` flag. **Any future dedicated worker must follow the same pattern or it's back to silent job loss.** |
+| `queue:work` daemon doesn't reload PHP files | Known | Unlike `php-fpm` (fresh per request), a `queue:work` process boots once and keeps running — editing a job class's code has no effect until the worker container is restarted (`docker restart <service>-queue-worker`). Cost real debugging time 2026-07-23 chasing a "fix" that the running worker hadn't actually picked up yet. |
+| `api-gateway`'s `ProxyController` forwarded upstream response headers verbatim → any proxied route whose upstream response comes back `Transfer-Encoding: chunked` (chat-service, confirmed on `/upload`) hangs indefinitely client-side with 0 bytes received, even though the upstream service itself completes and logs a real 2xx | ✅ Fixed 2026-07-23 | `response($body, $status, $response->headers())` re-sent the upstream's `Transfer-Encoding`/`Content-Length`/`Connection` headers alongside a body Symfony re-serializes and computes its own `Content-Length` for — the conflicting framing info left nginx never actually flushing the response, so PHP-FPM's own access log shows 201 while the client just times out. Only surfaced now because file upload was the first proxied route whose upstream response happened to be chunked. Fixed in `ProxyController::forward()` by stripping hop-by-hop headers (`transfer-encoding`, `content-encoding`, `content-length`, `connection`, `keep-alive`) before building the outgoing response — let Symfony/nginx recompute framing for the actual re-serialized body. |
+| `/chat/compare` (multi-model fan-out) leaked raw `StreamEvent` JSON into the `chunk` field and crashed mid-stream with `ob_flush(): Failed to flush buffer` | ✅ Fixed 2026-07-23 | `foreach ($agent->stream(...) as $event) { (string) $event }` stringifies whichever `Laravel\Ai\Streaming\Events\StreamEvent` subtype comes through (`stream_start`, etc.), not just text — only `TextDelta` instances carry a real `->delta` string. Separately, `ob_flush()` requires an active user-level output buffer that was never started here, so every chunk crashed after the first. Fixed by filtering for `$event instanceof TextDelta` (echoing `$event->delta`, skipping other event types) and dropping the `ob_flush()` calls, keeping `flush()` alone (which is what actually pushes bytes through PHP-FPM/nginx regardless of `ob_*` state). Verified live: clean per-model text chunks, no crash. |
+| `ProcessStripeWebhookJob` (`ShouldQueue`) had no queue worker in payment-service at all | ✅ Fixed 2026-07-23 | Found during a production-readiness audit, not reported by anyone — the Stripe webhook path was code-complete but a dispatched job would sit in Redis forever with nothing to process it. Added `payment-queue-worker`/`payment-scheduler` containers (mirroring subscription-service's) + `REDIS_QUEUE=payment`. This is also what makes the new `bkash:reconcile` sweep's jobs actually run. |
+| Config file cross-referencing another config file inside itself silently resolves to `null` | ✅ Found + fixed 2026-07-23 | `config/cors.php`'s `allowed_origins => [config('services.frontend_url')]` came back empty for every request — Laravel loads config files **alphabetically**, so `cors.php` loads before `services.php` exists in the container. Fixed by reading `env('FRONTEND_URL', ...)` directly inside `cors.php` instead of cross-referencing `services.php`. Worth remembering for any future config file that wants a value another config file computes. |
+| Splitting a proxy wildcard route (`/auth/{path?}`) into explicit per-endpoint routes silently breaks the proxy unless you also supply the `path` value | ✅ Found + fixed 2026-07-23 | `ProxyController::proxyAuth(Request $request, string $path = '')` builds the upstream URL entirely from the `path` route **parameter** — an explicit route with no `{path}` segment in its URI (e.g. `Route::any('/auth/login', ...)`) leaves `$path` at its default `''`, silently forwarding to a truncated upstream URL that itself 404s, and that 404 gets faithfully relayed back to the client (looks exactly like "the route doesn't exist," but `route:list` shows it registered correctly). Fixed with `->defaults('path', 'login')` (etc.) on each explicit route. |
 
 ---
 
@@ -766,47 +1232,81 @@ Week 1-2: Foundation
 
 Week 3-4: Subscription + Payment
 ✅ SubscriptionController.subscribe() — verified live end-to-end 2026-07-19
-✅ Payment Service: Stripe top-up (charge) — verified live with real test keys 2026-07-19
-✅ Wallet credited on subscription purchase AND top-up (direct HTTP calls, idempotency-guarded)
+✅ Payment Service: Stripe Checkout Sessions (top-up + card-funded subscribe) — rebuilt 2026-07-23,
+  real hosted-page flow replacing the old direct-charge/hardcoded-token version
+✅ Wallet credited on subscription purchase AND top-up (idempotency-guarded)
+✅ Wallet-vs-card payment choice on package purchase — 2026-07-21
 ✅ Invoice + receipt generation — verified live
-⬜ Frontend: pricing page + subscribe flow           ← NEXT
-⬜ Stripe webhook path (needs `stripe listen`, untested)
+✅ Frontend: pricing page + subscribe/upgrade/downgrade/cancel flow — 2026-07-21
+✅ bKash Checkout Sessions (top-up + subscription purchase) — 2026-07-23 (cont'd), real sandbox
+  payment verified live end-to-end, plus a `bkash:reconcile` sweep for its (webhook-less) completion gap
+✅ Auto-renewal scheduler — `ProcessRenewalJob` built + scheduled, verified live including the
+  failure/retry path — 2026-07-23
+✅ payment-service queue infrastructure — `payment-queue-worker`/`payment-scheduler` added 2026-07-23;
+  `ProcessStripeWebhookJob` (dispatched since 2026-07-19) had literally nothing to run it until now
+⬜ Stripe webhook path — code-complete AND now has a worker to actually run it; genuine
+  Stripe-CLI-forwarded delivery still needs `stripe listen` (requires the CLI + interactive login,
+  someone with the real Stripe account) to confirm end-to-end — not required for the feature to work
 ⬜ upgrade()/downgrade() have no proration logic (documented simplification)
 
-Week 5-6: AI Chat MVP                      ← DONE (Gemini only — see below)
+Week 5-6: AI Chat MVP                      ← DONE (Gemini + DeepSeek; more polish added 2026-07-21)
 ✅ AI Gateway: chat streaming — verified live with real Gemini 2.5 Flash, Session 2 (2026-07-19)
 ✅ Balance reserve/deduct cycle — verified, accurate per-model cost (not a flat estimate)
 ✅ Chat Service: session + message storage — verified live, Session 2
 ✅ Frontend: chat interface with SSE — built, compiles clean, not yet click-tested in a browser
 ✅ packages.model_access populated
+✅ Mid-conversation model switching + per-message model tracking — 2026-07-21
+✅ Conversation history actually sent to the model — 2026-07-21 (was silently missing since /chat's build)
+✅ File/image upload + real vision — 2026-07-20 (cont'd session)
+✅ Chat session rename/delete UI — 2026-07-21
+✅ Upload progress UX (spinner, disabled Send during upload) — 2026-07-21
+✅ /chat/compare (multi-model comparison) frontend UI — 2026-07-20
+✅ Provider-specific error messages (rate limit / no credits / overloaded) — 2026-07-21
 ⬜ Real API keys for OpenAI/Anthropic/ElevenLabs — Gemini and DeepSeek both work now (free/cheap);
   xAI has a valid key but zero account credits (grok-beta will 502 until billing is added)
-⬜ WalletService::debit()/refund() idempotency guard (same class of fix credit() already got)
-⬜ /chat/compare (multi-model comparison) has no frontend UI
-⬜ File attachments (chat_svc.file_attachments unused, FileAttachmentController still a stub)
+✅ WalletService::deduct()/refund() idempotency guard — 2026-07-23
+✅ /chat/compare fixed (raw event JSON leak + ob_flush crash) and vision pipeline verified live — 2026-07-23
+✅ Browser click-through QA — ongoing, organically finding real bugs each pass (see Known Issues)
 
 Week 7-8: Billing + Wallet UI              ← DONE
 ✅ Wallet balance + ledger endpoints — verified live
 ✅ Transaction history endpoint — verified live
 ✅ Invoice + receipt generation — verified live
 ✅ Frontend pages for all of the above (dashboard, pricing, wallet, billing, chat)
+✅ Real Stripe Checkout replacing the hardcoded test-token flow — 2026-07-23
 ⬜ Invoice PDF download (InvoiceController::download() still a 501 stub)
-⬜ Settings page, saved payment methods UI, Stripe Elements (test PaymentMethod id hardcoded instead)
+⬜ Settings page (folder exists, no page file — confirmed empty 2026-07-23), saved payment methods UI
 
-Week 9-10: Polish                          ← LAST, NOT STARTED
-⬜ Notification emails (welcome, receipt, low balance, renewal-failed) — Mail/ dir empty
-⬜ Auto-renewal scheduler
-⬜ Admin panel basics
-⬜ Password reset (routes exist, controller is a stub)
-⬜ End-to-end smoke testing in an actual browser (everything so far verified via curl + DB queries)
+Week 9-10: Polish                          ← IN PROGRESS
+✅ Notification emails (welcome, receipt, low balance, renewal-failed) — 2026-07-20 (cont'd session)
+✅ Password reset + set/change password + Profile page + header dropdown — 2026-07-23, verified live
+✅ Rate limiting (api-gateway, 4 tiers) — 2026-07-23, verified live (429s after the 10th rapid login)
+✅ CORS hardening (api-gateway, scoped deliberately to just that service) — 2026-07-23
+✅ Frontend route-protection middleware (`src/middleware.ts` + marker cookie) — 2026-07-23, verified live
+⬜ Admin panel basics — explicitly deferred by the user ("build from scratch later, focus on the rest")
+⬜ End-to-end smoke testing in an actual browser — in progress organically: this whole session's real
+  bugs (chat/compare crash, file-upload proxy hang, currency inconsistency, config load-order bug, a
+  route-splitting proxy bug) all came from actually exercising features, not from reading code
 ```
 
-**Overall Phase 1: ~80% complete.** Every core money/chat flow (register → subscribe → wallet →
-top-up → invoicing → real AI chat) is built AND verified end-to-end against the live stack, not
-just code-complete. What's left is genuinely the polish tier: notification emails, admin panel,
-renewal automation, PDF downloads, and settings/payment-method UI — plus giving the frontend an
-actual human click-through pass, since everything to date has been verified via curl/DB, not a
-browser.
+**Overall Phase 1: ~92% complete.** Every core money/chat flow (register → subscribe → wallet →
+top-up → invoicing → real AI chat) is built AND verified end-to-end against the live stack, including
+genuine Stripe **and** bKash Checkout payment experiences, a full password-reset/account-security flow,
+and now real rate limiting, CORS, and edge-level route protection. What's left is genuinely the polish
+tier: admin panel (deferred), PDF downloads, remaining provider keys, and continuing the real-usage
+testing pass — still the single highest-yield way left to find what's broken.
+
+### Priority order for what's left (see also the shareable work-distribution doc)
+1. ~~Wallet `deduct()`/`refund()` idempotency~~ — ✅ done 2026-07-23
+2. ~~`ProcessRenewalJob` + scheduling~~ — ✅ done 2026-07-23 — also surfaced and fixed a project-wide queue-collision bug
+3. ~~Password reset + Profile page + header dropdown~~ — ✅ done 2026-07-23
+4. ~~Real bKash Checkout Sessions~~ — ✅ done 2026-07-23, verified live in bKash's real sandbox
+5. ~~Rate limiting, CORS, frontend route middleware, bKash reconciliation, Stripe webhook infra~~ —
+   ✅ done 2026-07-23, all verified live
+6. **Keep doing real click-through testing** — every one of this session's real bugs came from actually
+   using features, not from reading code; still the best bug-per-minute ratio of anything left ← NEXT
+7. Lower priority: admin panel (deferred), invoice PDF, remaining provider keys, upgrade/downgrade
+   proration, an actual `stripe listen` session to confirm the webhook backup path end-to-end.
 
 ---
 
@@ -819,7 +1319,9 @@ browser.
 - [x] EmailVerificationController — verify token + resend
 - [x] LogoutController — invalidate JWT + revoke refresh tokens
 - [x] TokenRefreshController — rotate refresh token pair
-- [x] PasswordResetController — STUB (routes exist, logic not implemented)
+- [x] PasswordResetController — forgot()/reset() ← DONE 2026-07-23 (was a `__call() → 501` stub);
+      setPassword() (new, authenticated set/change) added in the same pass
+- [x] PasswordReset model ← DONE 2026-07-23 (table existed, migrated, never used)
 - [x] SocialAccountController — list + unlink Google (wired, basic impl)
 - [x] GoogleOAuthController — Socialite redirect (kept but unused — Firebase used instead)
 - [x] FirebaseAuthController — Google Sign-In via Firebase token ← NEW vs Dev Guide
@@ -828,47 +1330,78 @@ browser.
 - [x] InternalServiceMiddleware — validates X-Internal-Service-Key
 - [x] JwtService — issueTokens(), rotateRefreshToken(), revokeAll()
 - [x] UserRegistered event + SendVerificationEmail listener
-- [ ] PasswordResetController full implementation
 - [ ] Welcome email on first social login
 
-### Subscription Service ✅ CORE DONE (renewal automation still open)
+### Subscription Service ✅ CORE + PAYMENT + RENEWAL DONE
 - [x] PackageController — index() + show() ← DONE
 - [x] PackageSeeder — Basic/Standard/Pro seeded ← DONE
 - [x] SubscriptionController — current, subscribe, upgrade, downgrade, cancel, history ← DONE 2026-07-19
 - [x] SubscriptionHistory / RenewalAttempt models ← DONE 2026-07-19 (were missing, `subscribe()` would have crashed)
-- [x] config/services.php (wallet_url, billing_url, internal_key) ← DONE 2026-07-19
-- [ ] ProcessRenewalJob
-- [ ] RetryRenewalJob
-- [ ] Event listener: payment.succeeded → activate subscription (blocked on M3 payment-service)
-- [ ] Renewal scheduler
+- [x] config/services.php (wallet_url, billing_url, internal_key, payment_url, subscription_url) ← DONE 2026-07-19, extended 2026-07-21/23
+- [x] payment_source: wallet|card on subscribe() ← DONE 2026-07-21
+- [x] PackageActivationService — shared activation logic for both the synchronous wallet path and the
+      webhook/verify-triggered card path ← DONE 2026-07-23
+- [x] SubscriptionActivationController — POST /internal/subscriptions/activate, called by payment-service
+      once a card-funded Checkout Session is verified paid ← DONE 2026-07-23
+- [x] PaymentChargeService — chargeWallet() (extracted from SubscriptionController) + chargeSavedCard()
+      (new, for renewals) ← DONE 2026-07-23
+- [x] ProcessRenewalJob — wallet-then-saved-card charge, 3 attempts 24h apart, self-rescheduling,
+      cancels after final failure ← DONE 2026-07-23, verified live both success and failure paths
+- [x] Renewal scheduler — `Schedule::command('renewals:process')->hourly()` in routes/console.php,
+      `subscription-scheduler` docker-compose service runs `schedule:work` continuously ← DONE 2026-07-23
+- [x] subscription-queue-worker docker-compose service ← DONE 2026-07-23 (subscription-service's first
+      ever queued job — also see the queue-collision bug fix in session notes above)
 
-### Wallet Service ✅ CORE DONE (event listener still open, debit/refund idempotency still open)
+### Wallet Service ✅ CORE DONE
 - [x] WalletService — createForUser(), credit(), debit(), reserve(), refund() ← already scaffolded
 - [x] WalletInternalController — create(), show(), credit(), reserve(), deduct(), refund() ← DONE
 - [x] Wallet auto-created on registration via afterResponse() HTTP call ← DONE
 - [x] WalletController — GET /wallet, GET /wallet/credit (balance + credit-buffer display) ← DONE 2026-07-19
 - [x] LedgerController — GET /wallet/ledger (paginated history) ← DONE 2026-07-19
 - [x] credit() idempotency guard (reference_type + reference_id) ← DONE 2026-07-19, fixed a live double-credit
-- [ ] debit()/refund() need the same idempotency guard before AI chat usage deduction is wired up (M5/M6)
+- [x] deduct()/refund() idempotency guard ← DONE 2026-07-23, same pattern as credit(), verified live —
+      real reference IDs wired into CostTrackingMiddleware (per-request UUID) and
+      ReleaseWalletReservationJob (per-dispatch UUID, stable across its retries)
 - [ ] Event listener: subscription.purchased → credit wallet — superseded, subscription/payment services now call wallet-service directly instead (see 2026-07-19 session notes above)
 
-### Payment Service ✅ CORE DONE (webhook path untested)
-- [x] StripeGateway — charge(), refund(), verifyWebhook() ← already scaffolded
-- [x] PaymentInternalController — charge() (already scaffolded) + refund() (added 2026-07-19, was referenced by a route but missing)
+### Payment Service ✅ CORE DONE + real Stripe Checkout Sessions (2026-07-23)
+- [x] StripeGateway — charge(), refund(), verifyWebhook() ← already scaffolded; createCheckoutSession()/
+      retrieveCheckoutSession() added 2026-07-23
+- [x] PaymentInternalController — charge() (legacy, unused by current flows) + refund() (2026-07-19) +
+      createCheckoutSession() (2026-07-23, called by subscription-service's card path)
 - [x] Transaction/WebhookEvent/PaymentMethod models ← DONE 2026-07-19 (were missing entirely)
-- [x] config/services.php ← DONE 2026-07-19 (was missing — StripeGateway's config() calls always returned null)
+- [x] config/services.php ← DONE 2026-07-19; frontend_url + subscription_url added 2026-07-23
 - [x] InternalServiceClient — shared wallet-credit/receipt-create HTTP helper ← DONE 2026-07-19
-- [x] ProcessStripeWebhookJob ← DONE 2026-07-19 (was referenced by StripeWebhookController but didn't exist)
+- [x] CheckoutCompletionService — complete()/cancel(), the single idempotent path both verify-on-return
+      and the webhook funnel through ← DONE 2026-07-23
+- [x] CheckoutController::verify() — GET /checkout/{id}/verify, the frontend's return-page endpoint ← DONE 2026-07-23
+- [x] CreatesCheckoutSessions trait — shared "create pending Transaction + Checkout Session" logic
+      between TopupController and PaymentInternalController ← DONE 2026-07-23
+- [x] ProcessStripeWebhookJob ← rewritten 2026-07-23 to handle checkout.session.completed/expired
+      instead of payment_intent.succeeded/payment_failed (Checkout's own events are the correct signal)
 - [x] PaymentMethodController — index/store/destroy/setDefault ← DONE 2026-07-19, verified live (Stripe test card 4242)
-- [x] TopupController — initiate() + status() ← DONE 2026-07-19, verified live with real Stripe test key
+- [x] TopupController — initiate() rewritten 2026-07-23 for Checkout Sessions (was direct PaymentIntent
+      charge with a hardcoded test token); status() unchanged
 - [x] TransactionController — index + show ← DONE 2026-07-19, verified live
-- [x] StripeWebhookController — validate signature + process events (code complete, was already scaffolded)
-- [ ] Webhook path itself is UNTESTED — needs `stripe listen --forward-to http://localhost:8004/api/v1/webhooks/stripe` (interactive Stripe CLI) to get a real STRIPE_WEBHOOK_SECRET
-- [ ] BkashWebhookController (Bangladesh gateway) — still a stub
+- [x] StripeWebhookController — validate signature + dispatch job (unchanged, already worked)
+- [x] checkout:complete {transaction_id} artisan command — manual reconciliation tool for a transaction
+      confirmed paid on Stripe but not yet processed locally ← DONE 2026-07-23, kept as a standing tool
+- [x] BkashGateway + bKash Checkout Sessions (wallet top-up + subscription purchase) — DONE 2026-07-23,
+      verified live in bKash's real sandbox (see session notes above). `BkashWebhookController` removed
+      (bKash's tokenized Checkout has no server-to-server webhook — verify-on-return is the only path)
+- [x] bkash:reconcile sweep + payment-queue-worker/payment-scheduler containers ← DONE 2026-07-23,
+      verified live (backdated test transaction correctly left pending, then correctly cancelled past
+      the 24h ceiling); this is also what makes ProcessStripeWebhookJob actually able to run now
+- [ ] Genuine Stripe-CLI-forwarded webhook delivery still needs `stripe listen --forward-to
+      http://localhost:8000/api/v1/webhooks/stripe` (through the gateway, not directly to :8004 — CORS/
+      rate limiting now live there) to confirm end-to-end (STRIPE_WEBHOOK_SECRET is still
+      `whsec_CHANGE_ME`) — requires the Stripe CLI + an interactive `stripe login`, not automatable;
+      not required for the feature to work (verify-on-return already covers it), only to exercise this
+      specific backup path. See "Going live" notes above for what changes when real money is involved.
 
 ### AI Gateway Service ✅ CORE DONE (Session 2, 2026-07-19) — verified live with real Gemini 2.5 Flash
 - [x] ModelController — GET /models, cross-referenced against caller's package access
-- [x] ChatController — /chat/stream (SSE) and /chat/compare, both fixed from crash-on-every-call state
+- [x] ChatController — /chat/stream (SSE) and /chat/compare, both fixed from crash-on-every-call state; 2026-07-23: fixed compare()'s raw-event-JSON-leak + ob_flush() crash (see Known Issues), verified live with image attachments through the vision pipeline (gated correctly by model `vision` capability, blocked only by Gemini's known free-tier rate limit, not a code bug)
 - [x] SubscriptionClientService — didn't exist before, built from scratch
 - [x] WalletClientService — fixed wrong header + wrong URL (was always 401'ing)
 - [x] CostTrackingMiddleware — now uses real per-model pricing, not a hardcoded GPT-4o rate
@@ -889,7 +1422,7 @@ browser.
 - [x] ChatInternalController — POST /internal/sessions/{id}/messages, called by ai-gateway-service
       after every /chat/stream call to persist both the user message and assistant reply with
       accurate token/cost data
-- [ ] FileAttachmentController — upload + delete — still a stub, chat_svc.file_attachments unused
+- [x] FileAttachmentController — upload + delete, verified live 2026-07-23 (images only, MinIO-backed) — was blocked by the api-gateway proxy hang bug above until fixed the same session
 
 ### Billing Service ⬜ PARTIAL
 - [x] Invoice model ← DONE 2026-07-19
@@ -900,21 +1433,28 @@ browser.
 - [x] ReceiptController — index() + show() ← DONE 2026-07-19
 - [ ] InvoiceController — download() (PDF generation)
 
-### Notification Service ⬜ NOT STARTED
-- [ ] WelcomeMail Mailable
-- [ ] SubscriptionReceiptMail Mailable
-- [ ] RenewalFailedMail Mailable
-- [ ] LowBalanceMail Mailable
-- [ ] Event listeners wired for all above
+### Notification Service ✅ CORE DONE (2026-07-20 cont'd session)
+- [x] WelcomeMail Mailable ← DONE, triggered on email verification
+- [x] ReceiptMail Mailable ← DONE, triggered on subscription purchase and wallet top-up (both the
+      synchronous and webhook/verify-on-return paths, same idempotency key on both)
+- [x] RenewalFailedMail Mailable ← DONE (not yet triggered by anything — renewal automation itself is
+      still unbuilt, see Subscription Service below)
+- [x] LowBalanceMail Mailable ← DONE, triggered by wallet-service (at most one per level per day)
+- [x] Notification model, shared Blade layout component, generic POST /internal/notifications/send
+      endpoint, idempotency via the existing idempotency_key unique constraint ← all DONE
 
 ### API Gateway ✅ COMPLETE (for current scope) — was actually broken, fixed 2026-07-19
-- [x] ProxyController — forwards all routes to downstream services; default proxy timeout bumped 30s→45s (WSL2 bind-mount latency)
+- [x] ProxyController — forwards all routes to downstream services; default proxy timeout bumped 30s→45s (WSL2 bind-mount latency); 2026-07-23: fixed a real hang-on-file-upload bug (see Known Issues) by stripping hop-by-hop headers from forwarded responses
 - [x] config/services.php — all downstream URLs mapped
 - [x] JwtGatewayMiddleware — validates JWT, passes X-User-Id header — **was completely broken**:
   `firebase/php-jwt` wasn't installed (`composer require`d 2026-07-19) and `config/jwt.php` didn't
   exist (added 2026-07-19). No authenticated gateway request could have succeeded before this fix.
-- [ ] Rate limiting middleware (Week 9-10)
-- [ ] CORS configuration (currently handled by Laravel defaults)
+- [x] Rate limiting — DONE 2026-07-23: four tiers (`auth-strict`/`auth-general`/`webhooks`/`api`) via
+      `RateLimiter::for()`; required adding `config/cache.php`+`config/database.php` (redis) that never
+      existed here either. Verified live — 429s after the 10th rapid `/auth/login` call.
+- [x] CORS — DONE 2026-07-23: `config/cors.php` restricts `allowed_origins` to `FRONTEND_URL` instead of
+      Laravel's silent wide-open `*` default. Deliberately not replicated to the other 8 services —
+      CORS is browser-enforced and the browser only ever talks to api-gateway.
 
 ### Frontend ⬜ PARTIAL
 - [x] Login page — email/password form + Google Sign-In button ← DONE
@@ -926,29 +1466,54 @@ browser.
 - [x] Firebase SDK initialized ← DONE
 - [x] Tailwind CSS working ← DONE
 - [x] Auth callback page — handle Google redirect (/auth/callback) ← already existed
-- [x] Route protection — ✅ 2026-07-19, but as a **client-side guard**, not real Next.js middleware
-  (`app/(dashboard)/layout.tsx`). JWTs live in `localStorage` via zustand persist, which server-side
-  middleware can't read — `src/middleware.ts` was never created; if real middleware-based protection
-  is wanted later, tokens need to also be set as a cookie on login.
+- [x] Route protection — client-side guard (`app/(dashboard)/layout.tsx`, since 2026-07-19) **plus** real
+  edge middleware (`src/middleware.ts`, added 2026-07-23). JWTs still live only in `localStorage` (never
+  readable server-side), so middleware keys off a lightweight non-httpOnly `has_session` marker cookie
+  (set/cleared in `auth-store.ts`) purely to redirect the "definitely logged out" case before any page
+  renders — it carries no token and isn't the real authorization boundary, which stays the client-side
+  guard + backend JWT verification, unchanged. Verified live: no cookie → 307 to `/login`; cookie present
+  → 200 through to the page.
 - [x] Dashboard layout with sidebar ← DONE 2026-07-19 (`app/(dashboard)/layout.tsx`) — nav: Home/Pricing/Wallet/Billing
-- [x] Dashboard home page (`/chat`) ← DONE 2026-07-19 — subscription + wallet summary cards; **not a chat interface**, chat UI itself is still Week 5-6/M6
-- [x] Pricing/subscribe page ← DONE 2026-07-19 (`app/(dashboard)/pricing/page.tsx`) — subscribe works end-to-end; upgrade/downgrade/cancel have no buttons yet (API exists)
-- [x] Wallet page ← DONE 2026-07-19 (`app/(dashboard)/wallet/page.tsx`) — balance, ledger table, top-up form (real Stripe test-mode charge)
+- [x] Dashboard home page (`/chat`) ← DONE 2026-07-19, replaced with a real chat interface Session 2
+- [x] Pricing/subscribe page ← DONE 2026-07-19, upgrade/downgrade/cancel buttons + wallet-vs-card
+  choice added 2026-07-21, real Stripe Checkout redirect (card path) 2026-07-23, bKash added as a third
+  payment_source option 2026-07-23 (cont'd)
+- [x] Wallet page ← DONE 2026-07-19, top-up now redirects to a real Stripe Checkout Session (2026-07-23)
+  or a real bKash Checkout Session (2026-07-23, cont'd) instead of posting a hardcoded test token
 - [x] Billing page ← DONE 2026-07-19 (`app/(dashboard)/billing/page.tsx`) — transactions, invoices, receipts tables (read-only, no PDF)
-- [x] Chat interface ← DONE Session 2 (`app/(dashboard)/chat/page.tsx`) — session list, message
-  thread, model picker (limited to what the user's package grants), hand-rolled SSE streaming.
-  Verified via `tsc --noEmit` + compile/curl smoke test only — **not yet click-tested in a browser.**
+- [x] `billing/checkout-callback` page ← DONE 2026-07-23 — shared return-landing page for both top-up
+  and card-funded subscribe, polls `GET /checkout/{id}/verify` with a spinner before falling back to
+  "still confirming"
+- [x] Chat interface ← DONE Session 2, model switching + per-message model badge + rename/delete +
+  upload-progress UX added 2026-07-21. Verified via `tsc --noEmit` + compile/curl smoke test only —
+  **not yet click-tested in a browser.**
 - [x] Chat compare UI ← DONE 2026-07-20 — "Compare" tab on `/chat`, pick 2-4 models, one
-  message fans out to all of them, side-by-side streaming columns. Stateless (no session_id,
-  nothing persisted to chat-service, matching the backend endpoint's own design). Not yet
-  click-tested in a browser (compiles clean, dev-server smoke test only).
-- [ ] Real image/file upload into chat (FileAttachmentController still a stub, chat_svc.file_attachments
-  unused, no vision-capable model routing) — next planned build per user request 2026-07-20
-- [ ] Settings page (profile + connected accounts)
+  message fans out to all of them, side-by-side streaming columns. Not yet click-tested in a browser.
+- [x] Real image/file upload into chat ← DONE 2026-07-20 (cont'd session) — full vision pipeline working,
+  upload-progress UX added 2026-07-21
+- [x] `auth-store.ts` hydration flag (`hasHydrated`) + dashboard layout guard fix ← DONE 2026-07-23 —
+  fixes a real bug where a full-page external redirect (Stripe Checkout being the first thing to ever
+  do this) could bounce a logged-in user through `/login` before zustand-persist finished rehydrating
+- [x] Cross-tab session sync ← DONE 2026-07-23 — `auth-store.ts` listens for the browser `storage`
+  event and calls `useAuthStore.persist.rehydrate()`; previously a login/logout in one tab was invisible
+  to any other open tab until it was manually reloaded
+- [x] Ambiguous-vs-real-401 handling on the `/auth/me` profile fetch ← DONE 2026-07-23 — that call times
+  out ~1 in 5 times in this environment; only a genuine 401 clears the session now, anything else
+  retries quietly (see session notes above)
+- [x] Settings/Profile page ← DONE 2026-07-23 (`app/(dashboard)/profile/page.tsx`) — one page covers
+  both: account details, wallet balance overview, subscribed package overview, Google connection
+  status + unlink, and a set/change-password form. The old empty `(dashboard)/settings/` folder was
+  intentionally left unused rather than building a second, duplicate page.
+- [x] Header dropdown ← DONE 2026-07-23 — the plain "Sign out" button is now a
+  `@radix-ui/react-dropdown-menu` trigger (Profile / Sign out); new
+  `components/ui/DropdownMenu.tsx` wraps Radix's primitives in this project's existing style
+- [x] Forgot/reset password pages ← DONE 2026-07-23 (`(auth)/forgot-password`, `(auth)/reset-password`)
+  — folders existed empty; login page already linked to `/forgot-password`. Verified live end-to-end
+  including pulling the real email from Mailpit's API.
 - [ ] Saved payment methods list page (backend done, no UI)
-- [ ] Stripe Elements integration — pricing/wallet pages currently hardcode Stripe's test
-  PaymentMethod id (`pm_card_visa`) instead of collecting a real card client-side; fine for Phase 1
-  sandbox testing, not something to ship
+- [x] Stripe Elements / hardcoded test token — **superseded 2026-07-23**: both flows now redirect to a
+  real Stripe Checkout Session instead of posting `pm_card_visa` server-side; no client-side Elements
+  integration needed since Stripe's hosted page collects the card
 
 See `MANUAL_TESTING_GUIDE.md` (repo root) for a step-by-step walkthrough of everything above.
 

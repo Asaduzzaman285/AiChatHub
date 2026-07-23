@@ -110,7 +110,7 @@ services:
     env_file:
       - ./services/auth-service/.env
     depends_on: [postgres, redis]
-    command: php artisan queue:work redis --tries=3 --sleep=3
+    command: php artisan queue:work redis --queue=auth --tries=3 --sleep=3
 
   # ─── SUBSCRIPTION SERVICE ─────────────────
 
@@ -138,6 +138,47 @@ services:
       - ./services/subscription-service:/var/www
       - ./infrastructure/docker/nginx/subscription.conf:/etc/nginx/conf.d/default.conf
     depends_on: [subscription-service]
+
+  # Same image/code as subscription-service — runs `queue:work` instead of php-fpm.
+  # Without this, ProcessRenewalJob (dispatched by renewals:process, and by itself
+  # on a 24h delay after a failed attempt) never actually runs.
+  subscription-queue-worker:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-subscription-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/subscription-service:/var/www
+    env_file:
+      - ./services/subscription-service/.env
+    depends_on: [postgres, redis]
+    # --timeout=120, not the queue:work default of 60s: ProcessRenewalJob can
+    # legitimately chain two sequential 15s HTTP timeouts (wallet, then a
+    # saved-card fallback) in this environment's slower cross-service calls —
+    # the worker's own timeout would otherwise kill and auto-retry a job that
+    # was still genuinely working, duplicating a charge attempt.
+    command: php artisan queue:work redis --queue=subscription --tries=3 --sleep=3 --timeout=120
+
+  # Long-running `schedule:work` process — the thing that actually fires
+  # `renewals:process` on its `->hourly()` schedule (routes/console.php).
+  # `schedule:run` alone only fires whatever's due at the instant it's called;
+  # this keeps checking every minute so the hourly schedule actually happens
+  # without needing host-level cron.
+  subscription-scheduler:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-subscription-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/subscription-service:/var/www
+    env_file:
+      - ./services/subscription-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
 
   # ─── WALLET SERVICE ───────────────────────
 
@@ -193,6 +234,40 @@ services:
       - ./infrastructure/docker/nginx/payment.conf:/etc/nginx/conf.d/default.conf
     depends_on: [payment-service]
 
+  # Without this, ProcessStripeWebhookJob (dispatched by the Stripe webhook
+  # controller) and ReconcileBkashPaymentJob (dispatched by bkash:reconcile)
+  # never actually run — both are ShouldQueue jobs with nothing to process
+  # them before this was added (found live while auditing production-readiness).
+  payment-queue-worker:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-payment-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/payment-service:/var/www
+    env_file:
+      - ./services/payment-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=payment --tries=3 --sleep=3 --timeout=120
+
+  # Long-running `schedule:work` process — fires `bkash:reconcile` on its
+  # `->everyFifteenMinutes()` schedule (routes/console.php).
+  payment-scheduler:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-payment-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/payment-service:/var/www
+    env_file:
+      - ./services/payment-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+
   # ─── AI GATEWAY SERVICE ───────────────────
 
   ai-gateway-service:
@@ -237,7 +312,7 @@ services:
     env_file:
       - ./services/ai-gateway-service/.env
     depends_on: [postgres, redis]
-    command: php artisan queue:work redis --tries=3 --sleep=1
+    command: php artisan queue:work redis --queue=ai_gateway --tries=3 --sleep=1
 
   # ─── CHAT SERVICE ─────────────────────────
 

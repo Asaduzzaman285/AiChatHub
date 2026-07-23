@@ -11,6 +11,7 @@ use App\Services\WalletClientService;
 use Illuminate\Http\Request;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Responses\AgentResponse;
+use Laravel\Ai\Streaming\Events\TextDelta;
 
 class ChatController extends Controller
 {
@@ -156,7 +157,6 @@ class ChatController extends Controller
                 $model = $models->get($modelId);
                 if (! $model) {
                     echo "data: " . json_encode(['model' => $modelId, 'error' => 'Unknown model']) . "\n\n";
-                    ob_flush();
                     flush();
                     continue;
                 }
@@ -164,13 +164,14 @@ class ChatController extends Controller
                 $agent = new TextChatAgent(userId: $userId, sessionId: \Str::uuid()->toString());
                 try {
                     foreach ($agent->stream($data['message'], provider: $model->provider, model: $model->model_id) as $event) {
-                        echo "data: " . json_encode(['model' => $modelId, 'chunk' => (string) $event]) . "\n\n";
-                        ob_flush();
+                        if (! $event instanceof TextDelta) {
+                            continue;
+                        }
+                        echo "data: " . json_encode(['model' => $modelId, 'chunk' => $event->delta]) . "\n\n";
                         flush();
                     }
                 } catch (\Exception $e) {
                     echo "data: " . json_encode(['model' => $modelId, 'error' => $e->getMessage()]) . "\n\n";
-                    ob_flush();
                     flush();
                 }
             }

@@ -24,13 +24,14 @@ export default function WalletPage() {
   })
 
   const topup = useMutation({
-    mutationFn: async (amountUsd: number) =>
+    mutationFn: async ({ amountUsd, gateway }: { amountUsd: number; gateway: 'stripe' | 'bkash' }) =>
       apiClient.post<{ checkout_url: string }>('/api/v1/topup', {
         amount: amountUsd,
         currency: 'USD',
+        gateway,
       }),
     onSuccess: (res) => {
-      // No wallet credit happens here — Stripe's hosted page collects the card, and
+      // No wallet credit happens here — the gateway's hosted page collects payment, and
       // /billing/checkout-callback verifies + credits once payment actually completes.
       window.location.href = res.data.checkout_url
     },
@@ -40,14 +41,14 @@ export default function WalletPage() {
     },
   })
 
-  const handleTopup = (e: FormEvent) => {
+  const handleTopup = (gateway: 'stripe' | 'bkash') => (e: FormEvent) => {
     e.preventDefault()
     const value = parseFloat(amount)
     if (!value || value <= 0) {
       toast.error('Enter a valid amount.')
       return
     }
-    topup.mutate(value)
+    topup.mutate({ amountUsd: value, gateway })
   }
 
   return (
@@ -55,7 +56,7 @@ export default function WalletPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Wallet</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Top up via Stripe&apos;s hosted checkout (test mode) — you&apos;ll be redirected to enter a card, and your balance updates once payment is confirmed.
+          Top up via Stripe (test mode) or bKash (sandbox) — you&apos;ll be redirected to the gateway&apos;s hosted page, and your balance updates once payment is confirmed.
         </p>
       </div>
 
@@ -87,7 +88,7 @@ export default function WalletPage() {
             <CardTitle>Top up</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleTopup} className="space-y-3">
+            <form className="space-y-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">$</span>
                 <input
@@ -99,8 +100,11 @@ export default function WalletPage() {
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={topup.isPending}>
-                {topup.isPending ? 'Processing…' : 'Top up'}
+              <Button type="submit" className="w-full" disabled={topup.isPending} onClick={handleTopup('stripe')}>
+                {topup.isPending ? 'Processing…' : 'Pay with Card (Stripe)'}
+              </Button>
+              <Button type="submit" variant="outline" className="w-full" disabled={topup.isPending} onClick={handleTopup('bkash')}>
+                {topup.isPending ? 'Processing…' : 'Pay with bKash'}
               </Button>
             </form>
           </CardContent>

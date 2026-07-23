@@ -5,7 +5,6 @@ use App\Http\Controllers\V1\PaymentMethodController;
 use App\Http\Controllers\V1\TopupController;
 use App\Http\Controllers\V1\TransactionController;
 use App\Http\Controllers\V1\Webhooks\StripeWebhookController;
-use App\Http\Controllers\V1\Webhooks\BkashWebhookController;
 use App\Http\Controllers\HealthController;
 use Illuminate\Support\Facades\Route;
 
@@ -13,9 +12,10 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', fn () => response()->json(['status' => 'ok', 'service' => 'payment']));
 Route::get('/ready',  [HealthController::class, 'ready']);
 
-// Webhooks — no JWT, signature-validated
+// Webhooks — no JWT, signature-validated. bKash's tokenized Checkout has no
+// server-to-server webhook (see CheckoutController::verify()'s docblock) —
+// only Stripe has one.
 Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle']);
-Route::post('/webhooks/bkash',  [BkashWebhookController::class,  'handle']);
 
 // Authenticated
 Route::middleware('auth.jwt')->group(function () {

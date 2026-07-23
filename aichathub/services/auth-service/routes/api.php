@@ -39,4 +39,5 @@ Route::middleware('auth.jwt')->group(function () {
     Route::get('/auth/social',              [SocialAccountController::class,'index']);
     Route::post('/auth/social/google/link', [SocialAccountController::class,'linkGoogle']);
     Route::delete('/auth/social/google',    [SocialAccountController::class,'unlinkGoogle']);
+    Route::post('/auth/password/set',       [PasswordResetController::class,'setPassword']);
 });

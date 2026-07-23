@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Str;
 
 /**
  * Releases a wallet reservation left over from a chat request that never
@@ -23,13 +24,27 @@ class ReleaseWalletReservationJob implements ShouldQueue
 
     public int $tries = 3;
 
+    // Generated once at dispatch time and preserved across retries (Laravel
+    // serializes the already-set property, it doesn't re-run the constructor)
+    // — gives wallet-service's refund() idempotency guard something stable to
+    // check, so a failed-then-retried attempt can't double-refund.
+    public string $referenceId;
+
     public function __construct(
         public string $userId,
         public float $amount,
-    ) {}
+    ) {
+        $this->referenceId = (string) Str::uuid();
+    }
 
     public function handle(WalletClientService $walletClient): void
     {
-        $walletClient->refund($this->userId, 0, $this->amount, 'AI request did not complete — releasing reservation');
+        $walletClient->refund(
+            $this->userId,
+            0,
+            $this->amount,
+            'AI request did not complete — releasing reservation',
+            $this->referenceId,
+        );
     }
 }

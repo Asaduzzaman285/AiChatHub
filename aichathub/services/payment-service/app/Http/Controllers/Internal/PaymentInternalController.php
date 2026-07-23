@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Internal;
 
 use App\Http\Controllers\Concerns\CreatesCheckoutSessions;
 use App\Http\Controllers\Controller;
+use App\Models\PaymentMethod;
 use App\Models\Transaction;
+use App\Services\BkashGateway;
 use App\Services\StripeGateway;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,34 +17,53 @@ class PaymentInternalController extends Controller
 {
     use CreatesCheckoutSessions;
 
-    public function __construct(private StripeGateway $stripe) {}
+    public function __construct(private StripeGateway $stripe, private BkashGateway $bkash) {}
 
     /**
      * POST /internal/payments/checkout
      * Called by Subscription Service to start a Checkout-Session-funded package
-     * purchase. Unlike charge() below, this never activates anything itself —
-     * the caller only gets a checkout_url back; activation happens later via
-     * CheckoutCompletionService once the payment is verified.
+     * purchase (card or bKash). Unlike charge() below, this never activates
+     * anything itself — the caller only gets a checkout_url back; activation
+     * happens later via CheckoutCompletionService once the payment is verified.
      */
     public function createCheckoutSession(Request $request): JsonResponse
     {
         $data = $request->validate([
             'user_id'      => 'required|uuid',
             'amount'       => 'required|numeric|min:0.01',
+            // Stripe-only, same as TopupController — bKash always settles in
+            // BDT (converted from USD internally), so it's rejected below
+            // rather than silently ignored if the caller passes anything else.
             'currency'     => 'required|string|in:USD,BDT',
             'description'  => 'required|string',
             'package_slug' => 'required|string',
+            'gateway'      => 'nullable|in:stripe,bkash',
         ]);
 
-        $result = $this->beginCheckout(
-            $this->stripe,
-            $data['user_id'],
-            'subscription_purchase',
-            (float) $data['amount'],
-            $data['currency'],
-            $data['description'],
-            ['package_slug' => $data['package_slug']],
-        );
+        $gateway = $data['gateway'] ?? 'stripe';
+
+        if ($gateway === 'bkash' && $data['currency'] !== 'USD') {
+            return response()->json(['error' => 'bKash purchases must be specified in USD (converted to BDT automatically).'], 422);
+        }
+
+        $result = $gateway === 'bkash'
+            ? $this->beginBkashCheckout(
+                $this->bkash,
+                $data['user_id'],
+                'subscription_purchase',
+                (float) $data['amount'],
+                $data['description'],
+                ['package_slug' => $data['package_slug']],
+            )
+            : $this->beginCheckout(
+                $this->stripe,
+                $data['user_id'],
+                'subscription_purchase',
+                (float) $data['amount'],
+                $data['currency'],
+                $data['description'],
+                ['package_slug' => $data['package_slug']],
+            );
 
         if ($result['error']) {
             return response()->json(['error' => $result['error']], 422);
@@ -141,6 +162,25 @@ class PaymentInternalController extends Controller
         ], 422);
     }
 
+    /**
+     * GET /internal/payment-methods/{userId}/default
+     * Called by Subscription Service's renewal job — a background charge has no
+     * browser to redirect through, so it needs a previously-saved card, not Checkout.
+     */
+    public function defaultPaymentMethod(string $userId): JsonResponse
+    {
+        $method = PaymentMethod::where('user_id', $userId)
+            ->where('is_active', true)
+            ->where('is_default', true)
+            ->first();
+
+        if (! $method) {
+            return response()->json(['payment_method_token' => null]);
+        }
+
+        return response()->json(['payment_method_token' => $method->token]);
+    }
+
     /** GET /internal/payments/{id} */
     public function show(string $id): JsonResponse
     {
@@ -167,7 +207,18 @@ class PaymentInternalController extends Controller
         }
 
         $amount = (float) ($data['amount'] ?? $transaction->amount);
-        $result = $this->stripe->refund($transaction->gateway_reference, $amount);
+
+        if ($transaction->gateway === 'bkash') {
+            $trxId = $transaction->metadata['trx_id'] ?? null;
+            if (! $trxId) {
+                return response()->json(['error' => 'no_bkash_trx_id'], 422);
+            }
+            $amountBdt = $transaction->metadata['amount_bdt'] ?? $this->bkash->usdToBdt($amount);
+            $refund = $this->bkash->refund($transaction->gateway_reference, $trxId, $amountBdt, 'Refund requested');
+            $result = ['success' => $refund['success'], 'refund_id' => $refund['refund_trx_id'], 'error' => $refund['error']];
+        } else {
+            $result = $this->stripe->refund($transaction->gateway_reference, $amount);
+        }
 
         if (! $result['success']) {
             return response()->json(['error' => $result['error']], 422);

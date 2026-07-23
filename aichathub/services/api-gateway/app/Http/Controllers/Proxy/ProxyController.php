@@ -82,10 +82,21 @@ class ProxyController extends Controller
             $response = $http->{$method}($targetUrl, $request->all());
         }
 
+        // Hop-by-hop headers describe the upstream connection/framing, not this
+        // one — forwarding them verbatim (esp. Transfer-Encoding: chunked)
+        // alongside a Content-Length Symfony recomputes for the already-decoded
+        // body confuses nginx's response framing, which silently never flushes
+        // any bytes to the client even though PHP-FPM completed (confirmed live
+        // via a file upload that hung indefinitely client-side despite chat-service
+        // logging a real 201).
+        $responseHeaders = collect($response->headers())
+            ->except(['transfer-encoding', 'content-encoding', 'content-length', 'connection', 'keep-alive'])
+            ->all();
+
         return response(
             $response->body(),
             $response->status(),
-            $response->headers()
+            $responseHeaders
         );
     }
 }

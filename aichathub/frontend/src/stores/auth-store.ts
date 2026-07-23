@@ -2,6 +2,23 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { User } from '@/types'
 
+// Plain, non-httpOnly marker cookie — NOT the real auth mechanism (that's still the
+// JWT in localStorage/Authorization headers, unchanged). This exists purely so
+// middleware.ts (which runs server-side and can't see localStorage at all) can make a
+// fast redirect decision for a definitely-logged-out visitor. It carries no token and
+// can't be cryptographically verified — real authorization is still enforced by
+// (dashboard)/layout.tsx's client-side check and the backend's own JWT verification.
+function setSessionCookie() {
+  if (typeof document !== 'undefined') {
+    document.cookie = 'has_session=1; path=/; SameSite=Lax'
+  }
+}
+function clearSessionCookie() {
+  if (typeof document !== 'undefined') {
+    document.cookie = 'has_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  }
+}
+
 interface AuthState {
   user: User | null
   accessToken: string | null
@@ -33,16 +50,20 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       hasHydrated: false,
 
-      setAuth: (user, accessToken, refreshToken) =>
-        set({ user, accessToken, refreshToken, isAuthenticated: true }),
+      setAuth: (user, accessToken, refreshToken) => {
+        setSessionCookie()
+        set({ user, accessToken, refreshToken, isAuthenticated: true })
+      },
 
       setTokens: (accessToken, refreshToken) =>
         set({ accessToken, refreshToken }),
 
       setUser: (user) => set({ user }),
 
-      clearAuth: () =>
-        set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false }),
+      clearAuth: () => {
+        clearSessionCookie()
+        set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false })
+      },
 
       setHasHydrated: (value) => set({ hasHydrated: value }),
     }),
@@ -59,3 +80,17 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 )
+
+// zustand-persist writes login/logout to localStorage but each browser tab has
+// its own in-memory copy of the store — a tab never notices another tab's
+// writes on its own. Without this, logging in on tab A leaves tab B still
+// showing the login page (and bouncing to /login if you navigate) until tab B
+// is manually reloaded. The `storage` event only fires in *other* tabs (never
+// the one that made the write), which is exactly the case that needs covering.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'auth-storage') {
+      useAuthStore.persist.rehydrate()
+    }
+  })
+}

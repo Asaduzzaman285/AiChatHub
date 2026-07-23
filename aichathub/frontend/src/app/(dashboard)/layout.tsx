@@ -3,9 +3,11 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { CreditCard, LogOut, MessageSquare, Receipt, Sparkles, Wallet } from 'lucide-react'
+import { AxiosError } from 'axios'
+import { ChevronDown, CreditCard, LogOut, MessageSquare, Receipt, Sparkles, UserRound, Wallet } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
 import type { User } from '@/types'
 
 const NAV_ITEMS = [
@@ -26,6 +28,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname()
   const { user, accessToken, isAuthenticated, hasHydrated, setUser, clearAuth } = useAuthStore()
   const [checking, setChecking] = useState(true)
+  // Bumped on an ambiguous (non-401) /auth/me failure to trigger one more
+  // attempt — this call alone times out roughly 1 in 5 times in this
+  // environment, so a single failure shouldn't leave the profile blank for
+  // the rest of the session.
+  const [retryTick, setRetryTick] = useState(0)
 
   useEffect(() => {
     // Not a real "logged out" reading yet — zustand-persist hasn't finished
@@ -45,15 +52,42 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return
     }
 
+    let cancelled = false
+
     apiClient
       .get<User>('/api/v1/auth/me')
       .then(({ data }) => setUser(data))
-      .catch(() => {
-        clearAuth()
-        router.replace('/login')
+      .catch((err: unknown) => {
+        // A real 401 means the token itself was rejected — that's a genuine
+        // "not logged in," clear it and send them to /login. Anything else
+        // (network error, timeout, 5xx) is this environment being slow, not
+        // an authentication failure. Wiping a valid token over infrastructure
+        // flakiness was bouncing people to /login mid-session, most visibly
+        // right after returning from Stripe Checkout when the backend is
+        // under fresh load.
+        const isRealAuthFailure = err instanceof AxiosError && err.response?.status === 401
+        if (isRealAuthFailure) {
+          clearAuth()
+          router.replace('/login')
+          return
+        }
+
+        if (retryTick < 3) {
+          setTimeout(() => {
+            if (!cancelled) setRetryTick((n) => n + 1)
+          }, 2000)
+        }
+        // Otherwise (retries exhausted): leave isAuthenticated/tokens alone
+        // and let the dashboard render anyway — `user` just stays null, the
+        // header falls back to a placeholder (see below) instead of forcing
+        // a login the person doesn't actually need.
       })
       .finally(() => setChecking(false))
-  }, [hasHydrated, isAuthenticated, accessToken, user, setUser, clearAuth, router])
+
+    return () => {
+      cancelled = true
+    }
+  }, [hasHydrated, isAuthenticated, accessToken, user, retryTick, setUser, clearAuth, router])
 
   const handleLogout = async () => {
     try {
@@ -103,20 +137,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       <div className="flex-1">
-        <header className="flex items-center justify-between border-b border-border px-6 py-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-              {user?.email?.[0]?.toUpperCase() ?? '?'}
-            </div>
-            <span className="text-sm text-muted-foreground">{user?.email}</span>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign out
-          </button>
+        <header className="flex items-center justify-end border-b border-border px-6 py-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                  {user?.email?.[0]?.toUpperCase() ?? '?'}
+                </div>
+                <span className="text-muted-foreground">{user?.email}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={() => router.push('/profile')}>
+                <UserRound className="h-4 w-4" />
+                Profile
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleLogout}>
+                <LogOut className="h-4 w-4" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         <main className="p-6">{children}</main>
       </div>

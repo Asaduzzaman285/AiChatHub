@@ -10,3 +10,4 @@ Route::post('/payments/charge', [PaymentInternalController::class, 'charge']);
 Route::post('/payments/checkout', [PaymentInternalController::class, 'createCheckoutSession']);
 Route::post('/payments/refund', [PaymentInternalController::class, 'refund']);
 Route::get('/payments/{id}', [PaymentInternalController::class, 'show']);
+Route::get('/payment-methods/{userId}/default', [PaymentInternalController::class, 'defaultPaymentMethod']);
