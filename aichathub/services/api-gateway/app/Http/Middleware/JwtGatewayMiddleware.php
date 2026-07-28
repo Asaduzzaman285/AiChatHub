@@ -26,6 +26,7 @@ class JwtGatewayMiddleware
             $request->headers->set('X-User-Id',    $decoded->sub  ?? '');
             $request->headers->set('X-User-Email',  $decoded->email ?? '');
             $request->headers->set('X-User-Status', $decoded->status ?? '');
+            $request->headers->set('X-Is-Admin',    ($decoded->is_admin ?? false) ? '1' : '0');
 
         } catch (\Firebase\JWT\ExpiredException) {
             return response()->json(['message' => 'Token expired.', 'error' => 'token_expired'], 401);

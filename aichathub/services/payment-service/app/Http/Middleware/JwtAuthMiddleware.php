@@ -25,6 +25,7 @@ class JwtAuthMiddleware
 
         $request->attributes->set('auth_user_id', $userId);
         $request->attributes->set('auth_user_email', $request->header('X-User-Email'));
+        $request->attributes->set('auth_is_admin', $request->header('X-Is-Admin') === '1');
 
         return $next($request);
     }

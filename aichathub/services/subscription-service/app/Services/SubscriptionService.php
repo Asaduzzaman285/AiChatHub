@@ -55,24 +55,40 @@ class SubscriptionService
         });
     }
 
-    /** Extends a subscription for another cycle after a successful renewal charge. */
-    public function renewSuccess(UserSubscription $subscription): UserSubscription
+    /**
+     * Extends a subscription for another cycle after a successful renewal charge.
+     * $switchToPackage is passed when a scheduled downgrade takes effect this
+     * cycle — ProcessRenewalJob resolves it and charges/credits based on it
+     * before calling here, this just performs the actual package switch.
+     */
+    public function renewSuccess(UserSubscription $subscription, ?Package $switchToPackage = null): UserSubscription
     {
-        return DB::transaction(function () use ($subscription) {
-            $oldStatus = $subscription->status;
+        return DB::transaction(function () use ($subscription, $switchToPackage) {
+            $oldStatus    = $subscription->status;
+            $oldPackageId = $subscription->package_id;
 
-            $subscription->update([
+            $updates = [
                 'status'      => 'active',
                 'past_due_at' => null,
                 'renews_at'   => now()->addDays(30),
-            ]);
+            ];
+
+            if ($switchToPackage) {
+                $updates['package_id']           = $switchToPackage->id;
+                $updates['previous_package_id']  = $oldPackageId;
+                $updates['scheduled_package_id'] = null;
+            }
+
+            $subscription->update($updates);
 
             SubscriptionHistory::create([
                 'subscription_id' => $subscription->id,
                 'user_id'         => $subscription->user_id,
-                'action'          => 'renewed',
+                'action'          => $switchToPackage ? 'downgraded' : 'renewed',
                 'old_status'      => $oldStatus,
                 'new_status'      => 'active',
+                'old_package_id'  => $switchToPackage ? $oldPackageId : null,
+                'new_package_id'  => $switchToPackage ? $switchToPackage->id : null,
             ]);
 
             return $subscription;
@@ -128,17 +144,23 @@ class SubscriptionService
     }
 
     /**
-     * Upgrade to a higher package. Charges full new price.
+     * Applies an upgrade immediately — package switch, fresh 30-day cycle,
+     * clears any pending scheduled downgrade (an upgrade supersedes it since
+     * the whole point of scheduling was "wait until the cycle ends," and this
+     * upgrade just started a brand new one). Caller charges the full new
+     * price and credits the full new wallet allowance separately — this only
+     * performs the subscription-record switch.
      */
-    public function upgrade(UserSubscription $current, Package $newPackage, string $transactionId): UserSubscription
+    public function applyUpgrade(UserSubscription $current, Package $newPackage, string $transactionId): UserSubscription
     {
         return DB::transaction(function () use ($current, $newPackage, $transactionId) {
             $oldPackageId = $current->package_id;
 
             $current->update([
-                'package_id'          => $newPackage->id,
-                'previous_package_id' => $oldPackageId,
-                'renews_at'           => now()->addDays(30),
+                'package_id'           => $newPackage->id,
+                'previous_package_id'  => $oldPackageId,
+                'scheduled_package_id' => null,
+                'renews_at'            => now()->addDays(30),
             ]);
 
             SubscriptionHistory::create([
@@ -165,36 +187,31 @@ class SubscriptionService
     }
 
     /**
-     * Downgrade to a lower package. Access restriction immediate.
+     * Schedules a downgrade for the next renewal — no immediate change, no
+     * money moves. The user keeps their current tier's access until the
+     * already-paid-for period ends; ProcessRenewalJob applies it (via
+     * renewSuccess()'s $switchToPackage) once the cycle actually rolls over.
+     * Overwrites any previously-scheduled target with the latest choice.
      */
-    public function downgrade(UserSubscription $current, Package $newPackage, string $transactionId): UserSubscription
+    public function scheduleDowngrade(UserSubscription $current, Package $newPackage): UserSubscription
     {
-        return DB::transaction(function () use ($current, $newPackage, $transactionId) {
-            $oldPackageId = $current->package_id;
-
-            $current->update([
-                'package_id'          => $newPackage->id,
-                'previous_package_id' => $oldPackageId,
-                'renews_at'           => now()->addDays(30),
-            ]);
+        return DB::transaction(function () use ($current, $newPackage) {
+            $current->update(['scheduled_package_id' => $newPackage->id]);
 
             SubscriptionHistory::create([
                 'subscription_id' => $current->id,
                 'user_id'         => $current->user_id,
-                'action'          => 'downgraded',
-                'old_package_id'  => $oldPackageId,
+                'action'          => 'downgrade_scheduled',
+                'old_package_id'  => $current->package_id,
                 'new_package_id'  => $newPackage->id,
-                'metadata'        => ['transaction_id' => $transactionId],
             ]);
 
-            $this->publishEvent('subscription.downgraded', [
-                'user_id'         => $current->user_id,
-                'subscription_id' => $current->id,
-                'old_package_id'  => $oldPackageId,
-                'new_package_id'  => $newPackage->id,
-                'amount'          => $newPackage->monthly_wallet_credit_usd,
-                'currency'        => $current->currency,
-                'transaction_id'  => $transactionId,
+            $this->publishEvent('subscription.downgrade_scheduled', [
+                'user_id'          => $current->user_id,
+                'subscription_id'  => $current->id,
+                'current_package_id' => $current->package_id,
+                'scheduled_package_id' => $newPackage->id,
+                'effective_at'     => $current->renews_at,
             ]);
 
             return $current->fresh();
@@ -233,7 +250,7 @@ class SubscriptionService
      */
     public function getActive(string $userId): ?UserSubscription
     {
-        return UserSubscription::with('package')
+        return UserSubscription::with(['package', 'scheduledPackage'])
             ->where('user_id', $userId)
             ->whereIn('status', ['active', 'past_due'])
             ->first();

@@ -61,6 +61,8 @@ export interface Subscription {
   renews_at: string
   cancelled_at: string | null
   package: SubscriptionPackage | null
+  // Set only when a downgrade is scheduled — takes effect at renews_at.
+  scheduled_package: { id: string; name: string; slug: string } | null
 }
 
 // ─── Wallet ────────────────────────────────────────────────────────────────

@@ -21,4 +21,9 @@ Route::middleware('auth.jwt')->group(function () {
     Route::post('/subscription/downgrade', [SubscriptionController::class, 'downgrade']);
     Route::post('/subscription/cancel',    [SubscriptionController::class, 'cancel']);
     Route::get('/subscription/history',    [SubscriptionController::class, 'history']);
+
+    // Admin — not full CRUD (no create/delete yet), just makes existing package
+    // fields (including credit_buffer_percentage) genuinely editable instead of
+    // DB-only. Reusable by the real admin panel once it exists.
+    Route::patch('/packages/{slug}', [PackageController::class, 'update'])->middleware('admin.gate');
 });

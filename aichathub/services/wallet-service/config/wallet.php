@@ -8,5 +8,8 @@ return [
     // never actually read.
     'low_balance_threshold'      => (float) env('LOW_BALANCE_THRESHOLD', 5.00),
     'critical_balance_threshold' => (float) env('CRITICAL_BALANCE_THRESHOLD', 1.00),
-    'credit_buffer_default'      => (float) env('CREDIT_BUFFER_DEFAULT', 3.00),
+    // credit_buffer_default removed 2026-07-28 — the buffer is now sized per-package
+    // (packages.credit_buffer_percentage, subscription-service), computed by the
+    // caller and passed to WalletService::credit() as a real dollar credit_limit,
+    // not a flat wallet-service-side fallback.
 ];

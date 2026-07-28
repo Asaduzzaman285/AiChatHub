@@ -14,7 +14,7 @@ class Package extends Model
     protected $fillable = [
         'name', 'slug', 'description',
         'monthly_price_usd', 'monthly_price_bdt',
-        'monthly_wallet_credit_usd',
+        'monthly_wallet_credit_usd', 'credit_buffer_percentage',
         'model_access', 'features',
         'is_active', 'sort_order',
     ];
@@ -36,6 +36,12 @@ class Package extends Model
     public function allowsModel(string $modelId): bool
     {
         return in_array($modelId, $this->model_access ?? [], true);
+    }
+
+    /** Dollar amount of this package's wallet credit_limit buffer — see the 0002 migration's comment. */
+    public function creditBufferAmount(): float
+    {
+        return round((float) $this->monthly_price_usd * ((float) $this->credit_buffer_percentage / 100), 2);
     }
 
     public function hasFeature(string $feature): bool

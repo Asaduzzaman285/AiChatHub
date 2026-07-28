@@ -38,12 +38,15 @@ class WalletInternalController extends Controller
     public function credit(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id'                => 'required|string|min:36|max:36',
-            'amount'                 => 'required|numeric|min:0.000001',
-            'description'            => 'required|string',
-            'reference_type'         => 'nullable|string',
-            'reference_id'           => 'nullable|string',
-            'activate_credit_buffer' => 'nullable|boolean',
+            'user_id'        => 'required|string|min:36|max:36',
+            'amount'         => 'required|numeric|min:0.000001',
+            'description'    => 'required|string',
+            'reference_type' => 'nullable|string',
+            'reference_id'   => 'nullable|string',
+            // Dollar amount, computed by the caller (subscription-service knows
+            // which package + its credit_buffer_percentage) — not a boolean flag
+            // anymore, since the buffer size now varies by package tier.
+            'credit_limit'   => 'nullable|numeric|min:0',
         ]);
 
         $wallet = $this->walletService->credit(
@@ -52,7 +55,7 @@ class WalletInternalController extends Controller
             $data['description'],
             $data['reference_type'] ?? null,
             $data['reference_id'] ?? null,
-            (bool) ($data['activate_credit_buffer'] ?? false),
+            isset($data['credit_limit']) ? (float) $data['credit_limit'] : null,
         );
 
         return response()->json([

@@ -46,6 +46,7 @@ class CheckoutCompletionService
         $credited = match ($claimed->type) {
             'wallet_topup'          => $this->completeTopup($claimed),
             'subscription_purchase' => $this->completeSubscription($claimed),
+            'subscription_upgrade'  => $this->completeUpgrade($claimed),
             default                 => false,
         };
 
@@ -126,6 +127,47 @@ class CheckoutCompletionService
             return true;
         } catch (\Exception $e) {
             Log::error('Subscription activation call failed: '.$e->getMessage(), ['transaction_id' => $transaction->id]);
+            return false;
+        }
+    }
+
+    /** Same shape as completeSubscription() — the only difference is which subscription-service endpoint gets called. */
+    private function completeUpgrade(Transaction $transaction): bool
+    {
+        $packageSlug = $transaction->metadata['package_slug'] ?? null;
+        if (! $packageSlug) {
+            Log::error('Checkout completion missing package_slug in transaction metadata.', ['transaction_id' => $transaction->id]);
+            return false;
+        }
+
+        $subscriptionUrl = rtrim((string) config('services.subscription_url'), '/');
+        $internalKey     = config('services.internal_key');
+
+        if (! $subscriptionUrl || ! $internalKey) {
+            Log::error('Upgrade activation skipped — subscription_url/internal_key not configured.', ['transaction_id' => $transaction->id]);
+            return false;
+        }
+
+        try {
+            $response = Http::withHeaders([
+                'X-Internal-Service-Key' => $internalKey,
+                'Accept'                 => 'application/json',
+            ])->timeout(20)->post("{$subscriptionUrl}/api/internal/subscriptions/activate-upgrade", [
+                'user_id'        => $transaction->user_id,
+                'package_slug'   => $packageSlug,
+                'transaction_id' => $transaction->id,
+                'currency'       => $transaction->currency,
+            ]);
+
+            if (! $response->successful()) {
+                return false;
+            }
+
+            $this->internal->createReceipt($transaction->user_id, (float) $transaction->amount, $transaction->currency, $transaction->id, 'subscription_upgrade');
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Upgrade activation call failed: '.$e->getMessage(), ['transaction_id' => $transaction->id]);
             return false;
         }
     }

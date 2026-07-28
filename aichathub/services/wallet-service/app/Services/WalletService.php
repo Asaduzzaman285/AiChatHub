@@ -33,9 +33,9 @@ class WalletService
      * a slow response even when the credit already landed server-side — without
      * this guard a retry double-credits the wallet.
      */
-    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null, bool $activateCreditBuffer = false): Wallet
+    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null, ?float $creditLimit = null): Wallet
     {
-        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId, $activateCreditBuffer) {
+        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId, $creditLimit) {
             /** @var Wallet $wallet */
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
 
@@ -53,11 +53,18 @@ class WalletService
                 }
             }
 
-            // Package buyers get a small grace buffer so a mid-cycle $0 balance
-            // doesn't hard-block a request — see WalletService::deduct(). Only
-            // activated on a real purchase, never for an unsubscribed user.
-            if ($activateCreditBuffer && (float) $wallet->credit_limit <= 0) {
-                $wallet->credit_limit = config('wallet.credit_buffer_default', 3.00);
+            // Package buyers get a grace buffer (see WalletService::deduct()) so a
+            // mid-request $0 balance doesn't hard-block a request — sized as a
+            // percentage of the package's price, computed by the caller
+            // (subscription-service knows which package; this service doesn't).
+            // Only ever raised, never lowered here: shrinking the ceiling while
+            // credit_balance is already negative under a higher limit (e.g. a
+            // downgrade) would violate the credit_balance >= -credit_limit DB
+            // constraint. A lower buffer takes effect once any debt is repaid
+            // naturally, not by force. $creditLimit is null for anything that
+            // isn't a subscription event (top-ups, refunds) — untouched then.
+            if ($creditLimit !== null) {
+                $wallet->credit_limit = max((float) $wallet->credit_limit, $creditLimit);
             }
 
             $balanceBefore = (float) $wallet->balance;

@@ -30,5 +30,7 @@ Route::middleware('auth.jwt')->group(function () {
     Route::get('/checkout/{sessionId}/verify', [CheckoutController::class, 'verify']);
 
     Route::get('/transactions',      [TransactionController::class, 'index']);
+    // Before {id} — otherwise "admin" would be captured as an id and 404 in show().
+    Route::get('/transactions/admin',[TransactionController::class, 'adminIndex'])->middleware('admin.gate');
     Route::get('/transactions/{id}', [TransactionController::class, 'show']);
 });

@@ -68,13 +68,33 @@ export default function PricingPage() {
     onSettled: () => setPendingSlug(null),
   })
 
+  // Upgrade charges the full new plan price immediately via a real gateway (card
+  // or bKash) — wallet is deliberately not an option here, unlike a fresh
+  // subscribe: wallet balance (topped up directly or granted as a plan
+  // allowance) is meant for AI-usage spending, not for self-funding an upgrade
+  // with credit that was itself a free perk. Downgrade never charges anything —
+  // it's scheduled for the next renewal, so it needs no payment_source at all.
   const changePlan = useMutation({
-    mutationFn: async ({ slug, direction }: { slug: string; direction: 'upgrade' | 'downgrade' }) => {
+    mutationFn: async (
+      { slug, direction, source }:
+      { slug: string; direction: 'upgrade'; source: 'card' | 'bkash' } |
+      { slug: string; direction: 'downgrade'; source?: undefined }
+    ) => {
       setPendingSlug(slug)
-      return apiClient.post(`/api/v1/subscription/${direction}`, { package_slug: slug })
+      return apiClient.post<{ checkout_url?: string; message?: string }>(`/api/v1/subscription/${direction}`, {
+        package_slug: slug,
+        ...(direction === 'upgrade' ? { payment_source: source, currency: 'USD' } : {}),
+      })
     },
-    onSuccess: (_res, variables) => {
-      toast.success(variables.direction === 'upgrade' ? 'Upgraded successfully.' : 'Downgraded successfully.')
+    onSuccess: (res, variables) => {
+      if (res.data.checkout_url) {
+        // Card/bKash upgrade — nothing applied yet, /billing/checkout-callback
+        // verifies the payment and applies the upgrade once the gateway confirms it.
+        window.location.href = res.data.checkout_url
+        return
+      }
+      toast.success(variables.direction === 'upgrade' ? 'Upgraded successfully.' : (res.data.message ?? 'Downgrade scheduled.'))
+      setChoosingSlug(null)
       queryClient.invalidateQueries({ queryKey: ['subscription'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
     },
@@ -85,6 +105,7 @@ export default function PricingPage() {
       )
       toast.error(message)
       if (ambiguous) {
+        setChoosingSlug(null)
         queryClient.invalidateQueries({ queryKey: ['subscription'] })
         queryClient.invalidateQueries({ queryKey: ['wallet'] })
       }
@@ -106,10 +127,19 @@ export default function PricingPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Pricing</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pay from your wallet balance if you have enough, or via Stripe (test mode) or bKash (sandbox) —
-          no real money moves.
+          First subscribing: pay from your wallet balance if you have enough, or via Stripe (test mode)
+          or bKash (sandbox). Upgrading always charges the new plan&apos;s full price via Stripe or
+          bKash, right away — not from wallet balance, which is reserved for AI usage. Downgrading takes
+          effect at your next renewal, with no change until then.
         </p>
       </div>
+
+      {subscription?.scheduled_package && (
+        <div className="rounded-md border border-border bg-accent/50 p-4 text-sm">
+          You&apos;re switching to <strong>{subscription.scheduled_package.name}</strong> on{' '}
+          {formatDate(subscription.renews_at)}. You keep your current plan&apos;s access until then.
+        </div>
+      )}
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading plans…</p>
@@ -187,14 +217,48 @@ export default function PricingPage() {
                         {isPending ? 'Subscribing…' : 'Subscribe'}
                       </Button>
                     )
+                  ) : isUpgrade ? (
+                    isChoosing ? (
+                      <div className="space-y-2">
+                        <Button
+                          className="w-full"
+                          disabled={isPending}
+                          onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'upgrade', source: 'card' })}
+                        >
+                          {isPending ? 'Upgrading…' : 'Pay with Card (Stripe)'}
+                        </Button>
+                        <Button
+                          className="w-full"
+                          variant="outline"
+                          disabled={isPending}
+                          onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'upgrade', source: 'bkash' })}
+                        >
+                          {isPending ? 'Upgrading…' : 'Pay with bKash'}
+                        </Button>
+                        <button
+                          type="button"
+                          className="w-full text-xs text-muted-foreground hover:text-foreground"
+                          disabled={isPending}
+                          onClick={() => setChoosingSlug(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <Button className="w-full" disabled={isPending} onClick={() => setChoosingSlug(pkg.slug)}>
+                        Upgrade — full price charged now
+                      </Button>
+                    )
                   ) : (
                     <Button
                       className="w-full"
-                      variant={isUpgrade ? 'primary' : 'outline'}
-                      disabled={isPending}
-                      onClick={() => changePlan.mutate({ slug: pkg.slug, direction: isUpgrade ? 'upgrade' : 'downgrade' })}
+                      variant="outline"
+                      disabled={isPending || subscription?.scheduled_package?.slug === pkg.slug}
+                      onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'downgrade' })}
                     >
-                      {isPending ? (isUpgrade ? 'Upgrading…' : 'Downgrading…') : isUpgrade ? 'Upgrade' : 'Downgrade'}
+                      {subscription?.scheduled_package?.slug === pkg.slug
+                        ? 'Switching here at renewal'
+                        : isPending ? 'Scheduling…' : 'Downgrade at renewal'}
                     </Button>
                   )}
                 </CardContent>

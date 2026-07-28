@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\Package;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class PackageController extends Controller
@@ -55,5 +57,37 @@ class PackageController extends Controller
             'features'    => json_decode($p->features, true),
             'model_access'=> json_decode($p->model_access, true),
         ]);
+    }
+
+    /**
+     * PATCH /packages/{slug} — admin-only (admin.gate). Update any subset of a
+     * package's editable fields. Not full CRUD (no create/delete) — just makes
+     * what already exists genuinely editable, including the new
+     * credit_buffer_percentage, rather than DB-edits-only.
+     */
+    public function update(Request $request, string $slug): JsonResponse
+    {
+        $package = Package::where('slug', $slug)->first();
+
+        if (! $package) {
+            return response()->json(['message' => 'Package not found.', 'error' => 'not_found'], 404);
+        }
+
+        $data = $request->validate([
+            'name'                      => 'sometimes|string|max:100',
+            'description'               => 'sometimes|nullable|string',
+            'monthly_price_usd'         => 'sometimes|numeric|min:0',
+            'monthly_price_bdt'         => 'sometimes|numeric|min:0',
+            'monthly_wallet_credit_usd' => 'sometimes|numeric|min:0',
+            'credit_buffer_percentage'  => 'sometimes|numeric|min:0|max:100',
+            'model_access'              => 'sometimes|array',
+            'features'                  => 'sometimes|array',
+            'is_active'                 => 'sometimes|boolean',
+            'sort_order'                => 'sometimes|integer',
+        ]);
+
+        $package->update($data);
+
+        return response()->json(['package' => $package->fresh()]);
     }
 }

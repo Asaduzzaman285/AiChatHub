@@ -140,9 +140,17 @@ class SubscriptionController extends Controller
 
     private function changePackage(Request $request, string $direction): JsonResponse
     {
-        $data = $request->validate([
-            'package_slug' => 'required|string|exists:packages,slug',
-        ]);
+        $rules = ['package_slug' => 'required|string|exists:packages,slug'];
+        if ($direction === 'upgrade') {
+            // Wallet is deliberately not an option here (unlike subscribe()) — wallet
+            // balance, whether topped up directly or granted as a plan allowance, is
+            // meant for AI-usage spending, not for self-funding a tier upgrade. Letting
+            // it pay for upgrades would let a user "upgrade" using credit that was
+            // itself a free perk, with no real new payment ever happening.
+            $rules['payment_source'] = 'required|in:card,bkash';
+            $rules['currency']       = 'nullable|string|size:3';
+        }
+        $data = $request->validate($rules);
 
         $userId  = $this->authUserId($request);
         $current = $this->subscriptions->getActive($userId);
@@ -166,29 +174,61 @@ class SubscriptionController extends Controller
             return response()->json(['message' => 'Target package is not a downgrade.', 'error' => 'not_a_downgrade'], 422);
         }
 
-        $transactionId   = (string) Str::uuid();
-        $oldWalletCredit = (float) $current->package->monthly_wallet_credit_usd;
+        return $direction === 'upgrade'
+            ? $this->doUpgrade($userId, $current, $newPackage, $data)
+            : $this->doDowngrade($userId, $current, $newPackage);
+    }
 
-        $subscription = $direction === 'upgrade'
-            ? $this->subscriptions->upgrade($current, $newPackage, $transactionId)
-            : $this->subscriptions->downgrade($current, $newPackage, $transactionId);
+    /**
+     * Upgrade charges the full new plan price immediately (not a difference —
+     * see HANDOFF for the reasoning) via a real payment gateway (card/bKash
+     * Checkout) — never wallet balance, deliberately (see the payment_source
+     * validation comment above). A free ($0) package needs no charge at all
+     * and applies immediately, same as subscribe()'s equivalent case.
+     */
+    private function doUpgrade(string $userId, UserSubscription $current, Package $newPackage, array $data): JsonResponse
+    {
+        $currency = $data['currency'] ?? 'USD';
+        $price    = (float) $newPackage->monthly_price_usd;
 
-        // Phase 1 simplification: no proration — an upgrade credits the wallet
-        // for the difference in monthly allowance; a downgrade credits nothing extra.
-        $creditDiff     = (float) $newPackage->monthly_wallet_credit_usd - $oldWalletCredit;
-        $walletCredited = $creditDiff > 0
-            ? $this->activation->creditWallet($userId, $creditDiff, $subscription->id, ucfirst($direction).' credit: '.$newPackage->name)
-            : false;
+        if ($price > 0) {
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade');
+
+            if (! $checkoutUrl) {
+                return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
+            }
+
+            return response()->json(['checkout_url' => $checkoutUrl]);
+        }
+
+        $transactionId  = (string) Str::uuid();
+        $subscription   = $this->subscriptions->applyUpgrade($current, $newPackage, $transactionId);
+        $walletCredited = $this->activation->creditWallet($userId, (float) $newPackage->monthly_wallet_credit_usd, $subscription->id, 'Upgrade credit: '.$newPackage->name, $newPackage->creditBufferAmount());
 
         return response()->json([
-            'message'         => ucfirst($direction).'d successfully.',
+            'message'         => 'Upgraded successfully.',
             'subscription'    => $this->formatSubscription($subscription->fresh('package')),
             'wallet_credited' => $walletCredited,
+        ], 201);
+    }
+
+    /**
+     * Downgrade never moves money or changes access immediately — it's just
+     * scheduled. The user keeps their current tier until the period they
+     * already paid for ends; ProcessRenewalJob applies it at the next renewal.
+     */
+    private function doDowngrade(string $userId, UserSubscription $current, Package $newPackage): JsonResponse
+    {
+        $subscription = $this->subscriptions->scheduleDowngrade($current, $newPackage);
+
+        return response()->json([
+            'message'      => "You'll switch to {$newPackage->name} on your next renewal.",
+            'subscription' => $this->formatSubscription($subscription->fresh(['package', 'scheduledPackage'])),
         ]);
     }
 
-    /** Asks Payment Service to open a Checkout Session (Stripe or bKash) for this package purchase. */
-    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $gateway): ?string
+    /** Asks Payment Service to open a Checkout Session (Stripe or bKash) for this package purchase or upgrade. */
+    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $gateway, string $type = 'subscription_purchase'): ?string
     {
         $paymentUrl  = rtrim(config('services.payment_url'), '/');
         $internalKey = config('services.internal_key');
@@ -207,7 +247,8 @@ class SubscriptionController extends Controller
                 'amount'       => $amount,
                 'currency'     => $currency,
                 'gateway'      => $gateway,
-                'description'  => 'Subscription: '.$package->name,
+                'type'         => $type,
+                'description'  => ($type === 'subscription_upgrade' ? 'Upgrade: ' : 'Subscription: ').$package->name,
                 'package_slug' => $package->slug,
             ]);
 
@@ -235,6 +276,12 @@ class SubscriptionController extends Controller
                 'monthly_price_usd' => (float) $subscription->package->monthly_price_usd,
                 'model_access'      => $subscription->package->model_access,
                 'features'          => $subscription->package->features,
+            ] : null,
+            // Set only when a downgrade is scheduled — takes effect at renews_at.
+            'scheduled_package' => $subscription->scheduled_package_id && $subscription->scheduledPackage ? [
+                'id'   => $subscription->scheduledPackage->id,
+                'name' => $subscription->scheduledPackage->name,
+                'slug' => $subscription->scheduledPackage->slug,
             ] : null,
         ];
     }

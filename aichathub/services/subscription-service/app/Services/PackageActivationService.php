@@ -45,7 +45,7 @@ class PackageActivationService
             (float) $package->monthly_wallet_credit_usd,
             $subscription->id,
             'Subscription credit: '.$package->name,
-            activateCreditBuffer: true,
+            creditLimit: $package->creditBufferAmount(),
         );
 
         $this->createInvoiceAfterResponse($userId, $subscription->id, $package, $currency, $transactionId);
@@ -53,8 +53,14 @@ class PackageActivationService
         return $subscription;
     }
 
-    /** Also called directly by SubscriptionController::changePackage() for upgrade/downgrade credit-diff adjustments. */
-    public function creditWallet(string $userId, float $amount, string $subscriptionId, string $description, bool $activateCreditBuffer = false): bool
+    /**
+     * Also called directly by SubscriptionController (upgrade/renewal credits).
+     * $creditLimit is the package's computed buffer amount (Package::creditBufferAmount())
+     * — only ever raises the wallet's ceiling, never lowers it (see WalletService::credit()).
+     * Pass null for credits that aren't tied to a specific package (there are none today,
+     * but keeps the contract honest for any future caller).
+     */
+    public function creditWallet(string $userId, float $amount, string $subscriptionId, string $description, ?float $creditLimit = null): bool
     {
         if ($amount <= 0) {
             return false;
@@ -73,12 +79,12 @@ class PackageActivationService
                 'X-Internal-Service-Key' => $internalKey,
                 'Accept'                 => 'application/json',
             ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/credit", [
-                'user_id'                => $userId,
-                'amount'                 => $amount,
-                'description'            => $description,
-                'reference_type'         => 'subscription',
-                'reference_id'           => $subscriptionId,
-                'activate_credit_buffer' => $activateCreditBuffer,
+                'user_id'        => $userId,
+                'amount'         => $amount,
+                'description'    => $description,
+                'reference_type' => 'subscription',
+                'reference_id'   => $subscriptionId,
+                'credit_limit'   => $creditLimit,
             ]);
 
             return $response->successful();

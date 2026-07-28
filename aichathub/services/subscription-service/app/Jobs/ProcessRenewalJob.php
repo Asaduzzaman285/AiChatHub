@@ -51,7 +51,7 @@ class ProcessRenewalJob implements ShouldQueue
         PaymentChargeService $charges,
         PackageActivationService $activation,
     ): void {
-        $subscription = UserSubscription::with('package')->find($this->subscriptionId);
+        $subscription = UserSubscription::with(['package', 'scheduledPackage'])->find($this->subscriptionId);
 
         // Cancelled, package-changed, or auto-renew turned off since this was
         // scheduled — nothing to do, not a failure.
@@ -59,8 +59,13 @@ class ProcessRenewalJob implements ShouldQueue
             return;
         }
 
-        $package = $subscription->package;
-        $price   = (float) $package->monthly_price_usd;
+        // A scheduled downgrade takes effect at this exact renewal — charge and
+        // credit based on the NEW (lower) package, not the one being renewed out
+        // of. renewSuccess() below performs the actual package_id switch once
+        // the charge succeeds.
+        $switchingTo = $subscription->scheduledPackage;
+        $package     = $switchingTo ?? $subscription->package;
+        $price       = (float) $package->monthly_price_usd;
 
         // Deterministic, not a fresh UUID per call — must stay stable across
         // any re-run of this exact (subscription, attempt) pair for
@@ -86,13 +91,13 @@ class ProcessRenewalJob implements ShouldQueue
         ]);
 
         $charged
-            ? $this->onSuccess($subscriptions, $activation, $subscription, $package, $transactionId)
+            ? $this->onSuccess($subscriptions, $activation, $subscription, $package, $transactionId, $switchingTo)
             : $this->onFailure($subscriptions, $subscription, $package);
     }
 
-    private function onSuccess(SubscriptionService $subscriptions, PackageActivationService $activation, UserSubscription $subscription, Package $package, string $transactionId): void
+    private function onSuccess(SubscriptionService $subscriptions, PackageActivationService $activation, UserSubscription $subscription, Package $package, string $transactionId, ?Package $switchingTo): void
     {
-        $subscriptions->renewSuccess($subscription);
+        $subscriptions->renewSuccess($subscription, $switchingTo);
 
         // Must use the per-cycle transactionId, not $subscription->id, as the credit
         // reference — creditWallet()'s idempotency guard keys on (subscription, credit)
@@ -104,6 +109,7 @@ class ProcessRenewalJob implements ShouldQueue
             (float) $package->monthly_wallet_credit_usd,
             $transactionId,
             'Renewal credit: '.$package->name,
+            $package->creditBufferAmount(),
         );
 
         $this->createInvoice($subscription, $package, $transactionId);

@@ -12,3 +12,6 @@ Route::get('/subscriptions/{userId}/can-access/{modelId}', [SubscriptionCheckCon
 
 // Called by Payment Service once a card-funded package purchase is verified paid.
 Route::post('/subscriptions/activate', [SubscriptionActivationController::class, 'activate']);
+
+// Called by Payment Service once a card/bKash-funded upgrade is verified paid.
+Route::post('/subscriptions/activate-upgrade', [SubscriptionActivationController::class, 'activateUpgrade']);

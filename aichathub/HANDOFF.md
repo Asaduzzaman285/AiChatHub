@@ -898,6 +898,118 @@ swap:**
 - Both: point `FRONTEND_URL` (payment-service *and* the new `api-gateway` CORS config) at the real
   production domain, not `localhost`.
 
+## 2026-07-27 Session — Real upgrade/downgrade proration policy (replaces the old "no proration" placeholder)
+
+### The problem, found by working through real numbers with the user
+`SubscriptionController::changePackage()` had a documented "Phase 1 simplification: no proration" —
+upgrades never charged anything, and the wallet-credit adjustment was a difference between the two
+packages' *nominal* allowance amounts, not anything tied to what the user actually had left. Traced
+live: a user with $5 remaining after partial usage who upgrades Basic→Standard ended up with $15 —
+not a number anyone could predict or explain. Downgrades reset the billing cycle immediately with zero
+compensation.
+
+### Policy landed on (Netflix/Spotify-style, not Stripe-style proration — see session notes for the reasoning)
+- **Upgrade**: charge the **full new plan's price** immediately (not a difference) — via a real
+  payment gateway (card or bKash) **only**. Credit the wallet with the **full new plan's allowance**,
+  added on top of whatever's already there — never clawed back, since the wallet also holds direct
+  top-up money indistinguishable from plan allowance at the ledger level. Applied **immediately**: tier
+  switches now, cycle resets to a fresh 30 days, and the *next* auto-renewal bills at the new price.
+- **Downgrade**: **not applied immediately**. User keeps current tier's access until the already-paid
+  period ends. At the *next* renewal, the plan actually switches and future billing is at the lower
+  price. No refund, no immediate change.
+- **Follow-up correction, same session**: upgrade initially also allowed paying from wallet balance
+  (mirroring `subscribe()`'s three-way wallet/card/bkash choice). Removed — wallet balance (whether
+  topped up directly or granted as a plan allowance) is meant for AI-usage spending, not for
+  self-funding a tier upgrade. Letting it pay for upgrades would let a user "upgrade" using credit that
+  was itself a free perk, with no real new payment ever happening. `payment_source` for upgrade is now
+  `card|bkash` only — `wallet` remains valid for the *first* `subscribe()`, which is unaffected.
+
+### What shipped
+- **`user_subscriptions.scheduled_package_id`** — already existed in the schema, migrated, in the
+  model's `$fillable`, completely unused by any code until now. Exactly the field "downgrade takes
+  effect at next renewal" needed — no migration required.
+- `SubscriptionService::applyUpgrade()` / `scheduleDowngrade()` (replace the old `upgrade()`/
+  `downgrade()`) — `services/subscription-service/app/Services/SubscriptionService.php`.
+- `renewSuccess()` extended with an optional `$switchToPackage` param — when `ProcessRenewalJob` finds
+  a `scheduled_package_id` set, it charges/credits based on that package instead of the current one,
+  and `renewSuccess()` performs the actual package_id switch + clears the schedule in the same
+  transaction once the charge succeeds.
+- `SubscriptionController::doUpgrade()`/`doDowngrade()` (replaces the old shared `changePackage()`
+  body) — upgrade now requires `payment_source` (wallet/card/bkash) like `subscribe()` does; downgrade
+  takes only `package_slug`, no payment involved at all.
+- New internal endpoint `POST /internal/subscriptions/activate-upgrade`
+  (`SubscriptionActivationController::activateUpgrade()`) — mirrors the existing `activate()`'s
+  deferred-activation shape for the card/bKash upgrade path (Checkout Session → verify/webhook →
+  this endpoint), since a card-funded upgrade can't apply synchronously any more than a fresh
+  card-funded subscribe can.
+- payment-service: `PaymentInternalController::createCheckoutSession()` now accepts a `type`
+  (`subscription_purchase` | `subscription_upgrade`) instead of hardcoding it — the
+  `CreatesCheckoutSessions` trait already accepted `$type` as a parameter, so this was the only gap.
+  `CheckoutCompletionService` gained a `completeUpgrade()` arm in its completion `match()`, calling the
+  new activate-upgrade endpoint instead of `activate()`.
+- Frontend `pricing/page.tsx` — upgrade reuses the existing wallet/card/bkash payment-source picker UI
+  (same one built for first-time subscribe); downgrade is a single confirm button, no picker. A banner
+  shows "You're switching to {package} on {date}" when a downgrade is scheduled
+  (`subscription.scheduled_package`, new field on the `GET /subscription` response).
+
+### Verified live, including the full renewal-time downgrade application
+- Wallet-funded upgrade Basic→Standard: confirmed via ledger — a real $20 debit (`Upgrade: Standard`)
+  and a real $20 credit (`Upgrade credit: Standard`) as two independent entries, not a single opaque
+  number. (Also incidentally re-confirmed `WalletService::deduct()`'s existing "credit buffer" overdraft
+  fallback is working as designed — not a bug, just something to remember exists when reading ledger
+  entries that don't match balance arithmetic at first glance.)
+- Downgrade Standard→Basic: confirmed `scheduled_package_id` set, `package_id`/`renews_at`/wallet
+  completely untouched, user still has Standard's access.
+- Forced a renewal (`renewals:process`, backdated `renews_at`) against a subscription with a pending
+  scheduled downgrade: confirmed it charged **Basic's** $10 (not Standard's $20), and on success
+  `package_id` switched to Basic, `scheduled_package_id` cleared, `renews_at` reset — the full
+  scheduled-downgrade-applies-at-renewal path works end-to-end.
+- bKash-funded upgrade: confirmed a real sandbox Checkout Session is created with
+  `transactions.type = subscription_upgrade` and the right `package_slug` in metadata — the completion
+  wiring is structurally identical to the already-verified `subscription_purchase`/`wallet_topup` paths,
+  not separately fully replayed end-to-end this pass.
+- Gotcha hit again during this pass, already documented but worth re-flagging: the
+  `subscription-queue-worker` container needed an explicit restart after editing `ProcessRenewalJob`/
+  `SubscriptionService` — the running `queue:work` daemon doesn't pick up code changes on its own.
+
+## 2026-07-28 Session — Admin-auth foundation, per-package credit buffer %, transaction filtering
+
+### Context
+Two features the user wanted turned into real plans after earlier analysis-only discussions: the
+per-package credit-buffer-percentage idea (replacing the flat $3-for-everyone default), and filtering
+on list endpoints for admin-portal use. Both needed the same missing piece first: there was no
+admin-auth mechanism anywhere in the codebase — `admin_users` was a real, migrated table (role,
+permissions, is_active, FK to users) that nothing read or wrote, and no middleware checked it.
+
+### Admin auth — reuses the existing `X-User-Id` pattern, not a new mechanism
+- `AdminUser` model (NEW, `services/auth-service/app/Models/AdminUser.php`) over the pre-existing table.
+- `User::getJWTCustomClaims()` gains `'is_admin' => AdminUser::where('user_id', $this->id)->where('is_active', true)->exists()` — computed fresh at every login/refresh, same place `email`/`status`/`name` already live.
+- `api-gateway`'s `JwtGatewayMiddleware` forwards a new `X-Is-Admin` header alongside the existing `X-User-*` ones.
+- `subscription-service` + `payment-service`: each service's `JwtAuthMiddleware` now captures `X-Is-Admin` into an `auth_is_admin` request attribute; new `AdminGateMiddleware` (alias `admin.gate`) 403s unless it's true; each `Controller.php` gained an `isAdmin(Request $request)` helper mirroring `authUserId()`.
+- No api-gateway routing changes needed — existing proxy routes are already generic wildcards per resource, so new admin sub-routes on the same prefix (`/packages/{slug}`, `/transactions/admin`) were already reachable through the gateway; gating happens downstream.
+- Known staleness, acceptable for Phase 1: revoking admin status only takes effect on next login/token-refresh (24h TTL) — same class of staleness the `status` claim already has.
+
+### Per-package credit buffer percentage
+- New migration `0002_add_credit_buffer_percentage_to_packages.php` — `packages.credit_buffer_percentage` decimal(5,2), default `30.00` (matches the old flat $3 on the $10 Basic package, so existing users see no behavior change).
+- `Package::creditBufferAmount()` — `round(monthly_price_usd * (credit_buffer_percentage / 100), 2)`.
+- New admin-gated `PATCH /packages/{slug}` (`PackageController::update()`) — any subset of name/description/prices/wallet-credit/buffer%/model_access/features/is_active/sort_order.
+- `WalletService::credit()`'s old `bool $activateCreditBuffer` param is now `?float $creditLimit = null`. When given: `credit_limit = max(current, $creditLimit)` — **only ever raises, never lowers**, since shrinking the ceiling while `credit_balance` is already negative under a higher limit could violate the DB `CHECK (credit_balance >= -credit_limit)` constraint. `WalletInternalController`'s credit endpoint accepts `credit_limit` (nullable float) instead of the old `activate_credit_buffer` boolean. `config('wallet.credit_buffer_default')` removed — no longer a runtime fallback.
+- All 4 call sites updated to pass `$package->creditBufferAmount()` instead of `true`: `PackageActivationService::activate()`, `SubscriptionController::doUpgrade()`, `SubscriptionActivationController::activateUpgrade()`, `ProcessRenewalJob::onSuccess()`.
+
+### Transaction filtering
+- `TransactionController::index()` (user-scoped, existing) gains optional query filters — `status`, `type`, `gateway`, `from`/`to` (date range on `created_at`) — via a shared `applyFilters()` helper. Pagination unchanged.
+- New `TransactionController::adminIndex()` — same filters plus optional `user_id` (omit to span everyone). Admin-gated.
+- New route `GET /transactions/admin`, registered before `GET /transactions/{id}` so `{id}` doesn't swallow the literal `admin` segment.
+- No filtering existed anywhere else in the codebase before this (confirmed by search) — every other list endpoint remains pagination-only for now, scoped deliberately to transactions this pass.
+
+### Verified live
+- `is_admin` claim flips correctly: `false` for a normal user, `true` after inserting an `admin_users` row and re-logging-in; `X-Is-Admin` header confirmed reaching both services.
+- `PATCH /packages/basic` → 403 as non-admin, 200 as admin, `credit_buffer_percentage` actually changed in the DB.
+- `credit_limit` computed correctly via the internal wallet endpoint — Standard's 40% buffer on its price landed as exactly $8, not the old flat $3.
+- "Only raise, never lower" confirmed: crediting with a lower `creditLimit` after a higher one had already been set left `credit_limit` unchanged.
+- User-scoped `GET /transactions?gateway=bkash`, `?status=completed` narrowed results correctly; unfiltered behavior unchanged.
+- `GET /transactions/admin` → 403 as non-admin; 200 as admin, spanning multiple users' transactions and respecting the same filters plus `user_id`.
+
 ---
 
 ## How to Start Everything Tomorrow
@@ -1247,7 +1359,9 @@ Week 3-4: Subscription + Payment
 ⬜ Stripe webhook path — code-complete AND now has a worker to actually run it; genuine
   Stripe-CLI-forwarded delivery still needs `stripe listen` (requires the CLI + interactive login,
   someone with the real Stripe account) to confirm end-to-end — not required for the feature to work
-⬜ upgrade()/downgrade() have no proration logic (documented simplification)
+✅ Real upgrade/downgrade proration policy — 2026-07-27, verified live including the full
+  renewal-time downgrade application
+✅ Per-package credit buffer percentage (replaces flat $3 default) — 2026-07-28, verified live (see session notes above)
 
 Week 5-6: AI Chat MVP                      ← DONE (Gemini + DeepSeek; more polish added 2026-07-21)
 ✅ AI Gateway: chat streaming — verified live with real Gemini 2.5 Flash, Session 2 (2026-07-19)
@@ -1283,18 +1397,21 @@ Week 9-10: Polish                          ← IN PROGRESS
 ✅ Rate limiting (api-gateway, 4 tiers) — 2026-07-23, verified live (429s after the 10th rapid login)
 ✅ CORS hardening (api-gateway, scoped deliberately to just that service) — 2026-07-23
 ✅ Frontend route-protection middleware (`src/middleware.ts` + marker cookie) — 2026-07-23, verified live
-⬜ Admin panel basics — explicitly deferred by the user ("build from scratch later, focus on the rest")
+✅ Admin-auth foundation (`is_admin` JWT claim → `X-Is-Admin` header → `admin.gate` middleware) — 2026-07-28, verified live
+⬜ Admin panel itself — auth foundation + 2 admin-gated endpoints exist (`PATCH /packages/{slug}`,
+  `GET /transactions/admin`); frontend pages + user-listing endpoint still not built — see priority list
 ⬜ End-to-end smoke testing in an actual browser — in progress organically: this whole session's real
   bugs (chat/compare crash, file-upload proxy hang, currency inconsistency, config load-order bug, a
   route-splitting proxy bug) all came from actually exercising features, not from reading code
 ```
 
-**Overall Phase 1: ~92% complete.** Every core money/chat flow (register → subscribe → wallet →
-top-up → invoicing → real AI chat) is built AND verified end-to-end against the live stack, including
-genuine Stripe **and** bKash Checkout payment experiences, a full password-reset/account-security flow,
-and now real rate limiting, CORS, and edge-level route protection. What's left is genuinely the polish
-tier: admin panel (deferred), PDF downloads, remaining provider keys, and continuing the real-usage
-testing pass — still the single highest-yield way left to find what's broken.
+**Overall Phase 1: ~95% complete.** Every core money/chat flow (register → subscribe → upgrade/downgrade
+→ wallet → top-up → invoicing → real AI chat) is built AND verified end-to-end against the live stack,
+including genuine Stripe **and** bKash Checkout payment experiences, a real (not placeholder)
+upgrade/downgrade billing policy, a full password-reset/account-security flow, real rate limiting,
+CORS, and edge-level route protection, and a working admin-auth foundation. What's left: the admin
+panel's actual pages/endpoints (auth foundation done, UI not started), PDF downloads, remaining
+provider keys, and continuing the real-usage testing pass.
 
 ### Priority order for what's left (see also the shareable work-distribution doc)
 1. ~~Wallet `deduct()`/`refund()` idempotency~~ — ✅ done 2026-07-23
@@ -1303,10 +1420,19 @@ testing pass — still the single highest-yield way left to find what's broken.
 4. ~~Real bKash Checkout Sessions~~ — ✅ done 2026-07-23, verified live in bKash's real sandbox
 5. ~~Rate limiting, CORS, frontend route middleware, bKash reconciliation, Stripe webhook infra~~ —
    ✅ done 2026-07-23, all verified live
-6. **Keep doing real click-through testing** — every one of this session's real bugs came from actually
-   using features, not from reading code; still the best bug-per-minute ratio of anything left ← NEXT
-7. Lower priority: admin panel (deferred), invoice PDF, remaining provider keys, upgrade/downgrade
-   proration, an actual `stripe listen` session to confirm the webhook backup path end-to-end.
+6. ~~Real upgrade/downgrade proration policy~~ — ✅ done 2026-07-27, verified live including the
+   renewal-time downgrade application
+7. ~~Admin-auth foundation + per-package credit buffer % + transaction filtering~~ — ✅ done 2026-07-28,
+   all verified live (see "2026-07-28 Session" notes above)
+8. **Admin panel itself** — explicitly confirmed in Phase 1 scope (`PHASE1_DEV_GUIDE.md`: "Basic admin
+   panel — user list, transaction viewer"). Auth foundation and 2 admin-gated endpoints
+   (`PATCH /packages/{slug}`, `GET /transactions/admin`) exist; still needed: a user-listing backend
+   endpoint (auth-service, admin-gated) and real frontend pages under the existing empty
+   `(admin)/models`, `(admin)/transactions`, `(admin)/users` route folders. Next real build item ← NEXT
+9. **Keep doing real click-through testing** — every one of this session's real bugs came from actually
+   using features, not from reading code; still the best bug-per-minute ratio of anything left
+10. Lower priority: invoice PDF, remaining provider keys, an actual `stripe listen` session to confirm
+   the Stripe webhook backup path end-to-end.
 
 ---
 
@@ -1338,7 +1464,10 @@ testing pass — still the single highest-yield way left to find what's broken.
 - [x] SubscriptionController — current, subscribe, upgrade, downgrade, cancel, history ← DONE 2026-07-19
 - [x] SubscriptionHistory / RenewalAttempt models ← DONE 2026-07-19 (were missing, `subscribe()` would have crashed)
 - [x] config/services.php (wallet_url, billing_url, internal_key, payment_url, subscription_url) ← DONE 2026-07-19, extended 2026-07-21/23
-- [x] payment_source: wallet|card on subscribe() ← DONE 2026-07-21
+- [x] payment_source: wallet|card|bkash on subscribe() and upgrade() ← DONE 2026-07-21, extended 2026-07-27
+- [x] Real upgrade/downgrade proration policy — `applyUpgrade()`/`scheduleDowngrade()`,
+      `activate-upgrade` internal endpoint, `scheduled_package_id`-aware renewals ← DONE 2026-07-27,
+      verified live including the full renewal-time downgrade application (see session notes above)
 - [x] PackageActivationService — shared activation logic for both the synchronous wallet path and the
       webhook/verify-triggered card path ← DONE 2026-07-23
 - [x] SubscriptionActivationController — POST /internal/subscriptions/activate, called by payment-service

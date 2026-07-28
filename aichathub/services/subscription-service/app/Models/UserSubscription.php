@@ -35,6 +35,11 @@ class UserSubscription extends Model
         return $this->belongsTo(Package::class);
     }
 
+    public function scheduledPackage()
+    {
+        return $this->belongsTo(Package::class, 'scheduled_package_id');
+    }
+
     public function history()
     {
         return $this->hasMany(SubscriptionHistory::class, 'subscription_id');

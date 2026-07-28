@@ -38,9 +38,14 @@ class PaymentInternalController extends Controller
             'description'  => 'required|string',
             'package_slug' => 'required|string',
             'gateway'      => 'nullable|in:stripe,bkash',
+            // Distinguishes a fresh purchase from an upgrade on an existing
+            // subscription — CheckoutCompletionService routes each to a
+            // different subscription-service internal endpoint on completion.
+            'type'         => 'nullable|in:subscription_purchase,subscription_upgrade',
         ]);
 
         $gateway = $data['gateway'] ?? 'stripe';
+        $type    = $data['type'] ?? 'subscription_purchase';
 
         if ($gateway === 'bkash' && $data['currency'] !== 'USD') {
             return response()->json(['error' => 'bKash purchases must be specified in USD (converted to BDT automatically).'], 422);
@@ -50,7 +55,7 @@ class PaymentInternalController extends Controller
             ? $this->beginBkashCheckout(
                 $this->bkash,
                 $data['user_id'],
-                'subscription_purchase',
+                $type,
                 (float) $data['amount'],
                 $data['description'],
                 ['package_slug' => $data['package_slug']],
@@ -58,7 +63,7 @@ class PaymentInternalController extends Controller
             : $this->beginCheckout(
                 $this->stripe,
                 $data['user_id'],
-                'subscription_purchase',
+                $type,
                 (float) $data['amount'],
                 $data['currency'],
                 $data['description'],
