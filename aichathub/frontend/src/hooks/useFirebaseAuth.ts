@@ -15,6 +15,9 @@ interface AuthResult {
     avatar_url:          string | null
     preferred_currency:  string
     status:              string
+    is_admin:            boolean
+    admin_role:          string | null
+    admin_permissions:   string[]
   }
   is_new_user: boolean
 }

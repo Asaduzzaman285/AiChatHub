@@ -1,5 +1,10 @@
 <?php
 
+use App\Http\Controllers\V1\Admin\AdminUserController;
+use App\Http\Controllers\V1\Admin\AuditLogController;
+use App\Http\Controllers\V1\Admin\DashboardController;
+use App\Http\Controllers\V1\Admin\RoleController;
+use App\Http\Controllers\V1\Admin\UserManagementController;
 use App\Http\Controllers\V1\Auth\FirebaseAuthController;
 use App\Http\Controllers\V1\Auth\RegisterController;
 use App\Http\Controllers\V1\Auth\LoginController;
@@ -40,4 +45,27 @@ Route::middleware('auth.jwt')->group(function () {
     Route::post('/auth/social/google/link', [SocialAccountController::class,'linkGoogle']);
     Route::delete('/auth/social/google',    [SocialAccountController::class,'unlinkGoogle']);
     Route::post('/auth/password/set',       [PasswordResetController::class,'setPassword']);
+
+    // Admin — nested under /auth (not a bare /admin prefix) so it's reachable
+    // through api-gateway's existing /auth/{path?} wildcard, which only proxies
+    // to auth-service; a top-level /admin/* path would match no proxy route at
+    // all. Each route requires its own permission (see the roles table).
+    Route::prefix('auth/admin')->group(function () {
+        Route::get('/dashboard',   [DashboardController::class, 'index'])->middleware('admin.gate:dashboard.view');
+
+        Route::get('/admins',      [AdminUserController::class, 'index'])->middleware('admin.gate:admins.manage');
+        Route::post('/admins',     [AdminUserController::class, 'store'])->middleware('admin.gate:admins.manage');
+        Route::patch('/admins/{id}', [AdminUserController::class, 'update'])->middleware('admin.gate:admins.manage');
+
+        Route::get('/roles',        [RoleController::class, 'index'])->middleware('admin.gate:admins.manage');
+        Route::post('/roles',       [RoleController::class, 'store'])->middleware('admin.gate:admins.manage');
+        Route::patch('/roles/{id}', [RoleController::class, 'update'])->middleware('admin.gate:admins.manage');
+        Route::delete('/roles/{id}', [RoleController::class, 'destroy'])->middleware('admin.gate:admins.manage');
+
+        Route::get('/users',                 [UserManagementController::class, 'index'])->middleware('admin.gate:users.view');
+        Route::post('/users/{id}/suspend',   [UserManagementController::class, 'suspend'])->middleware('admin.gate:users.suspend');
+        Route::post('/users/{id}/unsuspend', [UserManagementController::class, 'unsuspend'])->middleware('admin.gate:users.suspend');
+
+        Route::get('/audit-logs', [AuditLogController::class, 'index'])->middleware('admin.gate:audit_logs.view');
+    });
 });

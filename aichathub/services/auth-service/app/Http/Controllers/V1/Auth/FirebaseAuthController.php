@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V1\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\AdminUser;
 use App\Models\SocialAccount;
 use App\Models\User;
 use App\Services\JwtService;
@@ -142,6 +143,11 @@ class FirebaseAuthController extends Controller
         // 6. Issue our own JWT pair
         $tokens = $this->jwtService->issueTokens($user);
 
+        // Same admin_users lookup as User::getJWTCustomClaims()/LoginController::me()
+        // — without this, an admin signing in via Google would have is_admin missing
+        // from the response the frontend uses to decide where to redirect them.
+        $admin = AdminUser::where('user_id', $user->id)->where('is_active', true)->first();
+
         return response()->json(array_merge($tokens, [
             'user' => [
                 'id'                 => $user->id,
@@ -150,6 +156,9 @@ class FirebaseAuthController extends Controller
                 'avatar_url'         => $user->avatar_url,
                 'preferred_currency' => $user->preferred_currency,
                 'status'             => $user->status,
+                'is_admin'           => (bool) $admin,
+                'admin_role'         => $admin?->role,
+                'admin_permissions'  => $admin?->permissions ?? [],
             ],
             'is_new_user' => ! $user->wasRecentlyCreated ? false : true,
         ]));

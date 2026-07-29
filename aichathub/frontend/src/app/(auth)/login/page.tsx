@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
+import { postLoginPath } from '@/lib/post-login-redirect'
 import type { AuthTokens, User } from '@/types'
 
 const loginSchema = z.object({
@@ -20,12 +21,16 @@ type LoginForm = z.infer<typeof loginSchema>
 
 export default function LoginPage() {
   const router = useRouter()
-  const { setAuth, isAuthenticated } = useAuthStore()
+  const { setAuth, isAuthenticated, user } = useAuthStore()
   const [serverError, setServerError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (isAuthenticated) router.replace('/chat')
-  }, [isAuthenticated, router])
+    // `user` may still be null here even when isAuthenticated is true — zustand-persist
+    // only persists tokens across a reload, not the profile (see auth-store.ts's
+    // partialize), so this only knows to route an admin straight to /admin when the
+    // profile happens to already be in memory (e.g. navigating within the app).
+    if (isAuthenticated) router.replace(postLoginPath(user))
+  }, [isAuthenticated, user, router])
 
   const {
     register,
@@ -44,7 +49,7 @@ export default function LoginPage() {
       })
 
       setAuth(user, tokens.access_token, tokens.refresh_token)
-      router.push('/chat')
+      router.push(postLoginPath(user))
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
       setServerError(msg ?? 'Login failed. Please check your credentials.')

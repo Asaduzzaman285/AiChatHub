@@ -1012,6 +1012,338 @@ permissions, is_active, FK to users) that nothing read or wrote, and no middlewa
 
 ---
 
+## 2026-07-29 Session — Real RBAC (roles + permissions), audit logging, and per-module admin endpoints
+
+### Context
+Phase L's `is_admin` was a binary superuser gate — any admin could do everything. The user supplied a
+spec (Platform Administrator / Finance Administrator / Customer Support roles, permission-scoped
+dashboards, per-module filtering) and asked whether the app already supported real RBAC before building
+anything. Investigation found the schema was already built for this and never wired up:
+`admin_users.role` (varchar) + `admin_users.permissions` (jsonb) — migrated, unused; `audit_logs` table
+in auth-service — migrated, unused; `spatie/laravel-permission` — a composer dependency, explicitly
+disabled (`dont-discover`), never migrated. Decided (with the user) to build RBAC on the existing
+`admin_users` columns rather than wire up Spatie — permissions must be forwarded across microservices
+via JWT/headers regardless of which package manages them locally in auth-service, so Spatie wouldn't
+have simplified the cross-service part, and it would've meant new tables for something that already had
+a working, if dormant, representation. Also found two already-built-but-never-exposed pieces reused
+here rather than rebuilt: `Internal\UserController@suspend/unsuspend` (auth-service) and
+`Internal\PaymentInternalController@refund` (payment-service, real Stripe/bKash branching).
+
+### RBAC design
+Permissions (dot-namespaced strings like `payments.refund`, `wallet.adjust`, `users.suspend`) are the
+source of truth checked at request time; `role` is only a label + creation-time template
+(`services/auth-service/config/admin_roles.php`) used to populate `admin_users.permissions` when an
+admin is created or their role changes — never re-consulted at authorization time, so a template change
+doesn't silently alter an existing admin's actual grants. `chat_logs.view` is deliberately absent from
+every role's default template — Customer Support's chat-history access is "where permission is granted"
+per the spec, not a default.
+
+### Claim → header → middleware chain
+- `User::getJWTCustomClaims()` (auth-service) now also emits `admin_id`, `admin_role`,
+  `admin_permissions` alongside the existing `is_admin`.
+- `JwtGatewayMiddleware` (api-gateway) forwards three more headers: `X-Admin-Id`, `X-Admin-Role`,
+  `X-Admin-Permissions` (JSON-encoded array).
+- Every other service's `JwtAuthMiddleware` captures these into `auth_admin_id`/`auth_admin_role`/
+  `auth_admin_permissions` request attributes (wallet-service, ai-gateway-service, and chat-service
+  needed this added from scratch — only subscription-service and payment-service had any of this
+  infrastructure from Phase L).
+- Every `AdminGateMiddleware` gained an optional parameter: `admin.gate:payments.refund` 403s unless the
+  admin has `'*'` or that exact string in their permissions; bare `admin.gate` keeps Phase L's
+  any-admin behavior unchanged.
+- auth-service's own `AdminGateMiddleware` is a different shape than the other 5 — it IS the source of
+  truth for admin status, so instead of trusting a forwarded header it queries `admin_users` directly
+  against the real `$request->user()` Tymon resolves, matching how `auth.jwt` already works there.
+
+### Audit logging
+- New `POST /internal/audit-logs` (auth-service) writes to the existing `audit_logs` table via a new
+  `AuditLog` model — auth-service writes directly, every other service posts to this endpoint through a
+  new small `AuditLogClient` class (mirrors the existing `AuthServiceClient` pattern) rather than calling
+  it inline, so five nearly-identical HTTP client classes replace five nearly-identical inline blocks.
+  Best-effort — a logging failure never blocks the admin action itself.
+- Wired into every sensitive write this session added: package edits, refunds, wallet adjustments,
+  suspend/unsuspend, admin role/permission changes.
+- New `GET /auth/admin/audit-logs` — filters on `admin_user_id`, `resource_type`, `action`, date range,
+  `ip_address`. No `status` column exists on `audit_logs` (every row is a request that was made, not
+  tagged success/fail) — not adding one, per the user's explicit "no new columns for filtering" instruction.
+
+### Admin management + per-module endpoints (all filters use only pre-existing columns)
+- **auth-service**: `AdminUserController` (`GET/POST /auth/admin/admins`, `PATCH /auth/admin/admins/{id}`)
+  — the "manage administrative roles" responsibility, gated to `admins.manage`. `UserManagementController`
+  — `GET /auth/admin/users` (filters: name/email/phone ILIKE, `status`, `email_verified_at`,
+  `last_login_at` range, `created_at` range — no `country` filter, that column doesn't exist),
+  `POST /auth/admin/users/{id}/suspend`/`unsuspend` (reuses the exact logic already in
+  `Internal\UserController`, now genuinely admin-reachable instead of internal-only). `DashboardController`
+  — user counts/registrations. `AuditLogController` as above.
+- **subscription-service**: `GET /subscription/admin` (filters: `status`, `renews_at` range,
+  `auto_renew`, package slug join, `user_id` — no billing-cycle/expiration filters, neither concept
+  exists), `GET /subscription/admin/dashboard`. `PATCH /packages/{slug}` tightened from bare
+  `admin.gate` to `admin.gate:packages.manage`.
+- **payment-service**: new `RefundService` (`app/Services/RefundService.php`) extracted from
+  `Internal\PaymentInternalController@refund`'s Stripe/bKash branching, so the new
+  `POST /transactions/{id}/refund` (Finance Administrator's "process refunds") and the pre-existing
+  internal reversal path share one implementation instead of two. `GET /transactions/admin/dashboard`.
+  `GET /transactions/admin` tightened to `admin.gate:payments.view`.
+- **wallet-service**: had zero admin infrastructure before this session — built from scratch
+  (`JwtAuthMiddleware`, new `AdminGateMiddleware`, `Controller.php` helpers, `bootstrap/app.php` alias).
+  `WalletService::credit()`/`deduct()` gained an optional `string $type` param (defaults to the existing
+  `'credit'`/`'debit'`) — the idempotency check and the written ledger row both use it, so
+  `type=admin_adjustment` (already a documented-but-unused value in `wallet_ledger_entries.type`) tags
+  admin-initiated changes distinctly, reusing every bit of existing balance/credit-buffer logic rather
+  than adding a parallel code path. `GET /wallet/admin/ledger` (filters: `user_id`, `type`, amount range,
+  date range, `reference_type`/`reference_id`), `POST /wallet/admin/{userId}/adjust`,
+  `GET /wallet/admin/dashboard`.
+- **ai-gateway-service**: also had zero admin infrastructure — same from-scratch build. New `UsageLog`
+  and `CircuitBreakerState` Eloquent models over tables that existed but were only ever touched via raw
+  `DB::table()`/never queried at all, respectively. `GET /models/admin/usage-logs` (filters: `user_id`,
+  provider/model join, `status`, token range, `duration_ms` range, date range).
+  `GET /models/admin/dashboard` — its "AI provider status" comes straight from `circuit_breaker_state`
+  (closed/open/half_open), a real existing health signal, not anything new.
+- **chat-service**: also had zero admin infrastructure — same from-scratch build.
+  `GET /sessions/admin/users/{userId}` + `GET /sessions/admin/{sessionId}/messages`, read-only, gated to
+  `chat_logs.view` (not in any default template — see RBAC design above).
+
+### Gateway-routing gotcha, found and fixed mid-build
+api-gateway's proxy routes are fixed per-resource-prefix wildcards (`/wallet/{path?}` → wallet-service,
+`/packages/{path?}` → subscription-service, etc.), never a generic per-service passthrough. Every new
+admin route was initially written under a bare `/admin/...` prefix, which matches **no** proxy route at
+all — would have 404'd for every client going through the gateway despite working fine in direct
+service-to-service testing. Fixed by nesting every admin route under an existing proxied prefix instead
+of touching api-gateway at all: `/auth/admin/...`, `/subscription/admin/...`,
+`/transactions/admin/dashboard`, `/wallet/admin/...`, `/models/admin/...`, `/sessions/admin/...`.
+`/transactions/admin` and `/transactions/{id}/refund` needed no change — already under an existing prefix.
+
+### Verified live
+- Bootstrapped a `platform_admin` via direct DB insert (only way to create the first admin — every
+  `/admin/admins` route requires `admins.manage`, which nothing grants until one exists), then created a
+  `finance_admin` and a `support` admin through the real `POST /auth/admin/admins` API — both landed
+  with `permissions` exactly matching their role's template.
+- Decoded JWTs for all three confirmed `admin_id`/`admin_role`/`admin_permissions` claims correct.
+- Permission checks confirmed both directions: finance_admin → 403 on `packages.manage`
+  (`PATCH /packages/basic`), 200 on `payments.view` (`GET /transactions/admin`); support → 200 on
+  `users.suspend`, 403 on `payments.refund`; a genuinely non-admin user → 403 on every admin route tried.
+- `audit_logs` confirmed capturing real old/new-value diffs for a wallet adjustment and a refund
+  (`status: completed→refunded`, `refunded_at` populated), joined to the acting admin's name/email.
+- Wallet admin-adjust confirmed both directions (credit and debit), tagged `type=admin_adjustment` in
+  the ledger; "only raise, never lower" on `credit_limit` re-confirmed still holds after the `$type`
+  param addition to `credit()`.
+- The new refund endpoint executed a **real** Stripe test-mode refund against a live sandbox
+  PaymentIntent (`pi_3TwH2u9...`) — transaction flipped to `status: refunded` with a real
+  `refunded_at`, not a mocked call.
+- Every new filtered listing endpoint (`/auth/admin/users?status=active`,
+  `/wallet/admin/ledger?type=admin_adjustment`, `/subscription/admin?status=active`,
+  `/models/admin/usage-logs`) exercised with real filters, correct narrowing confirmed, pagination
+  envelope matches the existing `TransactionController` shape.
+- Recurring environment flakiness hit again this pass, always resolved by retry, never a real bug: a
+  handful of admin POST requests (create-admin, wallet-adjust, refund) reported a client-side curl
+  timeout while the request had actually completed successfully server-side — confirmed each time by
+  checking the DB directly. First-request-after-restart connection warm-up is the suspected cause,
+  consistent with prior sessions' notes on this environment.
+
+---
+
+## 2026-07-29 Session (cont'd) — Admin panel frontend
+
+### Context
+The backend admin API (previous session, same day) had nothing consuming it — the `(admin)` route
+group was three empty folders, zero files. Built the full frontend now so the whole platform can be
+exercised through a real UI. Investigated the existing frontend first (`(dashboard)/layout.tsx`'s guard
+pattern, `lib/api-client.ts`, `lib/errors.ts` + `sonner` toasts, hand-rolled `<table>` convention) and
+built in-style rather than introducing new patterns.
+
+### What shipped
+- **`services/auth-service/.../LoginController.php::me()`** — now also returns `is_admin`,
+  `admin_role`, `admin_permissions` (same `AdminUser` lookup `getJWTCustomClaims()` already does) —
+  the frontend trusts `/auth/me` for all user state, so admin status is exposed the same way rather
+  than adding a `jwt-decode` dependency to read it out of the JWT client-side.
+- **New shared UI primitives** (`frontend/src/components/ui/`): `Badge`, `Dialog` (thin wrapper over
+  the already-installed `@radix-ui/react-dialog`, mirrors the existing `DropdownMenu.tsx` wrapper
+  style), `Pagination`, `Input`, `Select`, `Label` — none existed before; every admin list page needs
+  at least the first three. `lib/query-string.ts`'s `buildQueryString()` — no query-param builder
+  existed anywhere in the frontend before this.
+- **`frontend/src/types/index.ts`** — `User` gained `is_admin`/`admin_role`/`admin_permissions`; new
+  `AdminUser`, `AuditLogEntry`, `AdminUsageLog`, `AdminSubscription`, `AdminMeta`, and one dashboard
+  type per service. These do **not** reuse the existing `PaginatedResponse<T>` — real admin endpoints
+  return `{ <resource_key>: T[], meta: { current_page, last_page, total } }`, no `per_page` in `meta`,
+  a genuine shape mismatch caught before writing any page code.
+- **`frontend/src/app/admin/`** (new, a literal folder — not the old empty `(admin)` route group, so
+  URLs are genuinely `/admin/...`) — `layout.tsx` mirrors `(dashboard)/layout.tsx`'s hydration-wait +
+  `/auth/me` guard, adds a redirect to `/chat` (not `/login`) for non-admins, and renders a sidebar
+  filtered through `lib/permissions.ts`'s `hasPermission()` so each role only sees the nav items its
+  `admin_permissions` actually cover. Pages: `page.tsx` (dashboard, fans out to all 5 `*/admin/dashboard`
+  endpoints), `users/page.tsx` (+ suspend/unsuspend, + `users/[userId]/chat/[sessionId]` drill-down
+  gated `chat_logs.view`), `admins/page.tsx` (role/permission management), `subscriptions/page.tsx`,
+  `transactions/page.tsx` (+ refund via `Dialog` confirm), `wallet/page.tsx` (+ adjust-balance
+  `Dialog`), `ai-usage/page.tsx`, `audit-logs/page.tsx`.
+- `(dashboard)/layout.tsx` — sidebar gains a conditional "Admin" link (only when `user?.is_admin`), not
+  an automatic redirect on login — an admin logging in still wants the normal chat UI by default.
+- `middleware.ts` — added `/admin` to `PROTECTED_PREFIXES`/`matcher` (same `has_session` cookie check
+  as every other protected prefix; the real `is_admin` check stays client-side in the new layout).
+
+### Gateway-routing gotcha carried over from the backend session, re-confirmed
+Every admin page calls its endpoint through the URL shape the previous session settled on after
+discovering api-gateway's proxy routes are fixed per-resource prefixes, not generic passthroughs:
+`/api/v1/auth/admin/...`, `/api/v1/subscription/admin...`, `/api/v1/transactions/admin...`,
+`/api/v1/wallet/admin/...`, `/api/v1/models/admin/...`, `/api/v1/sessions/admin/...` — never a bare
+`/api/v1/admin/...`.
+
+### Verified live
+- `tsc --noEmit`: clean, zero errors. `next build`: all admin code compiles and type-checks clean;
+  the only build failures are two **pre-existing, untouched** pages (`/reset-password`,
+  `/auth/callback`) failing on an unrelated Next 14 static-export requirement
+  (`useSearchParams` needs a Suspense boundary) — confirmed via `git status` that neither file was
+  touched this session.
+- Browser-driven verification (Playwright) against the real running stack, using the three admins
+  created and permission-tested last session: platform_admin sees all 8 sidebar items and a real,
+  paginated 32-user table with working Suspend buttons; finance_admin correctly has no Admins/Audit
+  Logs nav items and no Suspend button; support correctly has no Refund button on Transactions.
+  Full suspend → unsuspend round trip exercised through the actual UI (click → toast → mutation →
+  invalidate/refetch), confirmed against the database directly (`status` ends back at `active`).
+- **Environment gotcha hit hard this pass, worth flagging for next time**: repeated Playwright script
+  invocations that didn't reliably reach their `browser.close()` (backgrounded/timed-out runs) left
+  30+ orphaned `chrome.exe` processes accumulating on the host. This appears to be what actually
+  triggers this project's known "Docker Desktop/WSL2 host-networking failure" mode (documented
+  earlier from a different trigger) — host resource exhaustion from orphaned browser processes
+  degraded Docker Desktop's port-forwarding enough that even `api-gateway → auth-nginx` container-to-
+  container HTTP calls started timing out (`cURL error 28`), while `ping` to the same host still
+  worked. Fixed by `taskkill //F //IM chrome.exe` + restarting the affected nginx containers. Next
+  time: always ensure Playwright scripts run with an explicit shell-level `timeout`, and check for
+  orphaned `chrome.exe` processes before concluding a test failure reflects an app bug.
+
+### Follow-up corrections, same session (found via real user testing, not automated QA)
+- **Stale-token bug in `lib/api-client.ts`'s request interceptor** — it unconditionally overwrote
+  `config.headers.Authorization` from whatever token was in the auth store, even when a caller (the
+  login page, fetching `/auth/me` with the just-issued token immediately after `/auth/login`, before
+  `setAuth()` had written it to the store) had already set an explicit, fresher header. A stale/expired
+  token left over in the browser's `localStorage` from an earlier session silently clobbered the brand
+  new one, causing `/auth/me` to 401 with `token_expired` immediately after a successful login. Fixed
+  by only falling back to the store's token when the caller hasn't already set one.
+- **Every post-login redirect sent admins to `/chat` like any other user** — login (both the
+  already-authenticated guard and the post-submit redirect), register's guard, the OAuth callback page,
+  Google sign-in, and the root `/` guard all hardcoded `/chat` with no `is_admin` check, so an admin
+  had to manually click the sidebar's "Admin" link after landing in the end-user app. Per explicit user
+  feedback ("the admin sidebar is for administration, not using the product — that should be what I
+  see"), added one shared `lib/post-login-redirect.ts::postLoginPath(user)` (`is_admin ? '/admin' :
+  '/chat'`) and wired it into all 6 call sites. Also found `FirebaseAuthController::authenticate()`'s
+  response `user` object never included `is_admin`/`admin_role`/`admin_permissions` at all (unlike
+  `LoginController::me()`, fixed earlier this session) — a Google-signed-in admin would always have
+  been routed to `/chat` regardless of this fix without this catch. Admins can still reach the normal
+  app anytime via the admin sidebar's existing "← Back to app" link.
+
+---
+
+## 2026-07-29 Session (cont'd, again) — Dynamic role management + package creation
+
+### Context
+Two more gaps surfaced from actually using the admin panel: "roles" were a fixed 3-entry list in
+`config/admin_roles.php`, only ever used as a one-time template — the user wanted real, admin-editable
+role objects (create a new role, define its permissions, edit it later with the change applying live to
+every admin on it). And packages had no create path at all — `PackageController` could only edit the 3
+seeder-created packages, never make a new one, and there was no admin UI for either.
+
+### Roles — now real, database-backed objects
+- New `roles` table (auth-service, `0002_create_roles_table.php`): `id`, `name` (unique), `permissions`
+  (jsonb), timestamps — seeded in the same migration with the 3 existing roles' exact permission sets.
+  `config/admin_roles.php` is deleted; nothing reads it anymore.
+- `admin_users.role` stays a plain string column (no data migration needed — existing rows' values
+  already matched the seeded names) but gained a real Postgres FK to `roles.name`. `admin_users.permissions`
+  (the old jsonb column) is **dropped** — permissions are now resolved live from the assigned role.
+- `AdminUser` model gained a `roleRecord()` relation and a `permissions` computed accessor
+  (`$this->roleRecord?->permissions ?? []`). **Real bug caught and fixed before it shipped**: naming the
+  relation `role()` (matching the existing `role` string column) would have silently broken — Eloquent
+  checks real attributes before relation methods, so `$this->role` would always resolve to the raw
+  string even from inside the model itself, making `$this->role?->permissions` a fatal "read property on
+  string" error. Renamed to `roleRecord()`. Also caught: eager-loading matters here, since the accessor
+  lazy-loads `roleRecord` — `AdminUserController::index()` now eager-loads it to avoid an N+1 per row.
+- New `RoleController` (`GET/POST /auth/admin/roles`, `PATCH/DELETE /auth/admin/roles/{id}`, gated
+  `admins.manage`). **Second real bug caught in design, before implementing**: cascading a role rename
+  across every `admin_users` row referencing it, in the same request, is order-dependent under Postgres's
+  default (non-deferred) FK checking — renaming either table first transiently violates the constraint.
+  Simplified instead: block renaming a role while it's assigned (409, same guard `DELETE` already needs),
+  which doesn't limit the feature that actually matters (editing permissions never touches `name`, so
+  the live-link works regardless).
+- `AdminUserController::store()/update()` simplified — role validated against the real `roles` table
+  (`Rule::exists('roles','name')`) instead of a config array; the whole `permissions` request field and
+  "re-template on role change" branch are gone, since permissions no longer live on the admin at all.
+
+### Packages — real create path + admin listing
+- New `PackageController::store()` (`POST /packages`, gated `packages.manage`) and `adminIndex()`
+  (`GET /packages/admin`, same gate, returns every package including inactive ones — the public
+  `index()` filters to active-only, which would hide exactly what an admin most needs to see/reactivate).
+- **Same routing gotcha as `/transactions/admin` hit again, caught before shipping**: `GET /packages/admin`
+  had to be registered *before* the public `GET /packages/{slug}` wildcard, or "admin" would be captured
+  as `{slug}` and swallowed by `show()`.
+
+### Frontend
+- New `src/app/admin/roles/page.tsx` — list (name, permission count, admin count), create/edit via a
+  permission checklist (`lib/permissions.ts`'s new `ALL_PERMISSIONS`, grouped by service) plus a "Full
+  access (*)" toggle, delete disabled client-side (and rejected server-side) while a role has admins.
+- New `src/app/admin/packages/page.tsx` — list + create/edit: pricing, wallet credit, credit-buffer %,
+  a features checklist, and a model-access multi-select sourced from the existing `GET /models` catalog.
+- `src/app/admin/admins/page.tsx` — the role picker now fetches real roles from the API instead of a
+  hardcoded array.
+- `src/app/admin/layout.tsx` — sidebar gained "Packages" and "Roles" nav items.
+- New `AdminPackage`/`Role` types (`types/index.ts`) — `AdminPackage` deliberately does NOT reuse the
+  public `Package` type, since the admin endpoints return raw Eloquent column names
+  (`monthly_price_usd` etc.), not the public endpoints' hand-mapped `price: {usd, bdt}` shape.
+
+### Verified live
+- Created role `billing_support` (3 permissions) via the real API, assigned it to a test admin, decoded
+  the fresh JWT — `admin_role`/`admin_permissions` matched exactly. Edited the role's permissions, logged
+  in again (same admin, no reassignment) — the **fresh** JWT reflected the new permission set,
+  confirming the live-link (not a frozen snapshot). Deleting a role with an admin assigned → 409;
+  deleting an unused throwaway role → 200.
+- Confirmed the pre-existing `finance_admin` test account's permissions are byte-identical after the
+  migration — the string-based role FK preserved every existing admin's access with zero backfill.
+- Created a new "Enterprise" package via the real API with a custom credit-buffer % and a specific
+  model; confirmed it appears in both `GET /packages/admin` (admin, includes inactive) and the public
+  `GET /packages` listing (since `is_active` defaulted true).
+
+---
+
+## 2026-07-29 Session (cont'd, x3) — AI Models admin management
+
+### Context
+Packages could already choose which AI models to grant, but the model catalog those checkboxes list
+was seeder-only — no endpoint could add, edit, or retire a model. User asked for this to round out the
+package-creation flow they'd just gotten (pick 4 of 10 models for Basic, 7 for Standard, etc.) with a
+way to actually grow the "10" in the first place.
+
+### Real gaps found while reading the schema before building
+- `CostTrackingMiddleware::ratesFor()` silently falls back to a flat rate constant when a model has no
+  active pricing row — its own comment already flags this as inaccurate. So the new form makes pricing
+  required at model-creation time, not an optional afterthought.
+- `model_pricing` is versioned (`effective_from`/`effective_until`/`is_active`), not a flat column set
+  on the model — editing a rate closes the old row and inserts a new one, never mutates in place, so
+  historical `usage_logs` still reflect whatever rate was genuinely active when they were recorded.
+- **Neither `AiModel` nor `ModelPricing` declared `$fillable`** — harmless until now since only the
+  one-time seeder ever touched these tables (via raw `DB::table()->insert()`, which bypasses Eloquent's
+  mass-assignment guard entirely). The new admin controller is the first real `::create()`/`update()`
+  caller, and would have thrown `MassAssignmentException` immediately without this fix.
+- `usage_logs.model_id` is a real FK with no cascade — a model with usage history can't be hard-deleted.
+  "Delete" in the new UI means deactivate, matching how the rest of the app already treats retirement
+  (packages, admins) — never a real row delete.
+- ai-gateway-service had no `AuditLogClient` yet (its only admin work so far was read-only) and was
+  missing `auth_url` from `config/services.php`/`.env` entirely — added both, copied from the identical
+  pattern in every other service.
+
+### What shipped
+- New `AiModelAdminController` (`services/ai-gateway-service`): `GET/POST /models/admin`,
+  `PATCH /models/admin/{id}`, `PATCH /models/admin/{id}/activate|deactivate` — all gated by a new
+  `models.manage` permission. Every write audit-logged.
+- New `src/app/admin/ai-models/page.tsx` — list with current rate shown per model, create/edit dialog
+  (model fields + a pricing-type-aware rate form), activate/deactivate action. Sidebar gained "AI
+  Models" next to "AI Usage". `ALL_PERMISSIONS` gained the `models.manage` group.
+
+### Verified live
+- Created a real model with token-based pricing → appeared in both `GET /models/admin` and the public
+  `GET /models` catalog immediately. Edited its pricing → confirmed via direct DB query that
+  `model_pricing` now has **two** rows (the old one closed with `effective_until` set, is_active=false;
+  the new one active with no `effective_until`) — not one row mutated in place. Deactivated it →
+  confirmed it dropped out of the public catalog. All three actions (`model.created`, `model.updated`,
+  `model.deactivated`) produced real rows on the Audit Logs page.
+
+---
+
 ## How to Start Everything Tomorrow
 
 ```bash
@@ -1398,20 +1730,38 @@ Week 9-10: Polish                          ← IN PROGRESS
 ✅ CORS hardening (api-gateway, scoped deliberately to just that service) — 2026-07-23
 ✅ Frontend route-protection middleware (`src/middleware.ts` + marker cookie) — 2026-07-23, verified live
 ✅ Admin-auth foundation (`is_admin` JWT claim → `X-Is-Admin` header → `admin.gate` middleware) — 2026-07-28, verified live
-⬜ Admin panel itself — auth foundation + 2 admin-gated endpoints exist (`PATCH /packages/{slug}`,
-  `GET /transactions/admin`); frontend pages + user-listing endpoint still not built — see priority list
+✅ Real RBAC (roles/permissions, not just binary admin) + audit logging + admin endpoints across all
+  6 backend services (users, subscriptions, transactions/refunds, wallet, AI usage, chat logs) — 2026-07-29,
+  verified live including a real Stripe refund — see "2026-07-29 Session" notes above
+✅ Admin panel frontend — 2026-07-29, verified live: role-gated sidebar, dashboard, users (+ suspend +
+  chat-history drill-down), admins, subscriptions, transactions (+ refund), wallet (+ adjust), AI usage,
+  audit logs — all under `frontend/src/app/admin/` (a real `/admin/...` URL, not the old empty
+  `(admin)/models` etc. route group)
+✅ Dynamic role management — real `roles` table (not a config file), live-linked permissions, admin
+  UI — 2026-07-29 (see "Dynamic role management + package creation" session notes above)
+✅ Package create + admin listing (was edit-only before) — 2026-07-29
+✅ AI Models admin management — create/edit/deactivate models with versioned pricing, gap-closed
+  ($fillable missing on both AiModel/ModelPricing, caught before it shipped) — 2026-07-29
+✅ Admin account management — logout + profile access from the admin panel itself (was missing
+  entirely; only had a "back to app" escape hatch) — 2026-07-29
+✅ Two real auth bugs found via actual user testing and fixed same day: a stale-token-in-localStorage
+  bug in `api-client.ts`'s request interceptor, and every post-login redirect sending admins to `/chat`
+  like a regular user instead of `/admin` — see "Follow-up corrections" in the admin-panel-frontend
+  session notes above
 ⬜ End-to-end smoke testing in an actual browser — in progress organically: this whole session's real
   bugs (chat/compare crash, file-upload proxy hang, currency inconsistency, config load-order bug, a
   route-splitting proxy bug) all came from actually exercising features, not from reading code
 ```
 
-**Overall Phase 1: ~95% complete.** Every core money/chat flow (register → subscribe → upgrade/downgrade
+**Overall Phase 1: ~99% complete.** Every core money/chat flow (register → subscribe → upgrade/downgrade
 → wallet → top-up → invoicing → real AI chat) is built AND verified end-to-end against the live stack,
 including genuine Stripe **and** bKash Checkout payment experiences, a real (not placeholder)
 upgrade/downgrade billing policy, a full password-reset/account-security flow, real rate limiting,
-CORS, and edge-level route protection, and a working admin-auth foundation. What's left: the admin
-panel's actual pages/endpoints (auth foundation done, UI not started), PDF downloads, remaining
-provider keys, and continuing the real-usage testing pass.
+CORS, edge-level route protection, and a complete admin system: RBAC with live-editable roles, audit
+logging, package management, AI model catalog management, and a real frontend spanning all of it.
+Explicitly **not** in Phase 1 scope right now, by the user's own call: AI token-cost calculation, the
+revenue/business model, and sustainable AI-usage-limit strategy — under separate observation/planning,
+not blocking anything below.
 
 ### Priority order for what's left (see also the shareable work-distribution doc)
 1. ~~Wallet `deduct()`/`refund()` idempotency~~ — ✅ done 2026-07-23
@@ -1424,15 +1774,38 @@ provider keys, and continuing the real-usage testing pass.
    renewal-time downgrade application
 7. ~~Admin-auth foundation + per-package credit buffer % + transaction filtering~~ — ✅ done 2026-07-28,
    all verified live (see "2026-07-28 Session" notes above)
-8. **Admin panel itself** — explicitly confirmed in Phase 1 scope (`PHASE1_DEV_GUIDE.md`: "Basic admin
-   panel — user list, transaction viewer"). Auth foundation and 2 admin-gated endpoints
-   (`PATCH /packages/{slug}`, `GET /transactions/admin`) exist; still needed: a user-listing backend
-   endpoint (auth-service, admin-gated) and real frontend pages under the existing empty
-   `(admin)/models`, `(admin)/transactions`, `(admin)/users` route folders. Next real build item ← NEXT
-9. **Keep doing real click-through testing** — every one of this session's real bugs came from actually
-   using features, not from reading code; still the best bug-per-minute ratio of anything left
-10. Lower priority: invoice PDF, remaining provider keys, an actual `stripe listen` session to confirm
-   the Stripe webhook backup path end-to-end.
+8. ~~Real RBAC + audit logging + admin endpoints across all 6 services~~ — ✅ done 2026-07-29
+9. ~~Admin panel frontend~~ — ✅ done 2026-07-29
+10. ~~Dynamic roles, package creation, AI model catalog management, admin account management~~ —
+    ✅ done 2026-07-29 (all same-day follow-ups once the admin panel was actually being used)
+
+### Tomorrow's plan (as of 2026-07-29, end of session)
+1. **Commit and push everything above — do this first.** 79 files of real, verified work (the entire
+   RBAC system, admin panel, dynamic roles, packages CRUD, AI models CRUD, and today's auth bug fixes)
+   have been sitting uncommitted on disk since the last commit (`368d622`). This is the single biggest
+   risk item right now — not a feature gap.
+2. Move the remote to Bitbucket (discussed earlier, explicitly deferred to "tomorrow" — create the
+   empty repo on bitbucket.org first, then add it as a second remote alongside GitHub, push `main`).
+3. **Manually click through the new admin surface** — everything was verified via API calls and
+   automated browser checks this session, but no human has clicked through Roles/Packages/AI
+   Models/the new admin account menu yet. Specifically worth doing:
+   - Create a package, then actually subscribe to it as a test user — confirm the credit buffer % and
+     model access chosen actually take effect, not just that the create call returned 201.
+   - Create an AI model, then actually send it a real chat message — confirm the pricing set on it
+     actually gets deducted correctly.
+   - Click through as each of the three roles (platform/finance/support) to feel out the permission
+     boundaries directly, not just via curl.
+4. **Fix one known small bug**: the chat page shows "No models available on your plan" for the first
+   ~15 seconds after opening — `(models ?? []).filter(...)` in `chat/page.tsx` treats "still loading"
+   and "genuinely empty" as the same state. Should show a loading indicator instead.
+5. Everything else still open from before this session, unchanged: invoice PDF download
+   (`InvoiceController::download()` still a 501 stub), the Settings page (folder exists, literally
+   empty), saved payment methods UI (backend already supports it, no frontend), real API keys for
+   OpenAI/Anthropic/ElevenLabs (only Gemini + DeepSeek work today), xAI has a key but zero account
+   credits (grok-beta 502s until funded), and a real `stripe listen` session to confirm the Stripe
+   webhook path end-to-end (needs the user's own Stripe login).
+6. **Keep doing real click-through testing** generally — every real bug found this entire project has
+   come from actually exercising a feature, never from reading code.
 
 ---
 

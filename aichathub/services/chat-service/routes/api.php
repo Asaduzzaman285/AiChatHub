@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\V1\Admin\ChatAdminController;
 use App\Http\Controllers\V1\SessionController;
 use App\Http\Controllers\V1\MessageController;
 use App\Http\Controllers\V1\FileAttachmentController;
@@ -24,4 +25,9 @@ Route::middleware('auth.jwt')->group(function () {
 
     Route::post('/upload',   [FileAttachmentController::class, 'upload']);
     Route::delete('/upload/{id}', [FileAttachmentController::class, 'destroy']);
+
+    // Nested under /sessions (not bare /admin) so it's reachable through
+    // api-gateway's existing /sessions/{path?} wildcard.
+    Route::get('/sessions/admin/users/{userId}',    [ChatAdminController::class, 'index'])->middleware('admin.gate:chat_logs.view');
+    Route::get('/sessions/admin/{sessionId}/messages', [ChatAdminController::class, 'messages'])->middleware('admin.gate:chat_logs.view');
 });

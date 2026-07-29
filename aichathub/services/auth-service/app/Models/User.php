@@ -49,14 +49,20 @@ class User extends Authenticatable implements JWTSubject
 
     public function getJWTCustomClaims(): array
     {
+        // Computed fresh at every login/refresh — an admin_users row toggled
+        // is_active=false, or a role/permissions change, takes effect once this
+        // token is re-issued, not instantly (same staleness window the `status`
+        // claim already has).
+        $admin = AdminUser::where('user_id', $this->id)->where('is_active', true)->first();
+
         return [
-            'email'    => $this->email,
-            'status'   => $this->status,
-            'name'     => $this->name,
-            // Computed fresh at every login/refresh — an admin_users row toggled
-            // is_active=false takes effect once this token is re-issued, not
-            // instantly (same staleness window the `status` claim already has).
-            'is_admin' => AdminUser::where('user_id', $this->id)->where('is_active', true)->exists(),
+            'email'             => $this->email,
+            'status'            => $this->status,
+            'name'              => $this->name,
+            'is_admin'          => (bool) $admin,
+            'admin_id'          => $admin?->id,
+            'admin_role'        => $admin?->role,
+            'admin_permissions' => $admin?->permissions ?? [],
         ];
     }
 

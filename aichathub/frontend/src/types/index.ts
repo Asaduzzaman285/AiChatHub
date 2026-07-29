@@ -9,6 +9,9 @@ export interface User {
   email_verified_at: string | null
   has_password: boolean
   google_connected: boolean
+  is_admin: boolean
+  admin_role: string | null
+  admin_permissions: string[]
 }
 
 export interface AuthTokens {
@@ -87,7 +90,7 @@ export interface LedgerEntry {
   id: string
   wallet_id: string
   user_id: string
-  type: 'credit' | 'debit' | 'refund' | 'credit_recovered' | 'credit_used'
+  type: 'credit' | 'debit' | 'refund' | 'credit_recovered' | 'credit_used' | 'admin_adjustment'
   amount: string
   balance_before: string
   balance_after: string
@@ -205,6 +208,169 @@ export interface FileAttachment {
   file_size: number
   storage_url: string
   created_at: string
+}
+
+// ─── Admin ─────────────────────────────────────────────────────────────────
+// Shapes match the real admin endpoints exactly (verified live) — note these
+// do NOT use PaginatedResponse<T> below; every admin list endpoint returns
+// { <resource_key>: T[], meta: AdminMeta }, no `per_page` in meta.
+
+export interface AdminMeta {
+  current_page: number
+  last_page: number
+  total: number
+}
+
+export interface AdminUserSummary {
+  id: string
+  name: string
+  email: string
+  phone: string | null
+  status: string
+  email_verified_at: string | null
+  last_login_at: string | null
+  created_at: string
+}
+
+export interface AdminUser {
+  id: string
+  user_id: string
+  role: string
+  permissions: string[]
+  is_active: boolean
+  created_at: string
+  user: { id: string; name: string; email: string }
+}
+
+/**
+ * Raw Eloquent shape returned by the admin package endpoints (store/update/
+ * adminIndex) — deliberately NOT the same shape as the public Package type
+ * above (index()/show() hand-map to `price: {usd,bdt}`/`wallet_credit_usd`;
+ * the admin endpoints return the model's real column names untouched).
+ */
+export interface AdminPackage {
+  id: string
+  name: string
+  slug: string
+  description: string | null
+  monthly_price_usd: string
+  monthly_price_bdt: string | null
+  monthly_wallet_credit_usd: string
+  credit_buffer_percentage: string
+  model_access: string[]
+  features: PackageFeatures
+  is_active: boolean
+  sort_order: number
+  created_at: string
+}
+
+export interface Role {
+  id: string
+  name: string
+  permissions: string[]
+  admin_count: number
+  created_at: string
+}
+
+export interface AdminSubscription extends Subscription {
+  user_id: string
+}
+
+export interface AuditLogEntry {
+  id: string
+  admin_user_id: string | null
+  actor_type: string
+  action: string
+  resource_type: string
+  resource_id: string | null
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown> | null
+  ip_address: string | null
+  user_agent: string | null
+  created_at: string
+  admin_user: (AdminUser & { user: { id: string; name: string; email: string } }) | null
+}
+
+export interface AdminUsageLog {
+  id: string
+  user_id: string
+  session_id: string | null
+  model_id: string
+  operation_type: string
+  status: string
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  estimated_cost: string
+  actual_cost: string
+  currency: string
+  duration_ms: number | null
+  created_at: string
+  model: { id: string; provider: string; name: string; model_id: string } | null
+}
+
+export interface AdminModelPricing {
+  pricing_type: 'token_based' | 'flat_per_image' | 'character_based' | 'per_minute'
+  input_rate_per_million: string | null
+  output_rate_per_million: string | null
+  flat_rate_per_unit: string | null
+  currency: string
+}
+
+export interface AdminAiModel {
+  id: string
+  provider: string
+  name: string
+  model_id: string
+  type: 'text' | 'image_generation' | 'audio_tts' | 'audio_stt' | 'embedding'
+  description: string | null
+  context_window: number | null
+  max_output_tokens: number | null
+  capabilities: Record<string, boolean>
+  is_active: boolean
+  created_at: string
+  pricing: AdminModelPricing | null
+}
+
+export interface AuthAdminDashboard {
+  total_users: number
+  active_users: number
+  suspended_users: number
+  pending_verification: number
+  new_registrations_7d: number
+  new_registrations_30d: number
+}
+
+export interface SubscriptionAdminDashboard {
+  active_subscriptions: number
+  past_due_subscriptions: number
+  scheduled_downgrades: number
+  plan_breakdown: Record<string, number>
+}
+
+export interface PaymentAdminDashboard {
+  total_revenue: number
+  completed_count: number
+  failed_count: number
+  pending_count: number
+  refunded_count: number
+  gateway_breakdown: { gateway: string; count: number; total: string }[]
+}
+
+export interface WalletAdminDashboard {
+  total_balance: number
+  total_credit_owed: number
+  deposits_30d: number
+  withdrawals_30d: number
+  admin_adjustments_30d: number
+}
+
+export interface AiAdminDashboard {
+  total_tokens_7d: number
+  total_cost_7d: number
+  failed_requests_7d: number
+  provider_breakdown: Record<string, { requests: number; tokens: number; cost: number }>
+  provider_health: { model: string | null; provider: string | null; state: string }[]
 }
 
 // ─── API Responses ─────────────────────────────────────────────────────────

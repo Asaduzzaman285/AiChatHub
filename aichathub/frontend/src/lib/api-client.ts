@@ -18,9 +18,15 @@ const apiClient: AxiosInstance = axios.create({
 // ─── Request interceptor — attach JWT ──────────────────────────────────────
 
 apiClient.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().accessToken
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  // Don't clobber a caller-supplied Authorization header — the login page fetches
+  // /auth/me with the just-issued token explicitly, before setAuth() writes it to
+  // the store. If the store still holds a stale token from an earlier session,
+  // this used to overwrite the fresh one with the stale (possibly expired) one.
+  if (!config.headers.Authorization) {
+    const token = useAuthStore.getState().accessToken
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
   }
   return config
 })

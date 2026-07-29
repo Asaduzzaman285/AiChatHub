@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\Package;
+use App\Services\AuditLogClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -86,8 +87,55 @@ class PackageController extends Controller
             'sort_order'                => 'sometimes|integer',
         ]);
 
+        $old = $package->toArray();
         $package->update($data);
 
+        app(AuditLogClient::class)->log(
+            $this->adminId($request), 'package.updated', 'package', $package->id,
+            $old, $package->fresh()->toArray(), $request->ip(), $request->userAgent(),
+        );
+
         return response()->json(['package' => $package->fresh()]);
+    }
+
+    /** POST /packages — admin-only. Packages were previously seeder-only; this is the first real create path. */
+    public function store(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'name'                      => 'required|string|max:100',
+            'slug'                      => 'required|string|max:100|unique:packages,slug',
+            'description'               => 'nullable|string',
+            'monthly_price_usd'         => 'required|numeric|min:0',
+            'monthly_price_bdt'         => 'nullable|numeric|min:0',
+            'monthly_wallet_credit_usd' => 'required|numeric|min:0',
+            'credit_buffer_percentage'  => 'nullable|numeric|min:0|max:100',
+            'model_access'              => 'nullable|array',
+            'features'                  => 'nullable|array',
+            'is_active'                 => 'nullable|boolean',
+            'sort_order'                => 'nullable|integer',
+        ]);
+
+        $package = Package::create($data + [
+            'credit_buffer_percentage' => $data['credit_buffer_percentage'] ?? 30.00,
+            'model_access'             => $data['model_access'] ?? [],
+            'features'                 => $data['features'] ?? [],
+            'is_active'                => $data['is_active'] ?? true,
+            'sort_order'               => $data['sort_order'] ?? ((int) Package::max('sort_order') + 1),
+        ]);
+
+        app(AuditLogClient::class)->log(
+            $this->adminId($request), 'package.created', 'package', $package->id,
+            null, $package->toArray(), $request->ip(), $request->userAgent(),
+        );
+
+        return response()->json(['package' => $package], 201);
+    }
+
+    /** GET /packages/admin — admin-only. Unlike index(), spans inactive packages too — an admin needs to see and reactivate them. */
+    public function adminIndex(): JsonResponse
+    {
+        $packages = Package::orderBy('sort_order')->get();
+
+        return response()->json(['packages' => $packages]);
     }
 }

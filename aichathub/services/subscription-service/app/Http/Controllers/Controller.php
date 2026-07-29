@@ -17,4 +17,17 @@ abstract class Controller
     {
         return (bool) $request->attributes->get('auth_is_admin');
     }
+
+    protected function hasPermission(Request $request, string $permission): bool
+    {
+        $permissions = $request->attributes->get('auth_admin_permissions', []);
+
+        return in_array('*', $permissions, true) || in_array($permission, $permissions, true);
+    }
+
+    /** admin_users.id of the calling admin, forwarded via X-Admin-Id — for audit logging. */
+    protected function adminId(Request $request): ?string
+    {
+        return $request->attributes->get('auth_admin_id');
+    }
 }

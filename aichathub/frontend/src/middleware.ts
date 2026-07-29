@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-const PROTECTED_PREFIXES = ['/chat', '/pricing', '/wallet', '/billing', '/profile']
+const PROTECTED_PREFIXES = ['/chat', '/pricing', '/wallet', '/billing', '/profile', '/admin']
 
 /**
  * Edge-level redirect for the common "definitely logged out" case — avoids the
@@ -28,5 +28,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/chat/:path*', '/pricing/:path*', '/wallet/:path*', '/billing/:path*', '/profile/:path*'],
+  matcher: ['/chat/:path*', '/pricing/:path*', '/wallet/:path*', '/billing/:path*', '/profile/:path*', '/admin/:path*'],
 }

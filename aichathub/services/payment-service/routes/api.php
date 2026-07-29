@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\V1\Admin\DashboardController;
+use App\Http\Controllers\V1\Admin\TransactionAdminController;
 use App\Http\Controllers\V1\CheckoutController;
 use App\Http\Controllers\V1\PaymentMethodController;
 use App\Http\Controllers\V1\TopupController;
@@ -31,6 +33,11 @@ Route::middleware('auth.jwt')->group(function () {
 
     Route::get('/transactions',      [TransactionController::class, 'index']);
     // Before {id} — otherwise "admin" would be captured as an id and 404 in show().
-    Route::get('/transactions/admin',[TransactionController::class, 'adminIndex'])->middleware('admin.gate');
+    Route::get('/transactions/admin',[TransactionController::class, 'adminIndex'])->middleware('admin.gate:payments.view');
+    Route::post('/transactions/{id}/refund', [TransactionAdminController::class, 'refund'])->middleware('admin.gate:payments.refund');
     Route::get('/transactions/{id}', [TransactionController::class, 'show']);
+
+    // Nested under /transactions (not bare /admin) so it's reachable through
+    // api-gateway's existing /transactions/{path?} wildcard.
+    Route::get('/transactions/admin/dashboard', [DashboardController::class, 'index'])->middleware('admin.gate:dashboard.view');
 });

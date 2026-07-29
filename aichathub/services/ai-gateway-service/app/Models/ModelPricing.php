@@ -12,6 +12,15 @@ class ModelPricing extends Model
     protected $table = 'model_pricing';
     const UPDATED_AT = null;
 
+    // No $fillable existed before — harmless while nothing ever called
+    // create()/update() with user input (only the seeder touched this table
+    // directly via DB::table()). AiModelAdminController is the first real
+    // caller, and mass assignment throws without this.
+    protected $fillable = [
+        'model_id', 'pricing_type', 'input_rate_per_million', 'output_rate_per_million',
+        'flat_rate_per_unit', 'currency', 'effective_from', 'effective_until', 'is_active',
+    ];
+
     protected function casts(): array
     {
         return [

@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
+import { postLoginPath } from '@/lib/post-login-redirect'
 import type { User } from '@/types'
 
 /**
@@ -47,7 +48,7 @@ export default function AuthCallbackPage() {
 
         // Clean tokens from URL before redirecting
         window.history.replaceState({}, '', '/auth/callback')
-        router.replace('/chat')
+        router.replace(postLoginPath(user))
       } catch {
         clearAuth()
         router.replace('/login?error=profile_fetch_failed')

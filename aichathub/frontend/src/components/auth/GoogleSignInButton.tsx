@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useFirebaseAuth } from '@/hooks/useFirebaseAuth'
+import { postLoginPath } from '@/lib/post-login-redirect'
 
 interface Props {
   onSuccess?: () => void
@@ -17,7 +18,7 @@ export function GoogleSignInButton({ onSuccess, label = 'Continue with Google' }
   const handleClick = async () => {
     const result = await signInWithGoogle()
     if (result) {
-      onSuccess ? onSuccess() : router.push('/chat')
+      onSuccess ? onSuccess() : router.push(postLoginPath(result.user))
     }
   }
 

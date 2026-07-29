@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V1\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use App\Models\AdminUser;
 use App\Models\LoginAttempt;
 use App\Models\User;
 use App\Services\JwtService;
@@ -59,7 +60,9 @@ class LoginController extends Controller
 
     public function me(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $user  = $request->user();
+        $admin = AdminUser::where('user_id', $user->id)->where('is_active', true)->first();
+
         return response()->json([
             'id'                 => $user->id,
             'name'               => $user->name,
@@ -69,6 +72,12 @@ class LoginController extends Controller
             'email_verified_at'  => $user->email_verified_at,
             'has_password'       => $user->hasPassword(),
             'google_connected'   => $user->googleAccount()->exists(),
+            // Same admin_users lookup as User::getJWTCustomClaims() — the frontend
+            // trusts /auth/me for user state everywhere else, so admin status is
+            // exposed the same way rather than decoding the JWT client-side.
+            'is_admin'           => (bool) $admin,
+            'admin_role'         => $admin?->role,
+            'admin_permissions'  => $admin?->permissions ?? [],
         ]);
     }
 }

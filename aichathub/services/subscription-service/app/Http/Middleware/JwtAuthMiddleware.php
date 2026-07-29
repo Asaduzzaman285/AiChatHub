@@ -26,6 +26,9 @@ class JwtAuthMiddleware
         $request->attributes->set('auth_user_id', $userId);
         $request->attributes->set('auth_user_email', $request->header('X-User-Email'));
         $request->attributes->set('auth_is_admin', $request->header('X-Is-Admin') === '1');
+        $request->attributes->set('auth_admin_id', $request->header('X-Admin-Id') ?: null);
+        $request->attributes->set('auth_admin_role', $request->header('X-Admin-Role') ?: null);
+        $request->attributes->set('auth_admin_permissions', json_decode($request->header('X-Admin-Permissions', '[]'), true) ?: []);
 
         return $next($request);
     }

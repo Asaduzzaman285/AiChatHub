@@ -10,6 +10,7 @@ import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { describeError } from '@/lib/errors'
+import { postLoginPath } from '@/lib/post-login-redirect'
 
 const registerSchema = z.object({
   name:             z.string().min(2, 'Name must be at least 2 characters'),
@@ -29,14 +30,14 @@ type RegisterForm = z.infer<typeof registerSchema>
 
 export default function RegisterPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, user } = useAuthStore()
   const [serverError, setServerError] = useState<string | null>(null)
   const [ambiguous, setAmbiguous] = useState(false)
   const [success, setSuccess] = useState(false)
 
   useEffect(() => {
-    if (isAuthenticated) router.replace('/chat')
-  }, [isAuthenticated, router])
+    if (isAuthenticated) router.replace(postLoginPath(user))
+  }, [isAuthenticated, user, router])
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } =
     useForm<RegisterForm>({ resolver: zodResolver(registerSchema) })

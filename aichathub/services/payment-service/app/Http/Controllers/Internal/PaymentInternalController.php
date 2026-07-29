@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\PaymentMethod;
 use App\Models\Transaction;
 use App\Services\BkashGateway;
+use App\Services\RefundService;
 use App\Services\StripeGateway;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,7 +18,7 @@ class PaymentInternalController extends Controller
 {
     use CreatesCheckoutSessions;
 
-    public function __construct(private StripeGateway $stripe, private BkashGateway $bkash) {}
+    public function __construct(private StripeGateway $stripe, private BkashGateway $bkash, private RefundService $refunds) {}
 
     /**
      * POST /internal/payments/checkout
@@ -202,43 +203,11 @@ class PaymentInternalController extends Controller
         ]);
 
         $transaction = Transaction::findOrFail($data['transaction_id']);
-
-        if ($transaction->status !== 'completed') {
-            return response()->json(['error' => 'transaction_not_completed'], 422);
-        }
-
-        if (! $transaction->gateway_reference) {
-            return response()->json(['error' => 'no_gateway_reference'], 422);
-        }
-
-        $amount = (float) ($data['amount'] ?? $transaction->amount);
-
-        if ($transaction->gateway === 'bkash') {
-            $trxId = $transaction->metadata['trx_id'] ?? null;
-            if (! $trxId) {
-                return response()->json(['error' => 'no_bkash_trx_id'], 422);
-            }
-            $amountBdt = $transaction->metadata['amount_bdt'] ?? $this->bkash->usdToBdt($amount);
-            $refund = $this->bkash->refund($transaction->gateway_reference, $trxId, $amountBdt, 'Refund requested');
-            $result = ['success' => $refund['success'], 'refund_id' => $refund['refund_trx_id'], 'error' => $refund['error']];
-        } else {
-            $result = $this->stripe->refund($transaction->gateway_reference, $amount);
-        }
+        $result      = $this->refunds->refund($transaction, isset($data['amount']) ? (float) $data['amount'] : null);
 
         if (! $result['success']) {
             return response()->json(['error' => $result['error']], 422);
         }
-
-        $transaction->update([
-            'status'       => 'refunded',
-            'refunded_at'  => now(),
-        ]);
-
-        $this->publishEvent('payment.refunded', [
-            'transaction_id' => $transaction->id,
-            'user_id'        => $transaction->user_id,
-            'amount'         => $amount,
-        ]);
 
         return response()->json([
             'transaction_id' => $transaction->id,

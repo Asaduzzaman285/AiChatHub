@@ -1,5 +1,8 @@
 <?php
 
+use App\Http\Controllers\V1\Admin\AiModelAdminController;
+use App\Http\Controllers\V1\Admin\DashboardController;
+use App\Http\Controllers\V1\Admin\UsageLogAdminController;
 use App\Http\Controllers\V1\ChatController;
 use App\Http\Controllers\V1\ImageController;
 use App\Http\Controllers\V1\AudioController;
@@ -20,4 +23,17 @@ Route::middleware('auth.jwt')->group(function () {
     Route::post('/generate/image',  [ImageController::class,       'generate']);
     Route::post('/generate/audio',  [AudioController::class,       'generate']);
     Route::post('/transcribe',      [TranscriptionController::class,'transcribe']);
+
+    // Nested under /models (not bare /admin) so it's reachable through
+    // api-gateway's existing /models/{path?} wildcard.
+    Route::get('/models/admin/usage-logs', [UsageLogAdminController::class, 'index'])->middleware('admin.gate:ai_usage.view');
+    Route::get('/models/admin/dashboard',  [DashboardController::class, 'index'])->middleware('admin.gate:dashboard.view');
+
+    // No existing GET /models/{id} route to collide with, unlike the
+    // packages/transactions admin routes — no ordering hazard here.
+    Route::get('/models/admin',              [AiModelAdminController::class, 'index'])->middleware('admin.gate:models.manage');
+    Route::post('/models/admin',             [AiModelAdminController::class, 'store'])->middleware('admin.gate:models.manage');
+    Route::patch('/models/admin/{id}',       [AiModelAdminController::class, 'update'])->middleware('admin.gate:models.manage');
+    Route::patch('/models/admin/{id}/deactivate', [AiModelAdminController::class, 'deactivate'])->middleware('admin.gate:models.manage');
+    Route::patch('/models/admin/{id}/activate',   [AiModelAdminController::class, 'activate'])->middleware('admin.gate:models.manage');
 });

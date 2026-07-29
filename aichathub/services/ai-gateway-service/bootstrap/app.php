@@ -33,6 +33,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'auth.jwt'      => \App\Http\Middleware\JwtAuthMiddleware::class,
             'auth.internal' => \App\Http\Middleware\InternalServiceMiddleware::class,
+            'admin.gate'    => \App\Http\Middleware\AdminGateMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

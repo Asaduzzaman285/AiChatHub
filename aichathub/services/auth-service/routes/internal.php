@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Internal\AuditLogInternalController;
 use App\Http\Controllers\Internal\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -15,3 +16,4 @@ Route::get('/users/{userId}',          [UserController::class, 'show']);
 Route::get('/users/email/{email}',     [UserController::class, 'findByEmail']);
 Route::post('/users/{userId}/suspend', [UserController::class, 'suspend']);
 Route::post('/users/{userId}/unsuspend', [UserController::class, 'unsuspend']);
+Route::post('/audit-logs', [AuditLogInternalController::class, 'store']);

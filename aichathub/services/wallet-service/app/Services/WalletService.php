@@ -33,9 +33,9 @@ class WalletService
      * a slow response even when the credit already landed server-side — without
      * this guard a retry double-credits the wallet.
      */
-    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null, ?float $creditLimit = null): Wallet
+    public function credit(string $userId, float $amount, string $description, string $referenceType = null, string $referenceId = null, ?float $creditLimit = null, string $type = 'credit'): Wallet
     {
-        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId, $creditLimit) {
+        return DB::transaction(function () use ($userId, $amount, $description, $referenceType, $referenceId, $creditLimit, $type) {
             /** @var Wallet $wallet */
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
 
@@ -43,7 +43,7 @@ class WalletService
             // retries for the same reference serialize correctly instead of
             // racing past the check together.
             if ($referenceType && $referenceId) {
-                $alreadyCredited = WalletLedgerEntry::where('type', 'credit')
+                $alreadyCredited = WalletLedgerEntry::where('type', $type)
                     ->where('reference_type', $referenceType)
                     ->where('reference_id', $referenceId)
                     ->exists();
@@ -98,7 +98,7 @@ class WalletService
             WalletLedgerEntry::create([
                 'wallet_id'      => $wallet->id,
                 'user_id'        => $userId,
-                'type'           => 'credit',
+                'type'           => $type,
                 'amount'         => $amount,
                 'balance_before' => $balanceBefore,
                 'balance_after'  => (float) $wallet->balance,
@@ -141,13 +141,13 @@ class WalletService
      * reasoning as credit(): a caller can time out waiting for this call even
      * though it completed server-side, and a naive retry would double-deduct.
      */
-    public function deduct(string $userId, float $actualCost, float $reservedAmount, string $description, string $referenceType = null, string $referenceId = null): void
+    public function deduct(string $userId, float $actualCost, float $reservedAmount, string $description, string $referenceType = null, string $referenceId = null, string $type = 'debit'): void
     {
-        DB::transaction(function () use ($userId, $actualCost, $reservedAmount, $description, $referenceType, $referenceId) {
+        DB::transaction(function () use ($userId, $actualCost, $reservedAmount, $description, $referenceType, $referenceId, $type) {
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
 
             if ($referenceType && $referenceId) {
-                $alreadyDeducted = WalletLedgerEntry::where('type', 'debit')
+                $alreadyDeducted = WalletLedgerEntry::where('type', $type)
                     ->where('reference_type', $referenceType)
                     ->where('reference_id', $referenceId)
                     ->exists();
@@ -189,7 +189,7 @@ class WalletService
             WalletLedgerEntry::create([
                 'wallet_id'      => $wallet->id,
                 'user_id'        => $userId,
-                'type'           => 'debit',
+                'type'           => $type,
                 'amount'         => $actualCost,
                 'balance_before' => $balanceBefore,
                 'balance_after'  => (float) $wallet->balance,

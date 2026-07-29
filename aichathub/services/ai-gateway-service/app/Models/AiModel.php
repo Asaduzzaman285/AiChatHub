@@ -12,6 +12,15 @@ class AiModel extends Model
     protected $table = 'ai_models';
     public $timestamps = true;
 
+    // No $fillable existed before — harmless while nothing ever called
+    // create()/update() with user input (only the seeder touched this table
+    // directly via DB::table()). AiModelAdminController is the first real
+    // caller, and mass assignment throws without this.
+    protected $fillable = [
+        'provider', 'name', 'model_id', 'type', 'description',
+        'context_window', 'max_output_tokens', 'capabilities', 'is_active',
+    ];
+
     protected function casts(): array
     {
         return [
