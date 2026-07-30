@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { AxiosError } from 'axios'
-import { ChevronDown, CreditCard, LogOut, MessageSquare, Receipt, Shield, Sparkles, UserRound, Wallet } from 'lucide-react'
+import { ChevronDown, CreditCard, LogOut, MessageSquare, Receipt, Sparkles, UserRound, Wallet } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
@@ -115,8 +115,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <span className="text-lg font-bold tracking-tight">AI ChatHub</span>
         </div>
         <nav className="space-y-1 px-3">
-          {[...NAV_ITEMS, ...(user?.is_admin ? [{ href: '/admin', label: 'Admin', icon: Shield }] : [])].map((item) => {
-            const active = pathname === item.href || (item.href === '/admin' && pathname.startsWith('/admin'))
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href
             const Icon = item.icon
             return (
               <Link

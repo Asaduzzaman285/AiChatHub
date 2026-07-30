@@ -1779,31 +1779,83 @@ not blocking anything below.
 10. ~~Dynamic roles, package creation, AI model catalog management, admin account management~~ —
     ✅ done 2026-07-29 (all same-day follow-ups once the admin panel was actually being used)
 
-### Tomorrow's plan (as of 2026-07-29, end of session)
-1. **Commit and push everything above — do this first.** 79 files of real, verified work (the entire
-   RBAC system, admin panel, dynamic roles, packages CRUD, AI models CRUD, and today's auth bug fixes)
-   have been sitting uncommitted on disk since the last commit (`368d622`). This is the single biggest
-   risk item right now — not a feature gap.
-2. Move the remote to Bitbucket (discussed earlier, explicitly deferred to "tomorrow" — create the
-   empty repo on bitbucket.org first, then add it as a second remote alongside GitHub, push `main`).
-3. **Manually click through the new admin surface** — everything was verified via API calls and
-   automated browser checks this session, but no human has clicked through Roles/Packages/AI
-   Models/the new admin account menu yet. Specifically worth doing:
+### 2026-07-30 Session — Admin/end-user separation, real click-through testing begins
+
+- ~~Commit and push everything~~ — ✅ done (`5ad17ed Admin panels basic structure enabled`) — the
+  79-file risk item from end of last session is resolved, only trivial diffs sit uncommitted now.
+- **Real bug found by the user's own manual testing, not automated QA**: logging into
+  `abcd@gmail.com` (used all last session as the "plain non-admin" test account) landed on the admin
+  dashboard instead of `/chat`. Root cause: that exact account had been promoted to the `billing_support`
+  role during yesterday's dynamic-roles verification and never demoted afterward — a leftover test
+  artifact, not a real permission-boundary bug. Fixed by deactivating that `admin_users` row directly
+  in the DB. This is the first real finding from the "manually click through the new admin surface"
+  item on yesterday's list — confirms that pass is worth continuing.
+- **Admin/end-user interface fully separated, per explicit user request**: removed the conditional
+  "Admin" link from `(dashboard)/layout.tsx`'s sidebar (no account, admin or not, sees it there
+  anymore) and removed the "← Back to app" link from `admin/layout.tsx`'s sidebar. The two surfaces
+  are now one-directional by navigation: an admin's only way out of `/admin` is Sign out (the header
+  dropdown added earlier this week), not a link back into the consumer app. Note: this removed the
+  *links*, not a hard block — an admin account typing `/chat` directly in the address bar can still
+  reach it; only URL-level enforcement would close that, not requested (yet).
+- **Second real bug found by the user's manual testing — a genuinely significant one**: created a test
+  package via the new admin panel, then tried to actually upgrade a real subscriber to it with a card.
+  Got a 502 `checkout_failed`. Root cause, confirmed by directly reproducing the internal call: every
+  card-funded checkout (`SubscriptionController::createGatewayCheckout()`, used by both `subscribe()`
+  and `doUpgrade()`) has been sending `payment_source` (`"card"`/`"bkash"`) straight through as the
+  `gateway` field to payment-service's internal checkout endpoint — but that endpoint validates
+  `gateway` against `in:stripe,bkash`, not `card`. `"bkash"` matched by pure coincidence; `"card"` was
+  never translated to `"stripe"` anywhere in the flow, since this was built. **A card-funded
+  subscribe/upgrade had apparently never actually been exercised end-to-end before this exact test** —
+  wallet-funded and bKash-funded paths were the ones previously verified live (see the 2026-07-27
+  proration session notes: "bKash-funded upgrade... not separately fully replayed end-to-end").
+  Fixed by translating `card` → `stripe` inside `createGatewayCheckout()` (the one place that talks to
+  payment-service, rather than every call site needing to know the mapping) — verified live: both a
+  fresh card-funded `subscribe()` and a card-funded `doUpgrade()` now return real Stripe Checkout URLs.
+  Also fixed a related observability gap while in there: a non-2xx response from payment-service on
+  this call was previously silently swallowed (no exception thrown, so the `catch` block's logging
+  never fired, and the success/failure branch itself didn't log anything either) — confirming this bug
+  required manually reproducing the internal HTTP call rather than reading a log line. Now logs the
+  actual status/body on any non-success response.
+- **Explicit business-rule clarification from the user, then implemented immediately**: wallet balance
+  is never a way to pay for the subscription itself — not the first purchase, not an upgrade, not a
+  renewal. All three always move real money through Stripe or bKash. Upgrades already worked this way;
+  fixed the other two:
+  - `SubscriptionController::subscribe()` — `payment_source` no longer accepts `wallet` (now
+    `card`/`bkash` only, matching `doUpgrade()`). A `$0` package is the only case that still activates
+    with no payment step, since there's genuinely nothing to charge. The now-dead wallet-charging
+    branch, and the now-unused `PaymentChargeService` dependency it was the only caller of in this
+    controller, were removed rather than left as dead code.
+  - `ProcessRenewalJob` — dropped the `chargeWallet() ||` half of the charge chain; renewal now only
+    ever tries the saved card. `PaymentChargeService::chargeWallet()` itself is deleted — confirmed via
+    search it had zero remaining callers anywhere in the service after both call sites were removed.
+  - Frontend `pricing/page.tsx` — removed the "Use Wallet Balance" subscribe button and the wallet-
+    balance query that only existed to power it; intro copy updated to state the rule plainly.
+  - Verified live: `POST /subscription/subscribe` with `payment_source: wallet` now correctly 422s
+    ("The selected payment source is invalid."); a card-funded subscribe and the upgrade fixed earlier
+    this session both still return real Stripe Checkout URLs.
+
+### Remaining for Phase 1 (as of 2026-07-30)
+1. Move the remote to Bitbucket (discussed twice now, still not done — create the empty repo on
+   bitbucket.org, add it as a second remote alongside GitHub, push `main`).
+2. **Keep manually testing the admin surface** — the one pass so far already found a real issue
+   (above). Specifically still worth doing:
    - Create a package, then actually subscribe to it as a test user — confirm the credit buffer % and
      model access chosen actually take effect, not just that the create call returned 201.
    - Create an AI model, then actually send it a real chat message — confirm the pricing set on it
      actually gets deducted correctly.
    - Click through as each of the three roles (platform/finance/support) to feel out the permission
      boundaries directly, not just via curl.
-4. **Fix one known small bug**: the chat page shows "No models available on your plan" for the first
+3. **Fix one known small bug**: the chat page shows "No models available on your plan" for the first
    ~15 seconds after opening — `(models ?? []).filter(...)` in `chat/page.tsx` treats "still loading"
    and "genuinely empty" as the same state. Should show a loading indicator instead.
-5. Everything else still open from before this session, unchanged: invoice PDF download
+4. Everything else still open, unchanged from before: invoice PDF download
    (`InvoiceController::download()` still a 501 stub), the Settings page (folder exists, literally
    empty), saved payment methods UI (backend already supports it, no frontend), real API keys for
    OpenAI/Anthropic/ElevenLabs (only Gemini + DeepSeek work today), xAI has a key but zero account
    credits (grok-beta 502s until funded), and a real `stripe listen` session to confirm the Stripe
    webhook path end-to-end (needs the user's own Stripe login).
+5. Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/
+   business model, and sustainable AI-usage-limit strategy — separate track, not blocking anything above.
 6. **Keep doing real click-through testing** generally — every real bug found this entire project has
    come from actually exercising a feature, never from reading code.
 

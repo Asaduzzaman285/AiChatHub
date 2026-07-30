@@ -7,7 +7,6 @@ use App\Models\Package;
 use App\Models\SubscriptionHistory;
 use App\Models\UserSubscription;
 use App\Services\PackageActivationService;
-use App\Services\PaymentChargeService;
 use App\Services\SubscriptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,7 +19,6 @@ class SubscriptionController extends Controller
     public function __construct(
         private SubscriptionService $subscriptions,
         private PackageActivationService $activation,
-        private PaymentChargeService $charges,
     ) {}
 
     /** GET /subscription — current active subscription for the authenticated user */
@@ -35,16 +33,23 @@ class SubscriptionController extends Controller
 
     /**
      * POST /subscription/subscribe
-     * Wallet path charges synchronously and activates immediately. Card path
-     * hands back a Stripe Checkout URL instead — activation is deferred until
+     * Hands back a Stripe/bKash Checkout URL — activation is deferred until
      * the payment is verified (SubscriptionActivationController::activate(),
-     * called by Payment Service once the Checkout Session completes).
+     * called by Payment Service once the Checkout Session completes). A free
+     * ($0) package is the only case that activates synchronously, since
+     * there's genuinely no payment to collect.
+     *
+     * Wallet is deliberately not a payment_source here — wallet balance
+     * (whether topped up directly or granted as a plan allowance) is meant
+     * for AI-usage spending only. Subscribing, upgrading, and renewing all
+     * always move real money through a gateway; this was already true for
+     * upgrades (doUpgrade() below) and is now true for the first purchase too.
      */
     public function subscribe(Request $request): JsonResponse
     {
         $data = $request->validate([
             'package_slug'   => 'required|string|exists:packages,slug',
-            'payment_source' => 'required|in:wallet,card,bkash',
+            'payment_source' => 'required|in:card,bkash',
             'currency'       => 'nullable|string|size:3',
         ]);
 
@@ -62,7 +67,7 @@ class SubscriptionController extends Controller
         $currency = $data['currency'] ?? 'USD';
         $price    = (float) $package->monthly_price_usd;
 
-        if ($price > 0 && in_array($data['payment_source'], ['card', 'bkash'], true)) {
+        if ($price > 0) {
             $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source']);
 
             if (! $checkoutUrl) {
@@ -72,17 +77,9 @@ class SubscriptionController extends Controller
             return response()->json(['checkout_url' => $checkoutUrl]);
         }
 
+        // Free package — no payment involved at all, activates immediately.
         $transactionId = (string) Str::uuid();
-
-        if ($price > 0) {
-            $charged = $this->charges->chargeWallet($userId, $price, $transactionId, 'Subscription: '.$package->name);
-
-            if (! $charged) {
-                return response()->json(['message' => 'Insufficient wallet balance for this package.', 'error' => 'insufficient_wallet_balance'], 402);
-            }
-        }
-
-        $subscription = $this->activation->activate($userId, $package, $transactionId, $currency);
+        $subscription  = $this->activation->activate($userId, $package, $transactionId, $currency);
 
         return response()->json([
             'message'      => 'Subscribed successfully.',
@@ -227,8 +224,20 @@ class SubscriptionController extends Controller
         ]);
     }
 
-    /** Asks Payment Service to open a Checkout Session (Stripe or bKash) for this package purchase or upgrade. */
-    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $gateway, string $type = 'subscription_purchase'): ?string
+    /**
+     * Asks Payment Service to open a Checkout Session (Stripe or bKash) for
+     * this package purchase or upgrade. $paymentSource is the user-facing
+     * choice ("card"/"bkash", validated in changePackage()/subscribe()) —
+     * payment-service's internal API expects the real gateway name instead
+     * ("stripe" is what actually processes a card), so it's translated here,
+     * the one place that talks to that API, rather than requiring every
+     * caller to know the mapping. Found live 2026-07-30: a card-funded
+     * checkout had been sending the literal string "card" as `gateway` since
+     * this was built, which payment-service's validation rejects outright
+     * (422) — bKash happened to match by coincidence ("bkash" == "bkash"),
+     * which is why only that path had ever actually been exercised before.
+     */
+    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase'): ?string
     {
         $paymentUrl  = rtrim(config('services.payment_url'), '/');
         $internalKey = config('services.internal_key');
@@ -237,6 +246,8 @@ class SubscriptionController extends Controller
             Log::error('Checkout skipped — payment_url/internal_key not configured.', ['user_id' => $userId]);
             return null;
         }
+
+        $gateway = $paymentSource === 'card' ? 'stripe' : $paymentSource;
 
         try {
             $response = Http::withHeaders([
@@ -252,7 +263,17 @@ class SubscriptionController extends Controller
                 'package_slug' => $package->slug,
             ]);
 
-            return $response->successful() ? $response->json('checkout_url') : null;
+            if (! $response->successful()) {
+                // Previously silent — $response->successful() === false doesn't throw,
+                // so this branch logged nothing at all, which is exactly why this bug
+                // needed manual reproduction to diagnose instead of a log line.
+                Log::error('Checkout creation rejected by payment-service', [
+                    'user_id' => $userId, 'gateway' => $gateway, 'status' => $response->status(), 'body' => $response->body(),
+                ]);
+                return null;
+            }
+
+            return $response->json('checkout_url');
         } catch (\Exception $e) {
             Log::error('Checkout creation failed: '.$e->getMessage(), ['user_id' => $userId, 'gateway' => $gateway]);
             return null;

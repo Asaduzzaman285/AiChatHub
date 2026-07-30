@@ -6,62 +6,15 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * The two ways a subscription-service action can actually move money — shared
- * between the interactive purchase flow (SubscriptionController::subscribe(),
- * wallet branch) and the background renewal job (ProcessRenewalJob), which has
- * no browser to redirect through and so can't use Checkout Sessions at all.
+ * How the background renewal job (ProcessRenewalJob) actually moves money —
+ * it has no browser to redirect through, so Checkout Sessions (the
+ * interactive purchase/upgrade flow) aren't an option; it charges the user's
+ * saved default payment method directly instead. Wallet balance is
+ * deliberately never a funding source here — see the class docblock on
+ * ProcessRenewalJob for why.
  */
 class PaymentChargeService
 {
-    /** Reserve+deduct against the wallet — same two-step Wallet Service uses for AI cost. */
-    public function chargeWallet(string $userId, float $amount, string $transactionId, string $description): bool
-    {
-        $walletUrl   = rtrim((string) config('services.wallet_url'), '/');
-        $internalKey = config('services.internal_key');
-
-        if (! $walletUrl || ! $internalKey) {
-            Log::error('Wallet charge skipped — wallet_url/internal_key not configured.', ['user_id' => $userId]);
-            return false;
-        }
-
-        try {
-            $reserve = Http::withHeaders([
-                'X-Internal-Service-Key' => $internalKey,
-                'Accept'                 => 'application/json',
-            ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/reserve", [
-                'user_id' => $userId,
-                'amount'  => $amount,
-            ]);
-
-            if (! $reserve->successful()) {
-                return false;
-            }
-
-            // This environment routinely has calls that succeed server-side but time
-            // out client-side (documented throughout this project) — a bare timeout
-            // here does NOT mean the deduct didn't happen. Retrying is safe specifically
-            // because deduct() is idempotent on (reference_type, reference_id): if the
-            // first attempt actually landed, the retry finds the existing ledger entry
-            // and no-ops instead of double-charging.
-            $deduct = Http::withHeaders([
-                'X-Internal-Service-Key' => $internalKey,
-                'Accept'                 => 'application/json',
-            ])->timeout(15)->retry(2, 2000)->post("{$walletUrl}/api/internal/wallet/deduct", [
-                'user_id'         => $userId,
-                'amount'          => $amount,
-                'reserved_amount' => $amount,
-                'description'     => $description,
-                'reference_type'  => 'subscription_purchase',
-                'reference_id'    => $transactionId,
-            ]);
-
-            return $deduct->successful();
-        } catch (\Exception $e) {
-            Log::error('Wallet charge failed: '.$e->getMessage(), ['user_id' => $userId]);
-            return false;
-        }
-    }
-
     /**
      * Charges the user's saved default card directly (no Checkout redirect) —
      * only usable for a user who has previously saved a card via

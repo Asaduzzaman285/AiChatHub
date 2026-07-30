@@ -19,21 +19,21 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Charges a subscription's next cycle: wallet first, then the user's saved
- * default card (a background job has no browser to send anyone through
- * Stripe Checkout with). On failure, retries up to 3 attempts total, 24h
- * apart — self-rescheduling rather than a separate RetryRenewalJob class,
- * since "the same job, one attempt later" is simpler than two classes with
- * near-identical bodies. After the 3rd failure the subscription is cancelled.
+ * Charges a subscription's next cycle against the user's saved default card
+ * (a background job has no browser to send anyone through Stripe Checkout
+ * with) — never wallet balance, same rule as subscribe()/doUpgrade(): wallet
+ * is for AI-usage spending only, never subscription funding. On failure,
+ * retries up to 3 attempts total, 24h apart — self-rescheduling rather than
+ * a separate RetryRenewalJob class, since "the same job, one attempt later"
+ * is simpler than two classes with near-identical bodies. After the 3rd
+ * failure the subscription is cancelled.
  *
  * Laravel's own queue `tries` is explicitly pinned to 1, not inherited from
  * the worker's `--tries` flag — retry timing here is a 24-hour business rule
  * handled explicitly via a delayed re-dispatch, not a transient-failure
- * retry. This matters: a wallet/payment HTTP call in this environment can
- * legitimately take 15s+ to time out, and two of them in sequence (wallet
- * then card fallback) can cross the queue worker's own per-job timeout —
- * letting the worker auto-retry on top of that would run the whole charge
- * attempt twice.
+ * retry. This matters: a payment HTTP call in this environment can
+ * legitimately take 15s+ to time out, and letting the worker auto-retry on
+ * top of that delayed re-dispatch would run the whole charge attempt twice.
  */
 class ProcessRenewalJob implements ShouldQueue
 {
@@ -75,8 +75,11 @@ class ProcessRenewalJob implements ShouldQueue
         // an arbitrary but fixed choice that must never change.
         $transactionId = (string) \Ramsey\Uuid\Uuid::uuid5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', "aichathub-renewal:{$this->subscriptionId}:{$this->attemptNumber}");
 
+        // Wallet balance is never a renewal funding source — same rule as
+        // subscribe()/doUpgrade(): it's for AI-usage spending only. Renewal
+        // always charges the saved card (or, once a saved bKash agreement is
+        // supported, that) — never falls back to wallet.
         $charged = $price <= 0
-            || $charges->chargeWallet($subscription->user_id, $price, $transactionId, 'Renewal: '.$package->name)
             || $charges->chargeSavedCard($subscription->user_id, $price, $subscription->currency, $transactionId, 'Renewal: '.$package->name);
 
         RenewalAttempt::create([
@@ -86,7 +89,7 @@ class ProcessRenewalJob implements ShouldQueue
             'scheduled_at'    => now(),
             'attempted_at'    => now(),
             'success'         => $charged,
-            'error_message'   => $charged ? null : 'Wallet balance insufficient and no working saved card on file.',
+            'error_message'   => $charged ? null : 'No working saved card on file.',
             'transaction_id'  => $charged ? $transactionId : null,
         ]);
 

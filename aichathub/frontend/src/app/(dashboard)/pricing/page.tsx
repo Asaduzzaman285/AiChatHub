@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
-import type { Package, Subscription, WalletBalance } from '@/types'
+import type { Package, Subscription } from '@/types'
 
 export default function PricingPage() {
   const queryClient = useQueryClient()
@@ -27,13 +27,13 @@ export default function PricingPage() {
     queryFn: async () => (await apiClient.get<{ subscription: Subscription | null }>('/api/v1/subscription')).data.subscription,
   })
 
-  const { data: wallet } = useQuery({
-    queryKey: ['wallet', 'balance'],
-    queryFn: async () => (await apiClient.get<WalletBalance>('/api/v1/wallet')).data,
-  })
-
+  // Wallet is deliberately not a payment_source here — wallet balance (topped
+  // up directly or granted as a plan allowance) is meant for AI-usage
+  // spending, not for funding the subscription itself. Same rule as upgrade
+  // below. A $0 package still activates with no payment step at all — that's
+  // handled entirely server-side, not a client-visible "source" choice.
   const subscribe = useMutation({
-    mutationFn: async ({ slug, source }: { slug: string; source: 'wallet' | 'card' | 'bkash' }) => {
+    mutationFn: async ({ slug, source }: { slug: string; source: 'card' | 'bkash' }) => {
       setPendingSlug(slug)
       return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
@@ -127,10 +127,9 @@ export default function PricingPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Pricing</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          First subscribing: pay from your wallet balance if you have enough, or via Stripe (test mode)
-          or bKash (sandbox). Upgrading always charges the new plan&apos;s full price via Stripe or
-          bKash, right away — not from wallet balance, which is reserved for AI usage. Downgrading takes
-          effect at your next renewal, with no change until then.
+          Subscribing and upgrading always charge the full plan price via Stripe (test mode) or bKash
+          (sandbox), right away — never from wallet balance, which is reserved for AI usage. Downgrading
+          takes effect at your next renewal, with no change until then.
         </p>
       </div>
 
@@ -150,7 +149,6 @@ export default function PricingPage() {
             const currentPrice = subscription?.package?.monthly_price_usd
             const isUpgrade = currentPrice !== undefined && pkg.price.usd > currentPrice
             const isPending = (subscribe.isPending || changePlan.isPending) && pendingSlug === pkg.slug
-            const canUseWallet = (wallet?.available_balance ?? 0) >= pkg.price.usd
             const isChoosing = choosingSlug === pkg.slug
 
             return (
@@ -178,18 +176,8 @@ export default function PricingPage() {
                   ) : !subscription ? (
                     isChoosing ? (
                       <div className="space-y-2">
-                        {canUseWallet && (
-                          <Button
-                            className="w-full"
-                            disabled={isPending}
-                            onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'wallet' })}
-                          >
-                            {isPending ? 'Subscribing…' : `Use Wallet Balance (${formatCurrency(wallet?.available_balance ?? 0)} Available)`}
-                          </Button>
-                        )}
                         <Button
                           className="w-full"
-                          variant="outline"
                           disabled={isPending}
                           onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'card' })}
                         >
