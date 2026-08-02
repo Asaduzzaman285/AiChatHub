@@ -6,6 +6,7 @@
         "php": "^8.3",
         "illuminate/redis": "^12.0",
         "laravel/framework": "^12.0",
+        "laravel/octane": "^2.18",
         "league/flysystem-aws-s3-v3": "^3.35"
     },
     "require-dev": {

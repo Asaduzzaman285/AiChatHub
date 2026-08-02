@@ -90,3 +90,10 @@ Transitioning to this scale does not mean you should write Go microservices on d
 | **Phase 1 (MVP)** | 1,000 - 10,000 | * Laravel 12 + Octane (Swoole/RoadRunner)<br>* PostgreSQL (Single instance)<br>* Redis (Single node queue/cache)<br>* Laravel Reverb for WebSockets |
 | **Phase 2 (Growth)** | 10,000 - 100,000 | * Extract **AI Gateway** to a Go microservice<br>* Split WebSockets to Node.js/Go backend behind Nginx<br>* Implement Redis Lua cache for wallet check/deductions<br>* Add Postgres Read Replicas |
 | **Phase 3 (Scale)** | 100,000 - 1,000,000+ | * Full Go connection tier (WebSockets + SSE)<br>* Introduce **Apache Kafka** event stream<br>* Migrate logs/chats to **ClickHouse**<br>* Cluster Redis and Shard Postgres |
+
+**Note on FrankenPHP:** it is not a Phase 3 upgrade from Octane — it's an alternative *driver* Octane can
+run on (Swoole/RoadRunner/FrankenPHP are interchangeable engines under the same `laravel/octane`
+package). Swapping to it is an option any time after Phase 1, mainly attractive if we also want to drop
+the per-service nginx sidecar (FrankenPHP serves HTTP directly). It does not raise the concurrency
+ceiling beyond what Octane already provides — the actual Phase 3 concurrency jump above comes from
+moving the connection tier off PHP entirely onto Go/Rust, not from switching PHP runtimes again.

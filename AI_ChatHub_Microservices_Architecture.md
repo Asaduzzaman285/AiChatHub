@@ -804,6 +804,13 @@ ENTRYPOINT ["entrypoint.sh"]
 CMD ["php-fpm"]
 ```
 
+**Note (added when Octane was adopted for Phase 1):** this base Dockerfile is no longer shared
+byte-for-byte by every service. `ai-gateway-service` and `chat-service` use an Octane variant of this
+image (`composer require laravel/octane`, `CMD ["php", "artisan", "octane:start", "--server=swoole",
+"--host=0.0.0.0", "--port=8000"]`, no nginx `fastcgi_pass` sidecar in front of them — Octane serves
+HTTP directly). The other 7 services keep this exact php-fpm + nginx-sidecar setup unchanged, since
+they have no long-lived streaming responses to hold a worker open for.
+
 ### 7.2 Nginx Config (`infrastructure/docker/nginx/default.conf`)
 
 ```nginx
@@ -1394,6 +1401,13 @@ Never commit `.env` files. Use:
 ### Phase 1 (Weeks 1-10) — MVP
 
 - All services running in Docker Compose on single VPS
+- **Laravel Octane (Swoole)** on the two streaming-heavy services — AI Gateway and Chat — to actually
+  reach the 1,000–10,000 concurrent user target in `scaling_architecture.md`. Plain php-fpm blocks one
+  worker process per open connection for the full duration of a streaming AI response, which caps
+  concurrent streaming users at the size of the pool (a handful, by default); Octane's event loop
+  removes that 1:1 process-per-connection ceiling. The other 7 services (auth, subscription, wallet,
+  payment, billing, notification, api-gateway) stay on plain php-fpm — short request/response cycles
+  only, no open-ended streams, so there's no bottleneck there to fix.
 - Shared PostgreSQL, single Redis instance
 - Manual deployment via `docker-compose up --build -d`
 - Basic monitoring (logs + manual checks)

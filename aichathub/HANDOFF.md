@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-07-23  
+**Last updated:** 2026-08-02  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -1834,30 +1834,196 @@ not blocking anything below.
     ("The selected payment source is invalid."); a card-funded subscribe and the upgrade fixed earlier
     this session both still return real Stripe Checkout URLs.
 
-### Remaining for Phase 1 (as of 2026-07-30)
-1. Move the remote to Bitbucket (discussed twice now, still not done — create the empty repo on
-   bitbucket.org, add it as a second remote alongside GitHub, push `main`).
-2. **Keep manually testing the admin surface** — the one pass so far already found a real issue
-   (above). Specifically still worth doing:
+### 2026-07-30 Session (cont'd, again) — Concurrency architecture analysis (Octane/FrankenPHP) — analysis only, no code changed
+
+User asked for an honest rating of how the current architecture handles concurrent users, after asking
+where Octane/FrankenPHP fit. Findings, grounded in the actual code/config (not assumption):
+
+- **Octane/FrankenPHP is not installed anywhere** — every service (`infrastructure/docker/php/Dockerfile`)
+  runs plain `php:8.3-fpm-alpine`, `CMD ["php-fpm"]`, behind an nginx sidecar per service. No
+  `laravel/octane` in any `composer.json`.
+- **`pm.max_children` is unconfigured** — no `www.conf` override anywhere in `infrastructure/docker/php/`,
+  so every one of the 9 services is running Alpine's stock php-fpm pool default: **5 concurrent requests
+  per service, full stop.** Free, zero-risk fix available any time (add a `www.conf`), independent of the
+  Octane decision.
+- **Root project doc `scaling_architecture.md`** (not in `docs/`, separate from
+  `AI_ChatHub_Microservices_Architecture.md`) explicitly targets **1,000–10,000 concurrent users for
+  Phase 1**, and specifies the Phase 1 stack as **"Laravel 12 + Octane (Swoole/RoadRunner)"** — i.e. Octane
+  was planned as part of Phase 1 itself, not deferred to Phase 2. `AI_ChatHub_Microservices_Architecture.md`
+  disagrees — its Phase 1 section never mentions Octane and describes plain Docker Compose on a single VPS.
+  The two planning docs conflict; `scaling_architecture.md` is the only one that ties a concrete
+  concurrency number to a required stack, so treating that as the real target.
+- **Why this is a real gap, not just a pool-tuning gap**: confirmed via `CostTrackingMiddleware.php`
+  (ai-gateway-service) that chat streaming runs the AI provider call inside a `StreamedResponse`'s lazy
+  generator — every active streaming chat response blocks one php-fpm worker process for the entire
+  response duration (seconds), not a quick request/reply. That's the exact bottleneck
+  `scaling_architecture.md` itself names (§1A) as the reason Octane is required, not optional, once
+  streaming is in the picture. Pool tuning alone can raise the ceiling from 5 to maybe a few hundred (real
+  OS processes, real RAM each) but can't reach four-digit concurrent streaming sessions on one host —
+  that needs an event-loop runtime (Octane's Swoole/RoadRunner, or FrankenPHP's worker mode).
+- **Open question, not yet resolved**: whether "1,000–10,000 concurrent" means that many users with an
+  open streaming response at the same instant, or that many total active users (mostly idle, a smaller
+  fraction actively streaming). Changes urgency significantly; wasn't pinned down this session.
+
+**Decision (confirmed 2026-07-30): next session (2026-07-31) implements Laravel Octane**, piloted on
+`ai-gateway-service` and `chat-service` only (the two services with the blocking-stream pattern) — the
+other 7 stay on plain php-fpm, no benefit to converting them. Driver choice (Swoole vs RoadRunner) still
+to be made at implementation time; Swoole is the more common pairing. **FrankenPHP is explicitly not a
+separate roadmap phase** — it's an alternative driver Octane can run on, swappable in later (mainly if we
+also want to drop the nginx sidecars) without changing the concurrency ceiling further. Phase 3 in
+`scaling_architecture.md` remains what it already says: moving the connection tier off PHP onto Go/Rust
+— not a PHP-runtime swap. All three architecture docs (`scaling_architecture.md`,
+`AI_ChatHub_Microservices_Architecture.md`, this file) now reflect this consistently as of today.
+Also worth an explicit state-leak audit before flipping either service over — a persistent worker keeps
+singletons/statics alive across requests, unlike php-fpm's fresh-boot-per-request model, so anything
+caching per-request data on a service instance rather than resolving fresh needs a second look first.
+
+### 2026-08-02 Session — Laravel Octane (Swoole) shipped for ai-gateway-service + chat-service, two real bugs found live
+
+Implemented the Octane migration planned last session. Both services now run Swoole instead of
+php-fpm; the other 7 services are untouched. Full verification was done through the real stack
+(login → streaming chat → wallet ledger), not just a boot check — and that's what caught both bugs
+below. Neither would have been found by code review or a health-check-only smoke test.
+
+**Infra:**
+- New `infrastructure/docker/php-octane/Dockerfile` (sibling to the existing shared php-fpm one,
+  which is untouched and still used by the other 7 services + all queue/scheduler workers, including
+  `ai-gateway-queue-worker`). `php:8.3-cli-alpine` base (not `-fpm`), same extensions as before plus
+  `sockets` + `swoole` (pecl). Needed `linux-headers` added to `apk` deps — `ext-sockets` doesn't
+  compile on musl/Alpine without it (`linux/sock_diag.h` missing), a real build failure caught before
+  it went anywhere.
+- `docker-compose.yml` — `ai-gateway-service`/`chat-service` build from the new Dockerfile; nginx
+  sidecars **kept** (not removed) but rewritten from FastCGI proxies to plain HTTP reverse proxies
+  (`proxy_pass http://ai-gateway-service:8000`, `proxy_buffering off`). Deliberate choice: this means
+  `api-gateway`'s `AI_GATEWAY_SERVICE_URL`/`CHAT_SERVICE_URL` and ai-gateway-service's own outbound
+  `CHAT_SERVICE_URL` call to chat-service needed **zero changes** — nginx stayed the stable internal
+  address for both, only what's behind it changed.
+- `composer require laravel/octane` in both services; `php artisan octane:install --server=swoole`.
+
+**Code fixes made *before* going live (from the state-leak audit, not found live):**
+- `ai-gateway-service/bootstrap/app.php` — `PendingReservationTracker` binding changed from
+  `$app->singleton()` to `$app->scoped()`. A true singleton would let one request's wallet-reservation
+  state get overwritten by another request on the same persistent Octane worker — `scoped()` is what
+  Octane actually flushes between requests.
+- `InternalServiceMiddleware.php` in both services — `env('INTERNAL_SERVICE_KEY')` → `config('services.internal_key')`.
+  Not Octane-specific, but `env()` outside `config/*.php` silently returns null under `config:cache`,
+  which would 401 every internal service call. `chat-service` had no `config/services.php` at all —
+  created one.
+
+**Bug #1 (found live) — the single-model chat stream produced zero bytes.** `laravel/ai`'s
+`usingVercelDataProtocol()` builds its `StreamedResponse` from a bare `yield`-based closure with no
+declared return type. Laravel's `ResponseFactory::stream()` only auto-wraps generator closures in an
+echo+flush loop when **not** running under Octane; under Octane it hands the raw closure straight to
+`StreamedResponse::setCallback()`, and Symfony's `sendContent()` just invokes it — for a generator
+function, that only returns a `Generator` object without executing its body, since nothing iterates
+the return value. Confirmed live: `200 OK`, `Content-Length: 0`, no error logged. Checked whether
+upgrading `laravel/ai` (v0.9.0 → v0.10.2) fixed it upstream — it didn't (same bare closure, no return
+type, in the latest release). Fixed in `ChatController::stream()` without touching vendor code: pull
+the callback out via `getCallback()` and re-wrap it in a genuine `echo`+`flush()` loop — this mirrors
+the pattern `ChatController::compare()` already used correctly. Verified live: real SSE output,
+correct Vercel AI SDK protocol shape, model's actual reply came through.
+- Side effect of chasing this down: `composer update laravel/ai --with-all-dependencies` was run to
+  test the upgrade theory, which pulled a newer `aws/aws-sdk-php` and got interrupted mid-extraction
+  (300s process-timeout against the slow WSL2 bind-mount, extracting a package with tens of thousands
+  of files) — left the service in a crash-loop (`Uncaught Error: Failed opening required
+  .../aws-sdk-php/src/functions.php`). Fixed by running `composer install` from a one-off
+  `docker-compose run --entrypoint sh` container (not the crash-looping service itself, which kept
+  interrupting `docker exec` mid-command) with `COMPOSER_PROCESS_TIMEOUT=2400`. Ended up keeping the
+  laravel/ai upgrade since it was already done and harmless — the actual fix above doesn't depend on
+  the package version either way.
+
+**Bug #2 (found live, the more important one) — a provider failure mid-stream left the wallet
+reservation stuck, unreleased.** This is exactly the scenario the plan flagged as highest-risk and
+called out for live verification rather than assuming correct. Deliberately triggered a real provider
+failure (`gpt-4o-mini` — in the package's `model_access` list but no real OpenAI key configured, so a
+genuine `401` from the provider). Result: `reserved_balance` stayed stuck, and
+`ai-gateway-queue-worker`'s logs showed no `ReleaseWalletReservationJob` ever dispatched — the
+`terminating()` hook (swapped in for `register_shutdown_function()` last session) does **not**
+reliably fire for an exception thrown this deep either, same structural gap the original code's own
+comment described for php-fpm, just not actually closed by moving to Octane as hoped. Fixed by
+wrapping the stream loop in `ChatController::stream()` in its own `try/catch` and dispatching
+`ReleaseWalletReservationJob` directly from there — the one point in this flow that's actually
+guaranteed to run, rather than a lifecycle hook downstream of it. Bonus fix from the same change: an
+uncaught exception here previously leaked a raw PHP stack trace as the HTTP response body (`500`,
+`Content-Type: text/event-stream`) — now emits a clean `{"type":"error",...}` SSE event instead.
+Kept the `terminating()` hook in `bootstrap/app.php` as a secondary net for other failure shapes, but
+it is **not** the mechanism this specific case relies on anymore.
+
+**Verified live, in this order:**
+1. Real login → real streaming chat message (`gemini-2.5-flash`) through the full stack
+   (`frontend-equivalent curl` → api-gateway → ai-gateway-service/Octane → provider) → correct SSE
+   output → correct wallet debit in the ledger (`wallet_ledger_entries`).
+2. Deliberate provider failure (`gpt-4o-mini`, unconfigured key) → clean SSE error event → confirmed
+   `reserved_balance` still stuck (bug #2, above) → fixed → re-tested → confirmed release job
+   dispatched and `reserved_balance` back to 0, `refund` ledger entry recorded.
+3. **Concurrency correctness** (the actual point of the `scoped()` fix): fired a successful request and
+   a failing request **simultaneously** against the same Octane worker. Both resolved independently and
+   correctly — one real `debit`, one `refund`, both timestamped to the same second, `reserved_balance`
+   back to exactly `0.000000` afterward. No cross-request contamination.
+4. `chat-service` sanity check (`GET /sessions` through api-gateway) — real session data returned,
+   confirms Octane conversion didn't just work for ai-gateway-service.
+5. All other 7 services + their nginx sidecars confirmed untouched and still healthy throughout
+   (`docker ps` — all "Up", none recreated by the compose changes scoped to just these 2 services).
+
+**Unrelated but hit hard during this session — real, pre-existing environment flakiness, not caused by
+this work:** intermittent `curl` timeouts (exit 28) specifically on requests routed through
+`api-gateway`, even though both hops' own access logs showed the request succeeding internally (200)
+— the response just didn't reliably make it back to the client. Confirmed transient (same call
+sometimes takes ~200ms, sometimes hangs entirely) rather than deterministic, and unrelated to the
+Octane work (reproduced on `POST /auth/login`, a route neither touched service is anywhere near).
+Matches this project's previously-documented Docker Desktop/WSL2 network-bridge degradation. Found 23
+`chrome.exe` processes running on the host, matching the historical trigger pattern, but couldn't
+confirm they're orphaned Playwright instances rather than the user's real browser session (no
+automation flags in their command lines) — did **not** kill them without asking. Worth a Docker
+Desktop restart if this keeps interfering with work.
+
+### Tomorrow's plan (as of 2026-08-02)
+
+**Quick wins first — low effort, no decisions needed:**
+1. **Restart Docker Desktop** (and possibly the browser) — the host-network flakiness documented above
+   measurably slowed down today's verification work, not just a theoretical gotcha anymore.
+2. `pm.max_children` on the other 7 php-fpm services is still unconfigured (defaults to 5/service) —
+   free fix, independent of Octane, still not done.
+3. **Spot-check `ChatController::compare()`** (multi-model comparison) under Octane — wasn't touched by
+   either bug fix today and wasn't load-tested live. It already used a genuinely echo-based closure
+   (not the vendor's generator-based one that caused bug #1), so risk is low, but hasn't been
+   explicitly verified the way single-model `stream()` now has.
+
+**Real product work:**
+4. **Keep manually testing the admin surface** — this exact kind of testing is what caught both real
+   Octane bugs today. Specifically still worth doing:
    - Create a package, then actually subscribe to it as a test user — confirm the credit buffer % and
      model access chosen actually take effect, not just that the create call returned 201.
    - Create an AI model, then actually send it a real chat message — confirm the pricing set on it
      actually gets deducted correctly.
    - Click through as each of the three roles (platform/finance/support) to feel out the permission
      boundaries directly, not just via curl.
-3. **Fix one known small bug**: the chat page shows "No models available on your plan" for the first
+5. **Fix one known small bug**: the chat page shows "No models available on your plan" for the first
    ~15 seconds after opening — `(models ?? []).filter(...)` in `chat/page.tsx` treats "still loading"
    and "genuinely empty" as the same state. Should show a loading indicator instead.
-4. Everything else still open, unchanged from before: invoice PDF download
-   (`InvoiceController::download()` still a 501 stub), the Settings page (folder exists, literally
-   empty), saved payment methods UI (backend already supports it, no frontend), real API keys for
-   OpenAI/Anthropic/ElevenLabs (only Gemini + DeepSeek work today), xAI has a key but zero account
-   credits (grok-beta 502s until funded), and a real `stripe listen` session to confirm the Stripe
-   webhook path end-to-end (needs the user's own Stripe login).
-5. Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/
-   business model, and sustainable AI-usage-limit strategy — separate track, not blocking anything above.
-6. **Keep doing real click-through testing** generally — every real bug found this entire project has
-   come from actually exercising a feature, never from reading code.
+
+**Lower priority, still open, no urgency:**
+6. Move the remote to Bitbucket (discussed a couple times now, still not done — create the empty repo
+   on bitbucket.org, add it as a second remote alongside GitHub, push `main`).
+7. Invoice PDF download (`InvoiceController::download()` still a 501 stub), the Settings page (folder
+   exists, literally empty), saved payment methods UI (backend already supports it, no frontend), real
+   API keys for OpenAI/Anthropic/ElevenLabs (only Gemini + DeepSeek work today), xAI has a key but zero
+   account credits (grok-beta 502s until funded).
+8. Octane worker/task-worker counts are still at Octane's defaults — deliberately not tuned yet, no
+   real load data to tune against. Revisit once Prometheus metrics exist (still not set up either).
+
+**Available whenever wanted, not assumed for tomorrow** (2026-08-02's mail/Stripe questions were
+explicitly "for knowledge only," not a request to act): wiring in a real email provider (Postmark/
+Resend/SendGrid/etc. — currently Mailpit only, config is fully env-driven so this is a quick swap once
+a provider is chosen) to replace Mailpit for real user-facing delivery, and a real `stripe listen`
+session to confirm the Stripe webhook path end-to-end (needs the user's own Stripe CLI login;
+`STRIPE_WEBHOOK_SECRET` is still the `whsec_CHANGE_ME` placeholder).
+
+Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/business
+model, and sustainable AI-usage-limit strategy — separate track, not blocking anything above.
+
+**Keep doing real click-through testing** generally — every real bug found this entire project has come
+from actually exercising a feature, never from reading code.
 
 ---
 

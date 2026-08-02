@@ -4,11 +4,14 @@ namespace App\Http\Controllers\V1;
 
 use App\Ai\Agents\TextChatAgent;
 use App\Http\Controllers\Controller;
+use App\Jobs\ReleaseWalletReservationJob;
 use App\Models\AiModel;
 use App\Services\ChatServiceClient;
+use App\Services\PendingReservationTracker;
 use App\Services\SubscriptionClientService;
 use App\Services\WalletClientService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Streaming\Events\TextDelta;
@@ -110,7 +113,68 @@ class ChatController extends Controller
                 });
             }
 
-            return $response->usingVercelDataProtocol(); // Frontend uses Vercel AI SDK
+            // Frontend uses Vercel AI SDK — but don't just return
+            // $response->usingVercelDataProtocol() directly. laravel/ai builds that
+            // response via response()->stream() with a bare `yield`-based closure that
+            // has no declared return type. Laravel's ResponseFactory::stream() only
+            // wraps generator closures in an echo+flush loop when NOT running under
+            // Octane; under Octane it hands the raw closure straight to
+            // StreamedResponse::setCallback(). Symfony's StreamedResponse::sendContent()
+            // just invokes that callback — for a generator function, invoking it merely
+            // returns a Generator object without executing its body, since nothing
+            // iterates the return value. Octane's Swoole client only captures output via
+            // a genuine ob_start() handler wrapped around sendContent() (see
+            // vendor/laravel/octane SwooleClient::sendResponseContent()) — it never
+            // iterates a raw Generator return value either. Net effect: zero bytes sent,
+            // confirmed live (200 OK, Content-Length: 0, no error) once this service
+            // moved to Octane. Re-wrapping it here in a closure with a real echo+flush
+            // loop fixes it under both runtimes without touching vendor code: this
+            // closure itself contains no `yield`, so Laravel's generator-detection
+            // doesn't touch it, and Octane's ob_start() capture sees real echoed bytes.
+            $vercelResponse = $response->usingVercelDataProtocol()->toResponse($request);
+            $streamCallback = $vercelResponse->getCallback();
+
+            return response()->stream(function () use ($streamCallback) {
+                try {
+                    foreach ($streamCallback() as $chunk) {
+                        echo $chunk;
+                        if (ob_get_level() > 0) {
+                            @ob_flush();
+                        }
+                        flush();
+                    }
+                } catch (\Throwable $e) {
+                    // A provider call failing (bad key, rate limit, outage) here happens
+                    // deep inside this stream loop, past the point where the controller's
+                    // own try/catch below can see it — same problem the old
+                    // register_shutdown_function()/terminating() safety net was built for.
+                    // Confirmed live under Octane: terminating() does NOT reliably fire for
+                    // an exception thrown at this exact point either — the reservation was
+                    // left stuck in reserved_balance with no release job dispatched. This
+                    // catch, right at the only point actually guaranteed to run, is what's
+                    // reliable — a lifecycle hook downstream of this isn't.
+                    Log::error('AI provider stream failed mid-response', ['error' => $e->getMessage()]);
+
+                    $pending = app(PendingReservationTracker::class)->pending();
+                    if ($pending) {
+                        ReleaseWalletReservationJob::dispatch($pending['user_id'], $pending['amount']);
+                    }
+
+                    echo 'data: '.json_encode([
+                        'type'      => 'error',
+                        'errorText' => 'The AI provider request failed. Please try again.',
+                    ])."\n\n";
+                    echo "data: [DONE]\n\n";
+                    if (ob_get_level() > 0) {
+                        @ob_flush();
+                    }
+                    flush();
+                }
+            }, $vercelResponse->getStatusCode(), [
+                'Cache-Control'                  => 'no-cache, no-transform',
+                'Content-Type'                   => 'text/event-stream',
+                'x-vercel-ai-ui-message-stream'  => 'v1',
+            ]);
         } catch (\RuntimeException $e) {
             if ($e->getCode() === 402) {
                 return response()->json(['error' => 'Insufficient wallet balance. Please top up.'], 402);

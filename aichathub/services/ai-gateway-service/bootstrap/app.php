@@ -103,22 +103,35 @@ $app = Application::configure(basePath: dirname(__DIR__))
         });
     })->create();
 
-$app->singleton(PendingReservationTracker::class);
+// scoped(), not singleton() — this service runs under Laravel Octane (Swoole), where
+// the app boots once and the same container instance serves many requests on the same
+// worker. A true singleton would let one user's mark() overwrite/clobber another's
+// before it's read, since both share the same worker process. scoped() is Octane-aware:
+// Octane flushes anything bound via scoped() between requests (FlushTemporaryContainerInstances),
+// restoring the "fresh per request" behavior this class's own docblock assumes.
+$app->scoped(PendingReservationTracker::class);
 
 // Safety net for CostTrackingMiddleware: releases a wallet reservation that was made
-// but never settled (deduct() never ran). Deliberately NOT $app->terminating() —
-// the actual provider HTTP call runs inside a StreamedResponse's lazy generator,
-// which Application::handleRequest() invokes via `$kernel->handle($request)->send()`
-// with no try/catch of its own. An exception thrown during send() propagates out as
-// truly uncaught, so `$kernel->terminate()` on the next line never runs and neither
-// would terminating(). register_shutdown_function() is the hook PHP guarantees fires
-// regardless of how the script ends — but PHP-FPM does NOT reliably give a shutdown
-// function time to complete a fresh synchronous HTTP call once the response has
-// already been sent (confirmed live: the refund() call started but never finished).
-// Dispatching a queued job instead — a fast Redis write, not a network round-trip —
-// is what's actually reliable here. Requires a queue worker running for this service:
-// docker exec -d aichathub-ai-gateway php artisan queue:work redis --tries=3
-register_shutdown_function(function () use ($app) {
+// but never settled (deduct() never ran). The actual provider HTTP call runs inside a
+// StreamedResponse's lazy generator, which Application::handleRequest() invokes via
+// `$kernel->handle($request)->send()` with no try/catch of its own — an exception
+// thrown during send() propagates out as truly uncaught.
+//
+// Under php-fpm this was register_shutdown_function() instead of terminating(), because
+// PHP-FPM does NOT reliably give a shutdown function time to complete a fresh
+// synchronous HTTP call once the response has already been sent (confirmed live: the
+// refund() call started but never finished) — and terminate() never ran either, since
+// the uncaught exception skips it. Under Octane neither problem applies the same way:
+// register_shutdown_function() here would be actively wrong, since it only fires once
+// per WORKER (a Swoole worker is a long-lived process, not one-per-request), not once
+// per request — it would silently stop releasing abandoned reservations at all after
+// the first request. terminating() is what Octane itself relies on to reset
+// container/facade state between every request it serves, success or failure, so it's
+// the correct per-request hook here. Still dispatches a queued job rather than calling
+// refund() inline, same reasoning as before — a fast Redis write beats a synchronous
+// network round-trip inside a lifecycle callback. Requires a queue worker running for
+// this service: docker exec -d aichathub-ai-gateway php artisan queue:work redis --tries=3
+$app->terminating(function () use ($app) {
     $pending = $app->make(PendingReservationTracker::class)->pending();
     if ($pending) {
         ReleaseWalletReservationJob::dispatch($pending['user_id'], $pending['amount']);
