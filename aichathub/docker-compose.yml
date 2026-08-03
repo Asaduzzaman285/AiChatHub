@@ -207,6 +207,25 @@ services:
       - ./infrastructure/docker/nginx/wallet.conf:/etc/nginx/conf.d/default.conf
     depends_on: [wallet-service]
 
+  # Runs wallet:reconcile-reservations every 15 minutes — releases wallet
+  # reservations that were never settled by a deduct/refund, which can happen
+  # if ai-gateway's HTTP call to /wallet/reserve times out on its own side even
+  # though the reservation actually landed here. See
+  # ReconcileWalletReservationsCommand for the full reasoning.
+  wallet-scheduler:
+    build:
+      context: ./infrastructure/docker/php
+      dockerfile: Dockerfile
+    container_name: aichathub-wallet-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/wallet-service:/var/www
+    env_file:
+      - ./services/wallet-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+
   # ─── PAYMENT SERVICE ──────────────────────
 
   payment-service:

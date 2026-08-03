@@ -69,11 +69,12 @@ class WalletInternalController extends Controller
     public function reserve(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'user_id' => 'required|uuid',
-            'amount'  => 'required|numeric|min:0.000001',
+            'user_id'      => 'required|uuid',
+            'amount'       => 'required|numeric|min:0.000001',
+            'reference_id' => 'nullable|string|max:64',
         ]);
 
-        $success = $this->walletService->reserve($data['user_id'], (float) $data['amount']);
+        $success = $this->walletService->reserve($data['user_id'], (float) $data['amount'], $data['reference_id'] ?? null);
 
         if (! $success) {
             return response()->json(['success' => false, 'reason' => 'insufficient_balance'], 422);

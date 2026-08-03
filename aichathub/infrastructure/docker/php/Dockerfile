@@ -38,6 +38,10 @@ COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 # PHP config
 COPY php.ini /usr/local/etc/php/conf.d/custom.ini
 
+# FPM pool config — factory default (pm.max_children = 5) was far too low, see
+# www.conf's own comment.
+COPY www.conf /usr/local/etc/php-fpm.d/www.conf
+
 # Create non-root user
 RUN addgroup -g 1000 www && adduser -u 1000 -G www -s /bin/sh -D www
 

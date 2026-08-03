@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-08-02  
+**Last updated:** 2026-08-03  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -1976,6 +1976,156 @@ Matches this project's previously-documented Docker Desktop/WSL2 network-bridge 
 confirm they're orphaned Playwright instances rather than the user's real browser session (no
 automation flags in their command lines) — did **not** kill them without asking. Worth a Docker
 Desktop restart if this keeps interfering with work.
+
+### 2026-08-03 Session — pm.max_children fix (found a real nginx-stale-IP bug), admin-panel click-through testing, idempotent wallet reserve() + reconciliation sweep
+
+**`pm.max_children` fix for the 7 remaining php-fpm services** — added `infrastructure/docker/php/www.conf`
+(`pm.max_children` 5 → 20, `pm.start_servers` 2 → 4, `pm.min_spare_servers` 1 → 2, `pm.max_spare_servers`
+3 → 6, `pm.max_requests` 500) and a `COPY www.conf` line in the shared Dockerfile. Rebuilt and recreated
+all 12 services sharing that image. **Found a real bug doing this**: recreating the backend containers
+gave them new internal IPs, but their nginx sidecars (long-running, untouched) still had the *old* IPs
+cached — nginx resolves upstream hostnames once at worker startup, not per-request — causing `502
+connect() failed (111: Connection refused)`. Fixed by restarting the nginx sidecars too. **Worth
+remembering going forward: any time a backend container gets recreated (new image, `docker-compose up -d`
+without `--no-recreate`), its nginx sidecar needs a restart too**, not just the backend.
+
+**Admin-panel click-through testing** (continuing the standing "keep manually testing" item):
+- **Role permission boundaries — 5/5 correct**: `finance_admin` blocked from creating packages and
+  suspending users (403 in both cases); `support` can view the wallet ledger (200, real data) but blocked
+  from adjusting it or refunding payments (403 in both cases) — exactly matching each role's seeded
+  permission list.
+- **Package creation → real enforcement**: created a package via the admin API with a deliberately narrow
+  `model_access: ["gemini-2.5-flash"]`, pointed a real user's subscription at it, confirmed the included
+  model worked and an excluded model was correctly blocked (`403 model_not_in_package`) — not just that
+  the create call returned 201.
+- **AI model creation → pricing wired correctly**: created a model via the admin API with distinctive
+  rates, confirmed it's stored and reachable through the real chat flow.
+- Model comparison (`ChatController::compare()`) spot-checked under Octane — works correctly, clean SSE
+  output from multiple models at once.
+- Found along the way (external, not app bugs): DeepSeek's account is out of credits/quota; a
+  newly-supplied xAI key was rejected with `401 Unauthorized` (not the old key's `403` credits issue —
+  worth the user re-checking the key was copied in full and is active on console.x.ai).
+
+**Idempotent `WalletService::reserve()` + a stale-reservation reconciliation sweep** — found live while
+testing: `reserve()` was the *only* wallet operation (`credit()`/`deduct()`/`refund()` all already have
+this) with no idempotency guard. If ai-gateway's HTTP call to `/wallet/reserve` times out on its own side
+(this session's recurring network flakiness) while actually succeeding server-side, ai-gateway never finds
+out — `CostTrackingMiddleware` throws immediately on a `null` result, *before* `PendingReservationTracker::mark()`
+ever runs, so the existing release safety net never even sees it. Confirmed this happened for real, not
+just in theory — found a stuck `0.035874` reservation mid-session.
+
+Two-part fix, both mirroring patterns that already work elsewhere in this codebase:
+1. **`WalletService::reserve()`** now accepts `?string $referenceId` and guards on it exactly like
+   `deduct()`/`refund()` do (`wallet_ledger_entries` existence check before mutating) — a duplicate/retried
+   call with the same id is now a safe no-op. Reserve previously wrote nothing to the ledger at all; now
+   inserts a `type='reserve'` row, which both this guard and the sweep below key off of. No migration
+   needed — `wallet_ledger_entries.type` is a plain `string(20)`, not a DB-level enum.
+   `WalletInternalController::reserve()` accepts the new `reference_id` field.
+   `CostTrackingMiddleware` reuses its already-existing per-request `$requestId` (previously only used for
+   `deduct()`) as this key too — same id, different `reference_type` server-side, no collision.
+   `WalletClientService::reserve()` now sends it and added `.retry(2, 500)` (lighter than
+   `PaymentChargeService`'s `.retry(2, 2000)` since this blocks a live user-facing streaming request).
+2. **New `wallet:reconcile-reservations` command** (`services/wallet-service/app/Console/Commands/
+   ReconcileWalletReservationsCommand.php`), mirroring `payment-service`'s existing `ReconcileBkashCommand`
+   pattern exactly: finds `type='reserve'` ledger rows older than 15 minutes with no matching `debit`/
+   `refund` row for the same `reference_id`, releases each via the existing `WalletService::refund()` (same
+   method `ReleaseWalletReservationJob` already uses — no new release logic). Scheduled
+   `->everyFifteenMinutes()` in `routes/console.php`; new `wallet-scheduler` container in
+   `docker-compose.yml` (copy of the existing `payment-scheduler` shape) runs `schedule:work` continuously.
+
+**Verified live, all three pieces**:
+1. Idempotency: called the internal reserve endpoint twice with an identical `reference_id` —
+   `reserved_balance` incremented only once, exactly one ledger row exists for that id.
+2. Reconciliation: manually backdated a test ledger row past 15 minutes, ran the command — it found and
+   released exactly that one, `reserved_balance` dropped back to 0, a `refund` row appeared. Ran again
+   immediately after — correctly found nothing (already settled, not reprocessed).
+3. **Real-world regression, not just a synthetic test**: while chasing this session's persistent network
+   flakiness during a live chat test, the wallet ledger itself became the evidence — one clean
+   `reserve`→`debit` pair (server-side succeeded, client just gave up waiting for the response) plus two
+   genuinely orphaned `reserve` entries from attempts where the response never made it back at all. Exactly
+   the failure mode this fix targets, caught happening for real, not staged.
+
+**Real email delivery wired up — Mailgun (SMTP, sandbox domain)**. Previously Mailpit only (local dev
+catcher, no real delivery). User provided real Mailgun SMTP credentials
+(`postmaster@sandbox20e4c4d02b3944d59e2c8c0fe3adecbe.mailgun.org`, sandbox domain — only delivers to
+recipients added as Authorized Recipients in the Mailgun dashboard until a real domain is verified later,
+at which point this is a `.env`-only swap, no code changes).
+
+**Real gap found while wiring this up**: `notification-service` is *not* the single point mail flows
+through, despite that being the apparent intent. `auth-service` sends verification and password-reset
+emails **directly** via its own `Mail::send()` calls (`SendVerificationEmail` listener,
+`PasswordResetController`) — it has its own separate `MAIL_*` config, completely independent of
+`notification-service`. Updating only `notification-service/.env` (the first attempt) silently fixed
+nothing for registration/password-reset, since those never go through it at all. Grepped every service for
+direct `Mail::` usage to confirm the full picture: only `auth-service` and `notification-service` send mail
+directly; everything else (payment-service's queued jobs that matched an early broad grep) turned out to be
+unrelated `ShouldQueue` usage, not mail. **Fixed both**: `auth-service/.env` and
+`notification-service/.env` now carry the same real Mailgun SMTP config.
+
+**Second real gap, easy to hit again**: after editing `.env`, a plain `docker restart` on these containers
+did **not** pick up the change — Docker's `env_file:` directive injects `.env` into the container's process
+environment once, at *creation* time, not on every restart; a real (already-injected) env var always wins
+over Laravel's own `.env` file read, even after the file on disk changes. The symptom was silent and
+convincing: the queue job reported `DONE` with zero errors, `Mail::send()` "succeeded" — it just quietly
+kept sending through Mailpit the whole time (confirmed by checking Mailpit's own message list, which had
+the "successful" verification emails sitting in it). **The fix is `docker-compose up -d --force-recreate
+<service>`, not `docker restart`, any time an `.env` value changes** on a container that gets `env_file:`
+injection — worth remembering broadly, this isn't specific to mail. (Also re-confirmed today's earlier
+lesson: recreating a container gives it a new internal IP, so its nginx sidecar needs restarting
+afterward too — did this for `auth-nginx`/`notification-nginx`.)
+
+**Verified live, the real way — not a synthetic test**: raw manual SMTP script first (to isolate
+connectivity/auth/send from any Laravel-layer issue) — got a clean `250 Great success` from Mailgun,
+confirmed `Delivered`/`Accepted` in Mailgun's own Logs page, and the email genuinely arrived in the real
+inbox (spam folder — expected and explained below, not a bug). Then, after finding and fixing the two gaps
+above, re-tested through the actual app flow (`POST /auth/verify/resend`) — the real "Verify your AI
+ChatHub account" email arrived too, confirming the fix, not just the raw SMTP mechanism.
+
+**Why it lands in spam right now, and why that's fine for today**: the sandbox domain is a
+randomly-generated address with no sending history — any receiving mail server treats that with suspicion
+regardless of correct SMTP/auth configuration. This resolves naturally once a real custom domain is
+verified (SPF/DKIM DNS records) later; nothing else to fix here for the development phase.
+
+### Remaining for Phase 1 (as of 2026-08-03)
+1. **Host-network flakiness — real root cause found today, one concrete fix still not applied.** This is
+   **not** a Docker/app bug — it's genuine host resource starvation. Hard numbers from today: this machine
+   has only **4 CPU cores and 7.9GB RAM total**, and **Docker Desktop is configured to claim all 4 cores**
+   (`docker info`: `4 CPUs, ~3.9GB memory allocated`) — leaving Windows itself zero guaranteed headroom to
+   do the actual work of moving network packets between the host and the WSL2 VM. Confirmed live: CPU load
+   sat at 72-79% on just 4 cores while the system was otherwise idle; free RAM was down to 350MB at one
+   point (closing Chrome — 24 processes, 2.4GB — brought it to 1.7GB, a real but partial improvement).
+   Tried a full reset today (`wsl --shutdown` + fully killing and relaunching Docker Desktop, not just its
+   own restart button) — this fixed a *worse*, fully-broken state that the reset itself temporarily caused
+   (Windows-side port forwarding lagging behind the daemon coming back up — if this happens again, `docker
+   info` succeeding does **not** mean the exposed ports are actually forwarding yet, give it another
+   minute), but did **not** fix the underlying flakiness, because the actual fix — capping Docker
+   Desktop's CPU limit so Windows keeps at least 1 core free — is a GUI-only setting (Settings → Resources
+   → Advanced → CPU limit 4 → 2, also consider Memory limit ~3.9GB → ~3GB → Apply & Restart) that the user
+   deferred to tomorrow. **This is the first thing to do tomorrow, before any other testing** — every
+   other diagnostic avenue (RAM, full WSL/Docker reset) has been tried and only partially helped; this is
+   the one lever with real, unapplied, high-confidence evidence behind it. Also worth remembering
+   generally: Windows 10 (confirmed via `wsl --version` today) has no "mirrored networking mode" option
+   (Windows 11+ only) — that avenue is permanently closed on this machine, not worth revisiting.
+2. `ChatController::compare()` — spot-checked working under Octane today, not yet stress-tested under
+   concurrent load the way single-model `stream()` was.
+3. Fix the known "No models available" loading-state flash on the chat page — still not done.
+4. Everything else unchanged from before: Bitbucket remote, invoice PDF, Settings page, saved payment
+   methods UI, real OpenAI/Anthropic keys (still placeholders — Claude specifically needs a real
+   console.anthropic.com API key, distinct from a claude.ai subscription), xAI key needs re-verification
+   (new key rejected with 401), DeepSeek needs its account credits checked.
+5. Octane worker/task-worker counts still at defaults — no load data yet to tune against.
+6. ~~Wiring in a real email provider~~ — ✅ done 2026-08-03 (Mailgun SMTP, sandbox domain — see above).
+   Follow-ups when ready, not urgent: verify a real custom domain in Mailgun (fixes spam-folder landing,
+   removes the Authorized-Recipients restriction) whenever a domain is bought for the product; add any
+   other test recipient emails as Authorized Recipients in the Mailgun dashboard as needed meanwhile;
+   `notification-service`'s own `NotificationClient`-driven mail (low-balance alerts, renewal-failed,
+   receipts) wasn't individually re-exercised today — same config fix applies and the mechanism is proven
+   via auth-service's emails, but each specific notification type hasn't been triggered and watched land.
+7. A real `stripe listen` session for the webhook path — discussed this session as "for knowledge only,"
+   available whenever wanted, not assumed as a next step.
+
+Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/business
+model, and sustainable AI-usage-limit strategy.
 
 ### Tomorrow's plan (as of 2026-08-02)
 

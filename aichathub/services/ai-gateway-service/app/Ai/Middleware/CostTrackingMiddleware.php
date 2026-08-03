@@ -41,8 +41,16 @@ class CostTrackingMiddleware
         // Reserve balance — abort if insufficient (402) or if wallet-service couldn't be
         // reached at all (503) — those are different problems and should say so; telling
         // someone to "top up" when the real issue is a transient timeout is misleading.
+        // Same $requestId reused for reserve() and deduct() below — safe, since
+        // wallet-service stores them under different reference_type values
+        // ('ai_usage_reservation' vs 'ai_usage'), and it usefully ties one
+        // request's whole wallet lifecycle together under a single id. Also
+        // what makes reserve() itself retry-safe: if the HTTP call to
+        // /wallet/reserve times out here even though it landed server-side, a
+        // retry (or wallet-service's own reconciliation sweep later) can
+        // recognize it as the same reservation instead of double-reserving.
         $walletClient = app(WalletClientService::class);
-        $reserveResult = $walletClient->reserve($this->userId, $this->estimatedCost);
+        $reserveResult = $walletClient->reserve($this->userId, $this->estimatedCost, $this->requestId);
         $this->reserved = $reserveResult === true;
 
         if ($reserveResult === null) {

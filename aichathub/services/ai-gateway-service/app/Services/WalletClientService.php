@@ -22,14 +22,22 @@ class WalletClientService
      * network error) — distinct from a real denial so the caller doesn't tell the user
      * "top up your wallet" when the actual problem is a transient infrastructure hiccup.
      */
-    public function reserve(string $userId, float $amount): ?bool
+    public function reserve(string $userId, float $amount, ?string $referenceId = null): ?bool
     {
         try {
+            // Safe to retry now that wallet-service's reserve() is idempotent on
+            // reference_id — a timeout here doesn't necessarily mean the
+            // reservation didn't land, and a retry with the same id is a safe
+            // no-op either way. Lighter than PaymentChargeService's retry(2,
+            // 2000): this blocks a live streaming-chat request, not a
+            // background job, so latency here is directly user-felt.
             $response = Http::timeout(15)
+                ->retry(2, 500)
                 ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
                 ->post("{$this->baseUrl}/api/internal/wallet/reserve", [
-                    'user_id' => $userId,
-                    'amount'  => $amount,
+                    'user_id'      => $userId,
+                    'amount'       => $amount,
+                    'reference_id' => $referenceId,
                 ]);
 
             if (! $response->successful()) {

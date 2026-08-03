@@ -116,11 +116,33 @@ class WalletService
     /**
      * Reserve estimated cost before sending AI request.
      * Returns false if insufficient funds.
+     *
+     * Idempotent on reference_id when given — same reasoning as deduct()/refund():
+     * ai-gateway's HTTP call to this endpoint can time out even though the
+     * reservation landed server-side, and a naive retry (or the reconciliation
+     * sweep re-checking later) would double-reserve without this guard. Unlike
+     * the other three methods, reserve() previously wrote nothing to
+     * wallet_ledger_entries at all — the ledger row added here is also what
+     * ReconcileWalletReservationsCommand keys off of to find and release
+     * reservations that were never followed by a deduct()/refund() at all
+     * (e.g. the client-side timeout scenario above, where ai-gateway never even
+     * finds out the reservation succeeded, so its own release paths never fire).
      */
-    public function reserve(string $userId, float $amount): bool
+    public function reserve(string $userId, float $amount, ?string $referenceId = null): bool
     {
-        return DB::transaction(function () use ($userId, $amount) {
+        return DB::transaction(function () use ($userId, $amount, $referenceId) {
             $wallet = Wallet::where('user_id', $userId)->lockForUpdate()->firstOrFail();
+
+            if ($referenceId) {
+                $alreadyReserved = WalletLedgerEntry::where('type', 'reserve')
+                    ->where('reference_type', 'ai_usage_reservation')
+                    ->where('reference_id', $referenceId)
+                    ->exists();
+
+                if ($alreadyReserved) {
+                    return true;
+                }
+            }
 
             if (! $wallet->canAfford($amount)) {
                 return false;
@@ -128,6 +150,22 @@ class WalletService
 
             $wallet->reserved_balance = (float) $wallet->reserved_balance + $amount;
             $wallet->save();
+
+            // balance_before/after both reflect the current balance — reserve()
+            // never touches `balance`, only `reserved_balance`; these columns are
+            // still populated (not null) for consistency with every other ledger
+            // entry type and so a raw balance query against this table stays sane.
+            WalletLedgerEntry::create([
+                'wallet_id'      => $wallet->id,
+                'user_id'        => $userId,
+                'type'           => 'reserve',
+                'amount'         => $amount,
+                'balance_before' => (float) $wallet->balance,
+                'balance_after'  => (float) $wallet->balance,
+                'description'    => 'AI request cost reservation',
+                'reference_type' => $referenceId ? 'ai_usage_reservation' : null,
+                'reference_id'   => $referenceId,
+            ]);
 
             return true;
         });
