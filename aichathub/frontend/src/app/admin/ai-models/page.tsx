@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Label } from '@/components/ui/Label'
 import { Badge } from '@/components/ui/Badge'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { describeError } from '@/lib/errors'
@@ -87,23 +88,23 @@ function ModelFormDialog({ model, trigger }: { model?: AdminAiModel; trigger: Re
       queryClient.invalidateQueries({ queryKey: ['admin', 'ai-models'] })
       setOpen(false)
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not save this model.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the models list before trying again.").message),
   })
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!form.name || (!model && (!form.provider || !form.model_id))) {
-      toast.error('Provider, model ID, and name are required.')
+      toast.error('Please fill in a provider, model ID, and name before saving.')
       return
     }
     if (!model || editPricing) {
       const tokenBased = form.pricing_type === 'token_based'
       if (tokenBased && (!form.input_rate_per_million || !form.output_rate_per_million)) {
-        toast.error('Input and output rates are required for token-based pricing.')
+        toast.error('Please set both an input and output rate for token-based pricing.')
         return
       }
       if (!tokenBased && !form.flat_rate_per_unit) {
-        toast.error('A flat rate is required for this pricing type.')
+        toast.error('Please set a flat rate for this pricing type.')
         return
       }
     }
@@ -213,7 +214,7 @@ export default function AdminAiModelsPage() {
       toast.success('Model updated.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'ai-models'] })
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not update this model.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check whether the model's status actually changed before retrying.").message),
   })
 
   const formatRate = (m: AdminAiModel) => {
@@ -238,7 +239,17 @@ export default function AdminAiModelsPage() {
         <CardHeader><CardTitle>{data?.length ?? '…'} models</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-48" />
+                    <Skeleton className="h-3 w-40" />
+                  </div>
+                  <Skeleton className="h-7 w-24" />
+                </div>
+              ))}
+            </div>
           ) : !data?.length ? (
             <p className="text-sm text-muted-foreground">No models yet.</p>
           ) : (

@@ -30,3 +30,4 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: ['/chat/:path*', '/pricing/:path*', '/wallet/:path*', '/billing/:path*', '/profile/:path*', '/admin/:path*'],
 }
+

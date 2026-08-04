@@ -18,11 +18,16 @@ Route::get('/ready',  [HealthController::class, 'ready']);
 // Authenticated
 Route::middleware('auth.jwt')->group(function () {
     Route::get('/models',           [ModelController::class,       'index']);
-    Route::post('/chat/stream',     [ChatController::class,        'stream']);
-    Route::post('/chat/compare',    [ChatController::class,        'compare']);
-    Route::post('/generate/image',  [ImageController::class,       'generate']);
-    Route::post('/generate/audio',  [AudioController::class,       'generate']);
-    Route::post('/transcribe',      [TranscriptionController::class,'transcribe']);
+
+    // Wallet-touching routes — CostTrackingMiddleware assumes a consumer wallet exists,
+    // which pure admin accounts (mode: 'create') never have. See BlockAdminMiddleware.
+    Route::middleware('block.admin')->group(function () {
+        Route::post('/chat/stream',     [ChatController::class,        'stream']);
+        Route::post('/chat/compare',    [ChatController::class,        'compare']);
+        Route::post('/generate/image',  [ImageController::class,       'generate']);
+        Route::post('/generate/audio',  [AudioController::class,       'generate']);
+        Route::post('/transcribe',      [TranscriptionController::class,'transcribe']);
+    });
 
     // Nested under /models (not bare /admin) so it's reachable through
     // api-gateway's existing /models/{path?} wildcard.

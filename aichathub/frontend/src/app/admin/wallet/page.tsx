@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Label } from '@/components/ui/Label'
 import { Pagination } from '@/components/ui/Pagination'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -16,6 +17,7 @@ import { describeError } from '@/lib/errors'
 import { buildQueryString } from '@/lib/query-string'
 import { hasPermission } from '@/lib/permissions'
 import { useAuthStore } from '@/stores/auth-store'
+import { useListFilters } from '@/hooks/useListFilters'
 import type { AdminMeta, LedgerEntry } from '@/types'
 
 interface Filters {
@@ -42,14 +44,14 @@ function AdjustBalanceDialog() {
       setAmount('')
       setDescription('')
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not adjust the balance — check the amount and try again.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the wallet balance before trying again.").message),
   })
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
     const value = parseFloat(amount)
     if (!userId || !value || value <= 0 || !description) {
-      toast.error('Fill in user ID, a positive amount, and a description.')
+      toast.error('Please fill in a user ID, a positive amount, and a reason before continuing.')
       return
     }
     adjust.mutate()
@@ -99,9 +101,8 @@ export default function AdminWalletPage() {
   const { user: currentAdmin } = useAuthStore()
   const canAdjust = hasPermission(currentAdmin, 'wallet.adjust')
 
-  const [filters, setFilters] = useState<Filters>({ user_id: '', type: '' })
-  const [applied, setApplied] = useState<Filters>(filters)
-  const [page, setPage] = useState(1)
+  const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
+    useListFilters<Filters>({ user_id: '', type: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'wallet-ledger', applied, page],
@@ -110,12 +111,6 @@ export default function AdminWalletPage() {
       return (await apiClient.get<{ ledger_entries: LedgerEntry[]; meta: AdminMeta }>(`/api/v1/wallet/admin/ledger${qs}`)).data
     },
   })
-
-  const applyFilters = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setApplied(filters)
-  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -138,7 +133,12 @@ export default function AdminWalletPage() {
               <option value="refund">Refund</option>
               <option value="admin_adjustment">Admin adjustment</option>
             </Select>
-            <Button type="submit" variant="outline">Apply filters</Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="outline">Apply filters</Button>
+              {hasActiveFilters && (
+                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -147,7 +147,11 @@ export default function AdminWalletPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} entries</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={6} /></tbody>
+              </table>
+            </div>
           ) : !data?.ledger_entries.length ? (
             <p className="text-sm text-muted-foreground">No ledger entries match these filters.</p>
           ) : (

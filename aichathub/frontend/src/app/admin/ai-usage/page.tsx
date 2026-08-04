@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -8,9 +7,11 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { Pagination } from '@/components/ui/Pagination'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { buildQueryString } from '@/lib/query-string'
+import { useListFilters } from '@/hooks/useListFilters'
 import type { AdminMeta, AdminUsageLog } from '@/types'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -25,9 +26,8 @@ interface Filters {
 }
 
 export default function AdminAiUsagePage() {
-  const [filters, setFilters] = useState<Filters>({ user_id: '', status: '' })
-  const [applied, setApplied] = useState<Filters>(filters)
-  const [page, setPage] = useState(1)
+  const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
+    useListFilters<Filters>({ user_id: '', status: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'usage-logs', applied, page],
@@ -36,12 +36,6 @@ export default function AdminAiUsagePage() {
       return (await apiClient.get<{ usage_logs: AdminUsageLog[]; meta: AdminMeta }>(`/api/v1/models/admin/usage-logs${qs}`)).data
     },
   })
-
-  const applyFilters = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setApplied(filters)
-  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -60,7 +54,12 @@ export default function AdminAiUsagePage() {
               <option value="failed">Failed</option>
               <option value="refunded">Refunded</option>
             </Select>
-            <Button type="submit" variant="outline">Apply filters</Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="outline">Apply filters</Button>
+              {hasActiveFilters && (
+                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -69,7 +68,11 @@ export default function AdminAiUsagePage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} requests</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={7} /></tbody>
+              </table>
+            </div>
           ) : !data?.usage_logs.length ? (
             <p className="text-sm text-muted-foreground">No usage logs match these filters.</p>
           ) : (

@@ -1,6 +1,13 @@
 import type { AxiosError } from 'axios'
 import type { ApiError } from '@/types'
 
+// Toast wording convention (applies to every toast.error/toast.success in the app, not
+// just this file's own fallback strings): full sentences, sentence case, friendly-but-plain
+// tone. Say what happened, and — for errors — what to do next where that's useful
+// ("...check X before trying again" rather than a bare "Failed."). Prefer describeError()'s
+// ambiguousMessage param over a hand-rolled string so ambiguous network failures (see below)
+// get consistent, non-alarmist wording across pages.
+
 export interface ErrorInfo {
   // True when the client never got a response (timeout, dropped connection) — the request
   // may have still succeeded server-side. Seen live during registration: axios timed out

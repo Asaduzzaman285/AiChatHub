@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -11,12 +10,14 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { Pagination } from '@/components/ui/Pagination'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import { buildQueryString } from '@/lib/query-string'
 import { hasPermission } from '@/lib/permissions'
 import { useAuthStore } from '@/stores/auth-store'
+import { useListFilters } from '@/hooks/useListFilters'
 import type { AdminMeta, AdminUserSummary } from '@/types'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -37,9 +38,8 @@ export default function AdminUsersPage() {
   const canViewChat = hasPermission(currentAdmin, 'chat_logs.view')
   const queryClient = useQueryClient()
 
-  const [filters, setFilters] = useState<Filters>({ name: '', email: '', status: '' })
-  const [applied, setApplied] = useState<Filters>(filters)
-  const [page, setPage] = useState(1)
+  const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
+    useListFilters<Filters>({ name: '', email: '', status: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'users', applied, page],
@@ -56,14 +56,8 @@ export default function AdminUsersPage() {
       toast.success('User updated.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not update user status.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We couldn't reach the server in time — check the user's status before trying again.").message),
   })
-
-  const applyFilters = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setApplied(filters)
-  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -83,7 +77,12 @@ export default function AdminUsersPage() {
               <option value="pending_verification">Pending verification</option>
               <option value="suspended">Suspended</option>
             </Select>
-            <Button type="submit" variant="outline">Apply filters</Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="outline">Apply filters</Button>
+              {hasActiveFilters && (
+                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -92,7 +91,11 @@ export default function AdminUsersPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} users</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={6} /></tbody>
+              </table>
+            </div>
           ) : !data?.users.length ? (
             <p className="text-sm text-muted-foreground">No users match these filters.</p>
           ) : (

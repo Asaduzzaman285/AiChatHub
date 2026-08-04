@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Badge } from '@/components/ui/Badge'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { formatCurrency } from '@/lib/utils'
@@ -89,7 +90,7 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
       queryClient.invalidateQueries({ queryKey: ['admin', 'packages'] })
       setOpen(false)
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not save this package.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the packages list before trying again.").message),
   })
 
   const toggleModel = (modelId: string) => {
@@ -102,7 +103,7 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!form.name || !form.slug || !form.monthly_price_usd || !form.monthly_wallet_credit_usd) {
-      toast.error('Name, slug, price, and wallet credit are required.')
+      toast.error('Please fill in a name, slug, price, and wallet credit before saving.')
       return
     }
     save.mutate()
@@ -177,7 +178,9 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
             <Label>Models included</Label>
             <div className="mt-1.5 max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
               {!models ? (
-                <p className="text-sm text-muted-foreground">Loading models…</p>
+                <div className="space-y-1.5">
+                  {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-4 w-40" />)}
+                </div>
               ) : (
                 models.map((m) => (
                   <label key={m.model_id} className="flex items-center gap-2 text-sm">
@@ -218,7 +221,17 @@ export default function AdminPackagesPage() {
         <CardHeader><CardTitle>{data?.length ?? '…'} packages</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-3 w-56" />
+                  </div>
+                  <Skeleton className="h-7 w-20" />
+                </div>
+              ))}
+            </div>
           ) : !data?.length ? (
             <p className="text-sm text-muted-foreground">No packages yet.</p>
           ) : (

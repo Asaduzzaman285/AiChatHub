@@ -5,8 +5,8 @@
         "appName": "AI ChatHub AI Gateway Service",
         "host": "0.0.0.0",
         "port": "8000",
-        "workers": 4,
-        "taskWorkers": 4,
+        "workers": 2,
+        "taskWorkers": 2,
         "maxRequests": 500,
         "publicPath": "\/var\/www\/public",
         "storagePath": "\/var\/www\/storage",
@@ -17,12 +17,12 @@
             "log_level": 2,
             "max_request": 500,
             "package_max_length": 10485760,
-            "reactor_num": 4,
+            "reactor_num": 2,
             "send_yield": true,
             "socket_buffer_size": 10485760,
             "task_max_request": 500,
-            "task_worker_num": 4,
-            "worker_num": 4
+            "task_worker_num": 2,
+            "worker_num": 2
         },
         "octaneConfig": {
             "server": "swoole",

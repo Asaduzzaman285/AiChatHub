@@ -4,48 +4,85 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* "Violet Ink" — background/card are no longer both pure white (0 0% 100%/0 0% 100%),
+       so cards now visibly float on a faint lavender-tinted page instead of blending into it. */
+    --background: 258 45% 98%;
+    --foreground: 258 25% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --card-foreground: 258 25% 12%;
+    --primary: 258 78% 56%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 258 35% 95%;
+    --secondary-foreground: 258 25% 15%;
+    --muted: 258 30% 95%;
+    --muted-foreground: 258 10% 45%;
+    --accent: 258 35% 95%;
+    --accent-foreground: 258 25% 15%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --border: 258 30% 91%;
+    --input: 258 30% 91%;
+    --ring: 258 78% 56%;
     --radius: 0.5rem;
+
+    /* Chart palette — chart-1 now matches the violet primary; the rest span outward
+       (magenta, pink, blue, amber) so multi-category charts stay distinct and legible
+       without just repeating --primary. Legible on both light and dark card backgrounds. */
+    --chart-1: 258 78% 60%;
+    --chart-2: 291 70% 62%;
+    --chart-3: 330 75% 62%;
+    --chart-4: 200 70% 50%;
+    --chart-5: 38 92% 55%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --background: 258 45% 8%;
+    --foreground: 258 15% 95%;
+    --card: 258 40% 12%;
+    --card-foreground: 258 15% 95%;
+    --primary: 258 85% 68%;
+    --primary-foreground: 258 45% 10%;
+    --secondary: 258 30% 18%;
+    --secondary-foreground: 258 15% 95%;
+    --muted: 258 30% 18%;
+    --muted-foreground: 258 15% 65%;
+    --accent: 258 30% 18%;
+    --accent-foreground: 258 15% 95%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --border: 258 30% 20%;
+    --input: 258 30% 20%;
+    --ring: 258 85% 68%;
   }
 }
 
 @layer base {
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
+  h1, h2, h3, h4 { font-family: var(--font-display); }
+}
+
+@layer utilities {
+  /* Shimmer skeleton — a light sweep across a bg-muted block, replacing the flatter
+     animate-pulse fade so loading cards read as "actively loading" rather than just dim. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: hsl(var(--muted));
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.08), transparent);
+    animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton::after { animation: none; }
+  }
+}
+
+@keyframes skeleton-shimmer {
+  100% { transform: translateX(100%); }
 }

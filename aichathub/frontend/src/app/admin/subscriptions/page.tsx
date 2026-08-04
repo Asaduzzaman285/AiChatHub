@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -8,9 +7,11 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { Pagination } from '@/components/ui/Pagination'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatDate } from '@/lib/utils'
 import { buildQueryString } from '@/lib/query-string'
+import { useListFilters } from '@/hooks/useListFilters'
 import type { AdminMeta, AdminSubscription } from '@/types'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -27,9 +28,8 @@ interface Filters {
 }
 
 export default function AdminSubscriptionsPage() {
-  const [filters, setFilters] = useState<Filters>({ user_id: '', status: '', auto_renew: '' })
-  const [applied, setApplied] = useState<Filters>(filters)
-  const [page, setPage] = useState(1)
+  const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
+    useListFilters<Filters>({ user_id: '', status: '', auto_renew: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'subscriptions', applied, page],
@@ -38,12 +38,6 @@ export default function AdminSubscriptionsPage() {
       return (await apiClient.get<{ subscriptions: AdminSubscription[]; meta: AdminMeta }>(`/api/v1/subscription/admin${qs}`)).data
     },
   })
-
-  const applyFilters = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setApplied(filters)
-  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -68,7 +62,12 @@ export default function AdminSubscriptionsPage() {
               <option value="true">Auto-renew on</option>
               <option value="false">Auto-renew off</option>
             </Select>
-            <Button type="submit" variant="outline">Apply filters</Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="outline">Apply filters</Button>
+              {hasActiveFilters && (
+                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -77,7 +76,11 @@ export default function AdminSubscriptionsPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} subscriptions</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={6} /></tbody>
+              </table>
+            </div>
           ) : !data?.subscriptions.length ? (
             <p className="text-sm text-muted-foreground">No subscriptions match these filters.</p>
           ) : (

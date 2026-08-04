@@ -22,6 +22,12 @@ const NAV_ITEMS = [
  * Next.js middleware can't see them — this client-side guard is the Phase 1
  * substitute. On refresh, only tokens survive (see auth-store's partialize),
  * so `user` is re-fetched here before rendering protected content.
+ *
+ * Mirrors admin/layout.tsx's redirect the other way: an admin account typing
+ * /chat, /billing, etc. directly into the address bar gets sent to /admin,
+ * same as a non-admin typing /admin gets sent to /chat. Removing the nav
+ * links alone (done previously) only hid the option — it never actually
+ * blocked direct navigation, which is the real enforcement boundary.
  */
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -48,6 +54,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
 
     if (user) {
+      if (user.is_admin) {
+        router.replace('/admin')
+        return
+      }
       setChecking(false)
       return
     }
@@ -56,7 +66,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     apiClient
       .get<User>('/api/v1/auth/me')
-      .then(({ data }) => setUser(data))
+      .then(({ data }) => {
+        setUser(data)
+        if (data.is_admin) {
+          router.replace('/admin')
+        }
+      })
       .catch((err: unknown) => {
         // A real 401 means the token itself was rejected — that's a genuine
         // "not logged in," clear it and send them to /login. Anything else
@@ -99,7 +114,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.replace('/login')
   }
 
-  if (checking || !isAuthenticated) {
+  if (checking || !isAuthenticated || user?.is_admin) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />

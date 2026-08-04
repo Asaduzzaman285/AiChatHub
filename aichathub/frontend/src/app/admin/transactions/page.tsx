@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { Pagination } from '@/components/ui/Pagination'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -16,6 +17,7 @@ import { describeError } from '@/lib/errors'
 import { buildQueryString } from '@/lib/query-string'
 import { hasPermission } from '@/lib/permissions'
 import { useAuthStore } from '@/stores/auth-store'
+import { useListFilters } from '@/hooks/useListFilters'
 import type { AdminMeta, Transaction } from '@/types'
 
 const STATUS_VARIANT: Record<string, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -43,7 +45,7 @@ function RefundButton({ transaction }: { transaction: Transaction }) {
       queryClient.invalidateQueries({ queryKey: ['admin', 'transactions'] })
       setOpen(false)
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'The refund could not be confirmed — check the transaction status before retrying.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the transaction status before retrying.").message),
   })
 
   if (transaction.status !== 'completed') return null
@@ -75,9 +77,8 @@ export default function AdminTransactionsPage() {
   const { user: currentAdmin } = useAuthStore()
   const canRefund = hasPermission(currentAdmin, 'payments.refund')
 
-  const [filters, setFilters] = useState<Filters>({ user_id: '', status: '', type: '', gateway: '' })
-  const [applied, setApplied] = useState<Filters>(filters)
-  const [page, setPage] = useState(1)
+  const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
+    useListFilters<Filters>({ user_id: '', status: '', type: '', gateway: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'transactions', applied, page],
@@ -86,12 +87,6 @@ export default function AdminTransactionsPage() {
       return (await apiClient.get<{ transactions: Transaction[]; meta: AdminMeta }>(`/api/v1/transactions/admin${qs}`)).data
     },
   })
-
-  const applyFilters = (e: FormEvent) => {
-    e.preventDefault()
-    setPage(1)
-    setApplied(filters)
-  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -122,7 +117,12 @@ export default function AdminTransactionsPage() {
               <option value="stripe">Stripe</option>
               <option value="bkash">bKash</option>
             </Select>
-            <Button type="submit" variant="outline">Apply filters</Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="outline">Apply filters</Button>
+              {hasActiveFilters && (
+                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>
@@ -131,7 +131,11 @@ export default function AdminTransactionsPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} transactions</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={canRefund ? 7 : 6} /></tbody>
+              </table>
+            </div>
           ) : !data?.transactions.length ? (
             <p className="text-sm text-muted-foreground">No transactions match these filters.</p>
           ) : (

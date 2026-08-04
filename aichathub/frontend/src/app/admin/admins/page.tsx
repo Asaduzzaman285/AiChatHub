@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Label } from '@/components/ui/Label'
 import { Badge } from '@/components/ui/Badge'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { formatDate } from '@/lib/utils'
@@ -18,7 +19,10 @@ import type { AdminMeta, AdminUser, AdminUserSummary, Role } from '@/types'
 export default function AdminAdminsPage() {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<'promote' | 'create'>('promote')
   const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
+  const [password, setPassword] = useState('')
   const [role, setRole] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -37,29 +41,36 @@ export default function AdminAdminsPage() {
 
   const createAdmin = useMutation({
     mutationFn: async () => {
-      // No "create admin by email" endpoint exists — resolve the user_id via the
-      // existing user-search filter first, reusing GET /auth/admin/users rather
-      // than adding a new backend endpoint just for this lookup.
+      if (mode === 'create') {
+        return apiClient.post('/api/v1/auth/admin/admins', { mode: 'create', name, email, password, role })
+      }
+
+      // 'promote' mode — no "create admin by email" endpoint for this case, so
+      // resolve the user_id via the existing user-search filter first, reusing
+      // GET /auth/admin/users rather than adding a new backend endpoint just for
+      // this lookup.
       const { data: userSearch } = await apiClient.get<{ users: AdminUserSummary[] }>(
         `/api/v1/auth/admin/users?email=${encodeURIComponent(email)}&per_page=1`
       )
       const match = userSearch.users.find((u) => u.email.toLowerCase() === email.toLowerCase())
       if (!match) throw new Error('NOT_FOUND')
 
-      return apiClient.post('/api/v1/auth/admin/admins', { user_id: match.id, role })
+      return apiClient.post('/api/v1/auth/admin/admins', { mode: 'promote', user_id: match.id, role })
     },
     onSuccess: () => {
       toast.success('Admin created.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'admins'] })
       setOpen(false)
       setEmail('')
+      setName('')
+      setPassword('')
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === 'NOT_FOUND') {
-        toast.error('No user found with that exact email.')
+        toast.error("We couldn't find a user with that exact email — double-check it and try again.")
         return
       }
-      toast.error(describeError(err, 'Could not create admin.').message)
+      toast.error(describeError(err, "We didn't hear back in time — check the admins list before trying again.").message)
     },
   })
 
@@ -70,7 +81,7 @@ export default function AdminAdminsPage() {
       toast.success('Role updated.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'admins'] })
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not update role.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the admin's role before trying again.").message),
   })
 
   const toggleActive = useMutation({
@@ -80,12 +91,16 @@ export default function AdminAdminsPage() {
       toast.success('Admin updated.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'admins'] })
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not update admin.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the admin's status before trying again.").message),
   })
 
   const handleCreate = (e: FormEvent) => {
     e.preventDefault()
     if (!email) return
+    if (mode === 'create') {
+      if (!name.trim()) { toast.error('Please enter a name for this admin.'); return }
+      if (password.length < 8) { toast.error('Password must be at least 8 characters.'); return }
+    }
     createAdmin.mutate()
   }
 
@@ -94,9 +109,9 @@ export default function AdminAdminsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Admins</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Grant admin roles to existing users.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Promote an existing user, or create a brand-new admin account.</p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (next) setMode('promote') }}>
           <DialogTrigger asChild>
             <Button>Add admin</Button>
           </DialogTrigger>
@@ -104,12 +119,45 @@ export default function AdminAdminsPage() {
             <DialogHeader>
               <DialogTitle>Add admin</DialogTitle>
             </DialogHeader>
+            <div className="flex gap-1 rounded-md bg-muted p-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setMode('promote')}
+                className={`flex-1 rounded px-3 py-1.5 font-medium transition-colors ${mode === 'promote' ? 'bg-card shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                Promote existing user
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('create')}
+                className={`flex-1 rounded px-3 py-1.5 font-medium transition-colors ${mode === 'create' ? 'bg-card shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                Create new admin
+              </button>
+            </div>
             <form onSubmit={handleCreate} className="space-y-4">
+              {mode === 'create' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="admin-name">Name</Label>
+                  <Input id="admin-name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Doe" />
+                </div>
+              )}
               <div className="space-y-1.5">
-                <Label htmlFor="admin-email">User email</Label>
+                <Label htmlFor="admin-email">{mode === 'create' ? 'Email' : 'User email'}</Label>
                 <Input id="admin-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" />
-                <p className="text-xs text-muted-foreground">Must match an existing user&apos;s email exactly.</p>
+                {mode === 'promote' && (
+                  <p className="text-xs text-muted-foreground">Must match an existing user&apos;s email exactly.</p>
+                )}
               </div>
+              {mode === 'create' && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="admin-password">Password</Label>
+                  <Input id="admin-password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 8 characters" />
+                  <p className="text-xs text-muted-foreground">
+                    This account is created with no wallet or subscription — it&apos;s a pure admin, not a consumer account.
+                  </p>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="admin-role">Role</Label>
                 <Select id="admin-role" value={role} onChange={(e) => setRole(e.target.value)}>
@@ -132,7 +180,11 @@ export default function AdminAdminsPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} admins</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={6} /></tbody>
+              </table>
+            </div>
           ) : !data?.admins.length ? (
             <p className="text-sm text-muted-foreground">No admins yet.</p>
           ) : (

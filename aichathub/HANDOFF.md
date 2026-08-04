@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-08-03  
+**Last updated:** 2026-08-04 (evening)  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -2087,25 +2087,40 @@ regardless of correct SMTP/auth configuration. This resolves naturally once a re
 verified (SPF/DKIM DNS records) later; nothing else to fix here for the development phase.
 
 ### Remaining for Phase 1 (as of 2026-08-03)
-1. **Host-network flakiness — real root cause found today, one concrete fix still not applied.** This is
-   **not** a Docker/app bug — it's genuine host resource starvation. Hard numbers from today: this machine
-   has only **4 CPU cores and 7.9GB RAM total**, and **Docker Desktop is configured to claim all 4 cores**
-   (`docker info`: `4 CPUs, ~3.9GB memory allocated`) — leaving Windows itself zero guaranteed headroom to
-   do the actual work of moving network packets between the host and the WSL2 VM. Confirmed live: CPU load
-   sat at 72-79% on just 4 cores while the system was otherwise idle; free RAM was down to 350MB at one
-   point (closing Chrome — 24 processes, 2.4GB — brought it to 1.7GB, a real but partial improvement).
-   Tried a full reset today (`wsl --shutdown` + fully killing and relaunching Docker Desktop, not just its
-   own restart button) — this fixed a *worse*, fully-broken state that the reset itself temporarily caused
-   (Windows-side port forwarding lagging behind the daemon coming back up — if this happens again, `docker
-   info` succeeding does **not** mean the exposed ports are actually forwarding yet, give it another
-   minute), but did **not** fix the underlying flakiness, because the actual fix — capping Docker
-   Desktop's CPU limit so Windows keeps at least 1 core free — is a GUI-only setting (Settings → Resources
-   → Advanced → CPU limit 4 → 2, also consider Memory limit ~3.9GB → ~3GB → Apply & Restart) that the user
-   deferred to tomorrow. **This is the first thing to do tomorrow, before any other testing** — every
-   other diagnostic avenue (RAM, full WSL/Docker reset) has been tried and only partially helped; this is
-   the one lever with real, unapplied, high-confidence evidence behind it. Also worth remembering
-   generally: Windows 10 (confirmed via `wsl --version` today) has no "mirrored networking mode" option
-   (Windows 11+ only) — that avenue is permanently closed on this machine, not worth revisiting.
+1. ~~Host-network flakiness~~ — ✅ meaningfully fixed 2026-08-03, root cause confirmed as genuine host
+   resource starvation, not a Docker/app bug. This machine has only **4 CPU cores and 7.9GB RAM total**.
+   Diagnosed and fixed in stages, each one verified live with real repeated login timing before moving to
+   the next (not just assumed):
+   - Closing Chrome (24 processes, 2.4GB) — free RAM 350MB → 1.7GB. Necessary but not sufficient alone.
+   - Docker Desktop on this version has **no GUI CPU/memory slider** when using the WSL2 backend — it's
+     configured via a `%USERPROFILE%\.wslconfig` file instead (there wasn't one, meaning WSL2 was
+     defaulting to using everything available: `docker info` showed all 4 cores, ~3.9GB claimed). Created
+     one capping Docker to `processors=2` / `memory=3GB` / `swap=2GB`. Needs a full `wsl --shutdown` +
+     Docker Desktop restart to take effect — a plain Docker Desktop "Restart" button is not enough, and
+     doesn't even reliably kill/relaunch Docker's own Windows-side processes (confirmed live: their
+     StartTime hadn't changed after clicking restart). Also learned: right after this kind of reset,
+     `docker info` responding does **not** mean the exposed ports are actually forwarding yet — Windows-side
+     port forwarding lags behind the daemon by up to a minute or so; check an actual `curl` to an exposed
+     port before assuming things are back, not just the daemon.
+   - This alone (capping CPU/memory) **did not fix it** — same ~37% failure rate as before. Real
+     insight: reallocating a fixed pie between Windows and Docker doesn't help when the *total* workload
+     (27 containers) exceeds what 2-4 cores can comfortably run regardless of the split.
+   - What actually worked: **reducing total footprint**, not just reallocating it. Stopped the 3 background
+     schedulers (`payment-scheduler`/`subscription-scheduler`/`wallet-scheduler` — not needed for active
+     testing) and dialed back this same morning's `pm.max_children` bump (20/4/2/6 → **8/2/1/3** in
+     `infrastructure/docker/php/www.conf`) — the earlier, more aggressive tuning assumed more headroom
+     than this host actually has; at `start_servers=4` across 7 services that's 28 idle php-fpm workers
+     running at all times before a single request even arrives, real overhead this VM can't spare.
+   - **Result, verified live**: two batches of repeated real logins through the full stack — 6/6 succeeded
+     in the second batch, consistently 4.8-6.5s (down from a mix of 5-15s and frequent outright timeouts
+     before). CPU load dropped 79% → 38% over the course of these changes. Not instant/sub-second — that's
+     just the real cost of this workload on 2 cores now — but reliable and predictable, which is the
+     actual fix: no more random complete failures.
+   - Not available on this machine at all: Docker's "mirrored networking mode" (Windows 11+ only, this is
+     Windows 10 — confirmed via `wsl --version`). Not worth revisiting.
+   - If this regresses later: the pattern that worked was (1) check free RAM / CPU load first, not guess,
+     (2) check what's actually running and stop what isn't needed, (3) only then consider `.wslconfig`
+     tuning — reducing total footprint mattered more than how the pie was split.
 2. `ChatController::compare()` — spot-checked working under Octane today, not yet stress-tested under
    concurrent load the way single-model `stream()` was.
 3. Fix the known "No models available" loading-state flash on the chat page — still not done.
@@ -2126,6 +2141,129 @@ verified (SPF/DKIM DNS records) later; nothing else to fix here for the developm
 
 Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/business
 model, and sustainable AI-usage-limit strategy.
+
+### 2026-08-04 Session — fixed admin-into-user-routes gap (real bug, found by user's own manual testing)
+
+An admin account typing `/chat`, `/billing`, `/wallet`, or `/pricing` directly into the address bar
+could still reach them — the 2026-07-30 admin/user UI separation only removed the nav *links*, it
+never added an actual route-level block, and this was explicitly flagged at the time as a known,
+not-yet-closed gap. `admin/layout.tsx` already redirects non-admins away (`if (!user.is_admin)
+router.replace('/chat')`) — `(dashboard)/layout.tsx` had no mirrored check the other way. Fixed by
+adding the same `is_admin` check to `(dashboard)/layout.tsx` (both the already-hydrated-`user` branch
+and the `/auth/me` fetch branch, plus the render guard), redirecting admins to `/admin`. `tsc --noEmit`
+clean. **Not yet verified in a real browser** — needs the user to confirm live (I can't drive a browser
+from here); should be a 2-minute check: log in as admin, type `/chat` in the address bar, confirm it
+bounces to `/admin`.
+
+### 2026-08-04 Session (cont'd) — Admin dashboard bar charts, clear-filters, skeleton loading, toast consistency
+
+Four-part frontend polish pass, approved together after a planning-only pass the user reviewed first
+(no chart-consolidation endpoint — kept the existing 5 parallel `/admin/dashboard` calls, just render
+their already-existing categorical breakdowns as charts instead of text rows).
+
+1. **Dashboard bar charts** — added `recharts`, replaced the plain `flex justify-between` text rows for
+   `plan_breakdown` (Subscriptions card), `gateway_breakdown` (Revenue card — this data existed on the
+   backend but wasn't rendered anywhere before today), and `provider_breakdown` (AI Usage card) with a
+   shared `BreakdownChart` component in `admin/page.tsx`: horizontal `<BarChart>`, colors resolved from
+   the app's own HSL CSS variables (`hsl(var(--primary))`, `hsl(var(--border))`, etc.) so it's correct in
+   both themes, not hardcoded. Numeric `Stat` tiles untouched — a bar chart of one bar isn't useful.
+2. **Clear filters** — new `useListFilters<T>` hook (`src/hooks/useListFilters.ts`) extracting the
+   previously copy-pasted draft/applied/page `useState` trio shared identically across 6 admin list
+   pages (users, subscriptions, transactions, wallet, ai-usage, audit-logs), adding `clearFilters()` and
+   a computed `hasActiveFilters`. Each page now shows a "Clear filters" button next to "Apply filters"
+   once any filter is active.
+3. **Skeleton loading** — new `src/components/ui/Skeleton.tsx` (`Skeleton`, `SkeletonText`,
+   `SkeletonStat`, `SkeletonTableRows`, `SkeletonListItem`), all using Tailwind's built-in `animate-pulse`
+   and the `bg-muted` token (correct in both themes). Replaced every plain `<p>Loading…</p>` across
+   `admin/**` and `(dashboard)/**` (~20 spots) with a skeleton shaped like the real content underneath —
+   table rows for list pages, stat-tile grids for the dashboard, repeated bordered rows for the two
+   admin user-chat-history pages, list-item rows for the chat sidebar, card skeletons for the 3
+   pricing-plan cards. Deliberately left alone: the handful of full-page auth-guard "checking who you
+   are" spinners (`admin/layout.tsx`, `(dashboard)/layout.tsx`, `auth/callback/page.tsx`) — no content
+   shape to skeleton against, a spinner is already correct there.
+4. **Toast consistency** — `src/lib/errors.ts` gained a wording-convention comment (full sentences,
+   sentence case, say what happened + what to do next). Passed over all ~49 `toast.error`/`toast.success`
+   call sites app-wide; rewrote the dozen or so terse/robotic outliers (`'Could not update role.'`,
+   `'Could not start a new chat.'`, `'Upload failed.'`, `'Name is required.'`, etc.) to match the tone
+   already established at the better call sites (`"We didn't hear back in time — check X before trying
+   again."`). Most sites already used `describeError()`'s ambiguous/non-ambiguous split correctly — only
+   wording needed fixing, not the underlying logic.
+
+`tsc --noEmit` clean throughout (verified after each of the 4 parts, not just once at the end). **Not
+yet verified in a real browser** — the dev server responds and the admin dashboard route exists, but a
+full authenticated click-through (confirm charts render with real data in both themes, confirm clear-
+filters actually resets each of the 6 pages, confirm skeletons appear correctly under real network
+latency) needs the user to do live, same as the route-guard fix above — I can't drive a browser from here.
+
+### 2026-08-04 Session (cont'd, again) — Admin/user route-guard fix regression + decoupled pure admin accounts from wallets
+
+**Regression found and fixed**: the earlier same-session admin/user route-guard fix (redirecting
+`is_admin` accounts away from every `(dashboard)/**` route) had a side effect nobody had tested —
+the admin dropdown's own "Profile" link pointed at `/profile`, which lives under `(dashboard)`, so
+clicking it from the admin UI now just bounced straight back to `/admin`. Fixed by extracting the
+profile page's content into a shared `ProfileView` component (`frontend/src/components/profile/
+ProfileView.tsx`) and giving admins their own `/admin/profile` route that renders it inside the
+admin shell; `(dashboard)/profile/page.tsx` is now a thin wrapper around the same component.
+Admin dropdown (`admin/layout.tsx`) now links to `/admin/profile` instead of `/profile`.
+
+**Real product question, found via that same page**: the admin's `/admin/profile` showed a genuine
+wallet balance. Root cause: `admin_users` is just a bolt-on table (`user_id` FK → `users`) —
+admin-ness is computed at JWT-issue time (`User::getJWTCustomClaims()`), never stored on `users`
+itself. The only way to create an admin was promoting an *already-existing* consumer user
+(`AdminUserController::store()` required an existing `users.id`) — so every admin necessarily went
+through consumer registration first, which unconditionally creates a wallet. The $39.27 was
+ordinary subscription wallet-credit from before that account was promoted, nothing admin-specific.
+
+**Fix — pure admin accounts, no schema migration needed** (wallet-creation is only ever triggered
+from `RegisterController`/`FirebaseAuthController`, never from admin promotion, so a new
+admin-creation path that builds a `users` row directly, bypassing registration, simply never
+touches wallet-service):
+- `AdminUserController::store()` (auth-service) now branches on a `mode` field: `'promote'`
+  (existing behavior, unchanged) or `'create'` (new) — builds a `users` row directly with
+  `status: 'active'` + `email_verified_at: now()` (no consumer email-verification loop; a trusted
+  admin is vouching for the account) and an `admin_users` row, inside one `DB::transaction()`, with
+  **no wallet-service call anywhere in that path**. Audit-logged as `admin.account_created`
+  (distinct from `admin.created` for promotions).
+- **Real gap closed in the same pass**: `ai-gateway-service`'s AI routes (`/chat/stream`,
+  `/chat/compare`, `/generate/*`, `/transcribe`) were gated only by `auth.jwt`, with nothing
+  blocking an admin JWT — `CostTrackingMiddleware` would unconditionally try to reserve against a
+  wallet that a pure admin simply doesn't have, surfacing as a misleading `503 "Could not reach the
+  wallet service"` instead of an honest 403. New `BlockAdminMiddleware` (mirrors the existing
+  `AdminGateMiddleware`, inverse check) closes this, wired via a new `block.admin` alias onto just
+  those 5 routes.
+- `admin/admins/page.tsx` — "Add admin" dialog now offers both modes via a simple two-button
+  toggle: "Promote existing user" (unchanged) and "Create new admin" (name/email/password/role,
+  no search step), with a note in the form that the new account has no wallet/subscription.
+
+**Verified live, not just code-reviewed** (minted a real platform_admin JWT via a bootstrapped
+tinker-equivalent script since `laravel/tinker` isn't installed in this project — went through the
+actual `JwtService::issueTokens()` code path used by real login, not a fake token):
+1. Created a fresh pure admin via `POST /admin/admins {mode:'create',...}` → 201, `status: 'active'`,
+   `email_verified_at` set immediately.
+2. Logged in as that admin immediately (no verification step) — confirmed `is_admin: true` in the
+   JWT claims.
+3. `GET /wallet` for that admin → clean `404 wallet_not_found` (confirmed zero rows in
+   `wallet_svc.wallets` for that user_id).
+4. `POST /chat/stream` for that admin → clean `403 admin_not_allowed`, not the old misleading 503.
+5. Registered + promoted a separate fresh consumer via `mode: 'promote'` → unchanged 201 behavior,
+   confirmed that user **does** have a wallet row (registration's own wallet-create path untouched).
+6. A real consumer JWT hitting `/chat/stream` still reaches normal `422` validation (not blocked by
+   the new middleware) — confirms `block.admin` only fires for actual admin JWTs.
+7. Audit log shows both `admin.created` (promote) and `admin.account_created` (create) as distinct,
+   correctly attributed entries.
+
+Restarted `ai-gateway-service`/`ai-gateway-nginx` after this change — necessary because it runs
+under Octane (see earlier session), whose persistent workers boot the app once and don't pick up
+`bootstrap/app.php`/`routes/api.php` changes (new middleware alias, new route group) without a
+restart. `auth-service` (still plain php-fpm) needed no restart.
+
+**Out of scope, by design**: admins promoted before this change keep their existing wallets — no
+backfill/removal, this only changes the creation path going forward. No admin-invite email flow —
+the creating admin sets the initial password directly, same trust model as the existing manual
+wallet-balance-adjust feature. No broader server-side admin lockout across every other
+consumer-facing endpoint (topup, subscribe, billing) — scoped to the one concretely-identified gap,
+since the frontend UI guards already block admins from those other flows and there's no
+`auth.jwt`-only path into them the way the AI routes had.
 
 ### Tomorrow's plan (as of 2026-08-02)
 

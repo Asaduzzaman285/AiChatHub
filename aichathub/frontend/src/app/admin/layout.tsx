@@ -167,7 +167,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
-              <DropdownMenuItem onClick={() => router.push('/profile')}>
+              <DropdownMenuItem onClick={() => router.push('/admin/profile')}>
                 <UserRound className="h-4 w-4" />
                 Profile
               </DropdownMenuItem>

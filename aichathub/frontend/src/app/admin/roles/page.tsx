@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Badge } from '@/components/ui/Badge'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/Dialog'
 import apiClient from '@/lib/api-client'
 import { formatDate } from '@/lib/utils'
@@ -43,7 +44,7 @@ function RoleFormDialog({ role, trigger }: { role?: Role; trigger: React.ReactNo
       queryClient.invalidateQueries({ queryKey: ['admin', 'roles'] })
       setOpen(false)
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not save this role.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check the roles list before trying again.").message),
   })
 
   const togglePermission = (value: string) => {
@@ -56,7 +57,7 @@ function RoleFormDialog({ role, trigger }: { role?: Role; trigger: React.ReactNo
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!form.name.trim()) {
-      toast.error('Name is required.')
+      toast.error('Please enter a name for this role.')
       return
     }
     if (!form.fullAccess && form.permissions.length === 0) {
@@ -129,7 +130,7 @@ export default function AdminRolesPage() {
       toast.success('Role deleted.')
       queryClient.invalidateQueries({ queryKey: ['admin', 'roles'] })
     },
-    onError: (err: unknown) => toast.error(describeError(err, 'Could not delete this role.').message),
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — check whether the role was actually deleted before retrying.").message),
   })
 
   return (
@@ -146,7 +147,17 @@ export default function AdminRolesPage() {
         <CardHeader><CardTitle>{data?.length ?? '…'} roles</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-48" />
+                  </div>
+                  <Skeleton className="h-7 w-16" />
+                </div>
+              ))}
+            </div>
           ) : !data?.length ? (
             <p className="text-sm text-muted-foreground">No roles yet.</p>
           ) : (

@@ -7,6 +7,7 @@ import {
   Bot, Columns3, Loader2, MessageSquare, Paperclip, Pencil, Plus, Send, Sparkles, Trash2, User, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { SkeletonListItem } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -100,14 +101,14 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] })
       setActiveSessionId(session.id)
     },
-    onError: () => toast.error('Could not start a new chat.'),
+    onError: () => toast.error("We couldn't start a new chat — please try again."),
   })
 
   const renameSession = useMutation({
     mutationFn: async ({ id, title }: { id: string; title: string }) =>
       apiClient.patch(`/api/v1/sessions/${id}`, { title }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] }),
-    onError: () => toast.error('Could not rename chat.'),
+    onError: () => toast.error("We couldn't rename that chat — please try again."),
     onSettled: () => setRenamingId(null),
   })
 
@@ -118,7 +119,7 @@ export default function ChatPage() {
       if (activeSessionId === id) setActiveSessionId(null)
       toast.success('Chat deleted.')
     },
-    onError: () => toast.error('Could not delete chat.'),
+    onError: () => toast.error("We couldn't delete that chat — please try again."),
   })
 
   const startRename = (s: ChatSession) => {
@@ -154,7 +155,7 @@ export default function ChatPage() {
     onSuccess: (attachment) => setPendingAttachment(attachment),
     onError: (err: unknown) => {
       const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-      toast.error(message ?? 'Upload failed.')
+      toast.error(message ?? "We couldn't upload that file — please try again.")
     },
   })
 
@@ -440,7 +441,9 @@ export default function ChatPage() {
 
         <div className="flex-1 overflow-y-auto">
           {sessionsLoading ? (
-            <p className="p-3 text-xs text-muted-foreground">Loading…</p>
+            <>
+              {Array.from({ length: 6 }).map((_, i) => <SkeletonListItem key={i} />)}
+            </>
           ) : !sessions?.length ? (
             <div className="p-6 text-center space-y-2">
               <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground/40" />

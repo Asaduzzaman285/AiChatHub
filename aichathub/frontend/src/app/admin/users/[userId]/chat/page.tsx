@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
+import { Skeleton } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatDate } from '@/lib/utils'
 import type { AdminMeta, ChatSession } from '@/types'
@@ -29,7 +30,17 @@ export default function AdminUserChatSessionsPage() {
         <CardHeader><CardTitle>{data?.meta.total ?? '…'} sessions</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-3 w-56" />
+                  </div>
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                </div>
+              ))}
+            </div>
           ) : !data?.chat_sessions.length ? (
             <p className="text-sm text-muted-foreground">No chat sessions for this user.</p>
           ) : (

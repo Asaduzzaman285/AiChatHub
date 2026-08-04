@@ -34,6 +34,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
             'auth.jwt'      => \App\Http\Middleware\JwtAuthMiddleware::class,
             'auth.internal' => \App\Http\Middleware\InternalServiceMiddleware::class,
             'admin.gate'    => \App\Http\Middleware\AdminGateMiddleware::class,
+            'block.admin'   => \App\Http\Middleware\BlockAdminMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

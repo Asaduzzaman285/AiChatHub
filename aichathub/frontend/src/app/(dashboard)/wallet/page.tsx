@@ -5,6 +5,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
@@ -45,7 +46,7 @@ export default function WalletPage() {
     e.preventDefault()
     const value = parseFloat(amount)
     if (!value || value <= 0) {
-      toast.error('Enter a valid amount.')
+      toast.error('Please enter a top-up amount greater than $0.')
       return
     }
     topup.mutate({ amountUsd: value, gateway })
@@ -67,7 +68,11 @@ export default function WalletPage() {
           </CardHeader>
           <CardContent>
             {walletLoading ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
+              <div className="space-y-2">
+                <Skeleton className="h-9 w-32" />
+                <Skeleton className="h-3.5 w-28" />
+                <Skeleton className="h-3.5 w-40" />
+              </div>
             ) : wallet ? (
               <div className="space-y-1">
                 <p className="text-3xl font-bold">{formatCurrency(wallet.available_balance, wallet.currency)}</p>
@@ -117,7 +122,11 @@ export default function WalletPage() {
         </CardHeader>
         <CardContent>
           {ledgerLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <tbody><SkeletonTableRows columns={5} /></tbody>
+              </table>
+            </div>
           ) : !ledger?.length ? (
             <p className="text-sm text-muted-foreground">No wallet activity yet.</p>
           ) : (

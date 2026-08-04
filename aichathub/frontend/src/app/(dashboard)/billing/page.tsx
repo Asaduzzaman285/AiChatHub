@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
+import { SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Invoice, Receipt, Transaction } from '@/types'
@@ -43,7 +44,9 @@ export default function BillingPage() {
         <CardHeader><CardTitle>Transactions</CardTitle></CardHeader>
         <CardContent>
           {txLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <table className="w-full text-sm">
+              <tbody><SkeletonTableRows columns={5} /></tbody>
+            </table>
           ) : !transactions?.length ? (
             <p className="text-sm text-muted-foreground">No transactions yet.</p>
           ) : (
@@ -82,7 +85,9 @@ export default function BillingPage() {
         <CardHeader><CardTitle>Invoices</CardTitle></CardHeader>
         <CardContent>
           {invLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <table className="w-full text-sm">
+              <tbody><SkeletonTableRows columns={4} /></tbody>
+            </table>
           ) : !invoices?.length ? (
             <p className="text-sm text-muted-foreground">No invoices yet.</p>
           ) : (
@@ -114,7 +119,9 @@ export default function BillingPage() {
         <CardHeader><CardTitle>Receipts</CardTitle></CardHeader>
         <CardContent>
           {rcpLoading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <table className="w-full text-sm">
+              <tbody><SkeletonTableRows columns={4} /></tbody>
+            </table>
           ) : !receipts?.length ? (
             <p className="text-sm text-muted-foreground">No receipts yet.</p>
           ) : (
