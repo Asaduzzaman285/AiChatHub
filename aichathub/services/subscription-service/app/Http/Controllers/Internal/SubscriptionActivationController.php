@@ -94,7 +94,13 @@ class SubscriptionActivationController extends Controller
         }
 
         $subscription = $this->subscriptions->applyUpgrade($current, $package, $data['transaction_id']);
-        $this->activation->creditWallet($data['user_id'], (float) $package->monthly_wallet_credit_usd, $subscription->id, 'Upgrade credit: '.$package->name, $package->creditBufferAmount());
+        // Must use the per-upgrade transaction_id, not $subscription->id, as the credit
+        // reference — creditWallet()'s idempotency guard keys on (subscription, credit)
+        // pairs, and the subscription's id never changes across upgrades. Using it here
+        // made every paid upgrade look like a duplicate of the original purchase credit
+        // and silently no-op (same bug class already fixed for renewals — see
+        // ProcessRenewalJob.php — but missed here; caught live 2026-08-06).
+        $this->activation->creditWallet($data['user_id'], (float) $package->monthly_wallet_credit_usd, $data['transaction_id'], 'Upgrade credit: '.$package->name, $package->creditBufferAmount());
 
         $billingUrl  = rtrim((string) config('services.billing_url'), '/');
         $internalKey = config('services.internal_key');

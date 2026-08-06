@@ -1,10 +1,11 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { Bar, BarChart, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { CheckCircle2, CreditCard, DollarSign, Users as UsersIcon, Wallet as WalletIcon } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
-import { Skeleton, SkeletonChartCard, SkeletonStat } from '@/components/ui/Skeleton'
+import { Skeleton, SkeletonKpiCard, SkeletonChartCard } from '@/components/ui/Skeleton'
+import { KpiCard, BarRow, DotRow } from '@/components/admin/DashboardWidgets'
 import apiClient from '@/lib/api-client'
 import { formatCurrency } from '@/lib/utils'
 import type {
@@ -14,55 +15,6 @@ import type {
   SubscriptionAdminDashboard,
   WalletAdminDashboard,
 } from '@/types'
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <p className="text-2xl font-bold">{value}</p>
-      <p className="text-sm text-muted-foreground">{label}</p>
-    </div>
-  )
-}
-
-const CHART_TOOLTIP_STYLE = {
-  backgroundColor: 'hsl(var(--card))',
-  borderColor: 'hsl(var(--border))',
-  borderRadius: 'var(--radius)',
-  boxShadow: '0 4px 16px hsl(var(--foreground) / 0.08)',
-  fontSize: 12,
-  padding: '6px 10px',
-}
-
-// A curated multi-hue palette (not just --primary repeated) so a breakdown with several
-// categories reads as intentionally colorful, cycling if there are more rows than hues.
-const CHART_COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))']
-
-function BreakdownChart({ data, barKey = 'value' }: { data: { name: string; value: number }[]; barKey?: string }) {
-  return (
-    <ResponsiveContainer width="100%" height={Math.max(120, data.length * 40)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 0, right: 28, top: 4, bottom: 4 }} barCategoryGap={10}>
-        <XAxis type="number" hide />
-        <YAxis
-          type="category"
-          dataKey="name"
-          width={90}
-          tick={{ fontSize: 12, fontWeight: 500, fill: 'hsl(var(--foreground))' }}
-          axisLine={false}
-          tickLine={false}
-        />
-        <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: 'hsl(var(--muted) / 0.5)' }} />
-        <Bar dataKey={barKey} radius={[8, 8, 8, 8]} maxBarSize={16}>
-          {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-          <LabelList
-            dataKey={barKey}
-            position="right"
-            style={{ fontSize: 12, fontWeight: 600, fill: 'hsl(var(--foreground))' }}
-          />
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
-  )
-}
 
 const HEALTH_VARIANT: Record<string, 'success' | 'warning' | 'destructive'> = {
   closed: 'success',
@@ -92,136 +44,157 @@ export default function AdminDashboardPage() {
     queryFn: async () => (await apiClient.get<AiAdminDashboard>('/api/v1/models/admin/dashboard')).data,
   })
 
+  const planEntries = subStats ? Object.entries(subStats.plan_breakdown) : []
+  const planMax = Math.max(1, ...planEntries.map(([, v]) => v))
+  const gatewayMax = Math.max(1, ...(payStats?.gateway_breakdown.map((g) => g.count) ?? []))
+  const providerEntries = aiStats ? Object.entries(aiStats.provider_breakdown) : []
+  const providerMax = Math.max(1, ...providerEntries.map(([, v]) => v.requests))
+
+  const allProvidersHealthy = !!aiStats?.provider_health.length && aiStats.provider_health.every((e) => e.state === 'closed')
+
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl space-y-5">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-sm text-muted-foreground">Platform overview across every service.</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader><CardTitle>Users</CardTitle></CardHeader>
-          <CardContent>
-            {authLoading ? (
-              <div className="grid grid-cols-2 gap-4">
-                {Array.from({ length: 4 }).map((_, i) => <SkeletonStat key={i} />)}
-              </div>
-            ) : authStats ? (
-              <div className="grid grid-cols-2 gap-4">
-                <Stat label="Total users" value={authStats.total_users} />
-                <Stat label="Active" value={authStats.active_users} />
-                <Stat label="Suspended" value={authStats.suspended_users} />
-                <Stat label="New (7d)" value={authStats.new_registrations_7d} />
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+      {/* Row 1 — KPI hero cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {authLoading ? (
+          <SkeletonKpiCard />
+        ) : authStats ? (
+          <KpiCard
+            label="Total users" value={authStats.total_users} icon={UsersIcon} tone="primary" status="ok"
+            trend={authStats.new_registrations_7d > 0
+              ? { direction: 'up', label: `+${authStats.new_registrations_7d} new` }
+              : { direction: 'flat', label: '0 new' }}
+            secondary={`${authStats.active_users} active`}
+          />
+        ) : null}
 
+        {subLoading ? (
+          <SkeletonKpiCard />
+        ) : subStats ? (
+          <KpiCard
+            label="Active subscriptions" value={subStats.active_subscriptions} icon={CreditCard}
+            tone={subStats.past_due_subscriptions > 0 ? 'warning' : 'success'}
+            status={subStats.past_due_subscriptions > 0 ? 'watch' : 'ok'}
+            trend={{ direction: 'flat', label: `${subStats.past_due_subscriptions} past due` }}
+            secondary={`${planEntries.length} tier${planEntries.length === 1 ? '' : 's'}`}
+          />
+        ) : null}
+
+        {payLoading ? (
+          <SkeletonKpiCard />
+        ) : payStats ? (
+          <KpiCard
+            label="Total revenue" value={formatCurrency(payStats.total_revenue)} icon={DollarSign}
+            tone={payStats.failed_count > 0 ? 'warning' : 'success'}
+            status={payStats.failed_count > 0 ? 'watch' : 'ok'}
+            trend={payStats.failed_count > 0
+              ? { direction: 'down', label: `${payStats.failed_count} failed` }
+              : { direction: 'flat', label: '0 failed' }}
+            secondary={`${payStats.completed_count} completed`}
+          />
+        ) : null}
+
+        {walletLoading ? (
+          <SkeletonKpiCard />
+        ) : walletStats ? (
+          <KpiCard
+            label="Wallet balance" value={formatCurrency(walletStats.total_balance)} icon={WalletIcon} tone="info" status="ok"
+            trend={{ direction: 'flat', label: `${formatCurrency(walletStats.deposits_30d)} in` }}
+            secondary={`${formatCurrency(walletStats.withdrawals_30d)} out (30d)`}
+          />
+        ) : null}
+      </div>
+
+      {/* Row 2 — breakdown detail cards */}
+      <div className="grid gap-4 lg:grid-cols-3">
         <Card>
-          <CardHeader><CardTitle>Subscriptions</CardTitle></CardHeader>
-          <CardContent>
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm">Subscriptions by tier</CardTitle>
+            <span className="text-xs text-muted-foreground">{subStats?.active_subscriptions ?? '…'} active</span>
+          </CardHeader>
+          <CardContent className="space-y-3">
             {subLoading ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <SkeletonStat /><SkeletonStat />
-                </div>
-                <SkeletonChartCard barRows={3} />
-              </div>
-            ) : subStats ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-4">
-                  <Stat label="Active" value={subStats.active_subscriptions} />
-                  <Stat label="Past due" value={subStats.past_due_subscriptions} />
-                </div>
-                {Object.entries(subStats.plan_breakdown).length > 0 && (
-                  <BreakdownChart
-                    data={Object.entries(subStats.plan_breakdown).map(([plan, count]) => ({ name: plan, value: count }))}
-                  />
-                )}
-              </div>
-            ) : null}
+              <SkeletonChartCard barRows={3} />
+            ) : planEntries.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No active subscriptions yet.</p>
+            ) : (
+              planEntries.map(([plan, count], i) => <BarRow key={plan} name={plan} value={count} max={planMax} index={i} />)
+            )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Revenue</CardTitle></CardHeader>
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm">Transaction status</CardTitle>
+            <span className="text-xs text-muted-foreground">
+              {payStats ? payStats.completed_count + payStats.failed_count + payStats.pending_count : '…'} total
+            </span>
+          </CardHeader>
           <CardContent>
             {payLoading ? (
-              <div className="space-y-4">
-                <SkeletonStat />
-                <div className="grid grid-cols-3 gap-2">
-                  <SkeletonStat /><SkeletonStat /><SkeletonStat />
-                </div>
-                <SkeletonChartCard barRows={3} />
-              </div>
+              <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}</div>
             ) : payStats ? (
-              <div className="space-y-3">
-                <Stat label="Total revenue" value={formatCurrency(payStats.total_revenue)} />
-                <div className="grid grid-cols-3 gap-2 text-sm">
-                  <Stat label="Completed" value={payStats.completed_count} />
-                  <Stat label="Failed" value={payStats.failed_count} />
-                  <Stat label="Pending" value={payStats.pending_count} />
-                </div>
-                {payStats.gateway_breakdown.length > 0 && (
-                  <BreakdownChart
-                    data={payStats.gateway_breakdown.map((g) => ({ name: g.gateway, value: g.count }))}
-                  />
-                )}
-              </div>
+              <>
+                <DotRow name="Completed" value={payStats.completed_count} tone="success" />
+                <DotRow name="Pending" value={payStats.pending_count} tone="warning" />
+                <DotRow name="Failed" value={payStats.failed_count} tone="destructive" />
+              </>
             ) : null}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Wallet</CardTitle></CardHeader>
-          <CardContent>
-            {walletLoading ? (
-              <div className="grid grid-cols-2 gap-4">
-                {Array.from({ length: 4 }).map((_, i) => <SkeletonStat key={i} />)}
-              </div>
-            ) : walletStats ? (
-              <div className="grid grid-cols-2 gap-4">
-                <Stat label="Total balance" value={formatCurrency(walletStats.total_balance)} />
-                <Stat label="Credit owed" value={formatCurrency(Math.abs(walletStats.total_credit_owed))} />
-                <Stat label="Deposits (30d)" value={formatCurrency(walletStats.deposits_30d)} />
-                <Stat label="Withdrawals (30d)" value={formatCurrency(walletStats.withdrawals_30d)} />
-              </div>
-            ) : null}
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm">Payment gateway</CardTitle>
+            <span className="text-xs text-muted-foreground">{payStats?.completed_count ?? '…'} completed</span>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {payLoading ? (
+              <SkeletonChartCard barRows={2} />
+            ) : !payStats?.gateway_breakdown.length ? (
+              <p className="text-sm text-muted-foreground">No completed transactions yet.</p>
+            ) : (
+              payStats.gateway_breakdown.map((g, i) => <BarRow key={g.gateway} name={g.gateway} value={g.count} max={gatewayMax} index={i} />)
+            )}
           </CardContent>
         </Card>
+      </div>
 
+      {/* Row 3 — AI usage + provider health */}
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle>AI Usage (7d)</CardTitle></CardHeader>
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm">AI usage (7d)</CardTitle>
+            <span className="text-xs text-muted-foreground">{aiStats?.total_tokens_7d.toLocaleString() ?? '…'} tokens</span>
+          </CardHeader>
           <CardContent>
             {aiLoading ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <SkeletonStat /><SkeletonStat />
-                </div>
-                <SkeletonChartCard barRows={3} />
-              </div>
+              <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}</div>
             ) : aiStats ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-4">
-                  <Stat label="Tokens" value={aiStats.total_tokens_7d.toLocaleString()} />
-                  <Stat label="Failed requests" value={aiStats.failed_requests_7d} />
-                </div>
-                {Object.entries(aiStats.provider_breakdown).length > 0 && (
-                  <BreakdownChart
-                    data={Object.entries(aiStats.provider_breakdown).map(([provider, stats]) => ({
-                      name: provider,
-                      value: stats.requests,
-                    }))}
-                  />
+              <>
+                <DotRow name="Failed requests" value={aiStats.failed_requests_7d} tone={aiStats.failed_requests_7d > 0 ? 'destructive' : 'success'} />
+                <DotRow name="Total cost" value={formatCurrency(aiStats.total_cost_7d)} tone="info" />
+                {providerEntries.length > 0 && (
+                  <div className="mt-3 space-y-3 border-t border-border pt-3">
+                    {providerEntries.map(([provider, stats], i) => (
+                      <BarRow key={provider} name={provider} value={stats.requests} max={providerMax} index={i} />
+                    ))}
+                  </div>
                 )}
-              </div>
+              </>
             ) : null}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Provider health</CardTitle></CardHeader>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Provider health</CardTitle>
+          </CardHeader>
           <CardContent>
             {aiLoading ? (
               <div className="space-y-2">
@@ -233,7 +206,18 @@ export default function AdminDashboardPage() {
                 ))}
               </div>
             ) : !aiStats?.provider_health.length ? (
-              <p className="text-sm text-muted-foreground">No circuit-breaker activity recorded.</p>
+              <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
+                No circuit-breaker activity recorded in the last 7 days.
+              </div>
+            ) : allProvidersHealthy ? (
+              <div className="flex flex-wrap gap-2">
+                {aiStats.provider_health.map((entry, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
+                    <CheckCircle2 className="h-3 w-3" />
+                    {entry.model ?? entry.provider ?? 'Unknown'}
+                  </span>
+                ))}
+              </div>
             ) : (
               <div className="space-y-2">
                 {aiStats.provider_health.map((entry, i) => (

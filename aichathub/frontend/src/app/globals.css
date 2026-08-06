@@ -33,6 +33,16 @@
     --chart-3: 330 75% 62%;
     --chart-4: 200 70% 50%;
     --chart-5: 38 92% 55%;
+
+    /* Semantic status tokens — soft-background pills/strips (KPI status, trend, dashboard
+       stat-rows). Previously ad hoc (Badge.tsx hardcoded green-600/yellow-600); formalized
+       here so new status UI is dark-mode-aware like the rest of the palette. */
+    --success: 152 60% 32%;
+    --success-soft: 152 55% 94%;
+    --warning: 32 80% 40%;
+    --warning-soft: 38 90% 94%;
+    --info: 210 70% 45%;
+    --info-soft: 210 70% 95%;
   }
 
   .dark {
@@ -53,6 +63,13 @@
     --border: 258 30% 20%;
     --input: 258 30% 20%;
     --ring: 258 85% 68%;
+
+    --success: 152 50% 55%;
+    --success-soft: 152 30% 16%;
+    --warning: 32 75% 60%;
+    --warning-soft: 32 40% 16%;
+    --info: 210 70% 65%;
+    --info-soft: 210 40% 18%;
   }
 }
 

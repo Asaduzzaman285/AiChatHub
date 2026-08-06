@@ -30,6 +30,8 @@ interface Filters {
   name: string
   email: string
   status: string
+  from: string
+  to: string
 }
 
 export default function AdminUsersPage() {
@@ -39,7 +41,7 @@ export default function AdminUsersPage() {
   const queryClient = useQueryClient()
 
   const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
-    useListFilters<Filters>({ name: '', email: '', status: '' })
+    useListFilters<Filters>({ name: '', email: '', status: '', from: '', to: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'users', applied, page],
@@ -68,7 +70,7 @@ export default function AdminUsersPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <form onSubmit={applyFilters} className="grid gap-3 sm:grid-cols-4">
+          <form onSubmit={applyFilters} className="grid items-start gap-3 sm:grid-cols-4">
             <Input placeholder="Name" value={filters.name} onChange={(e) => setFilters({ ...filters, name: e.target.value })} />
             <Input placeholder="Email" value={filters.email} onChange={(e) => setFilters({ ...filters, email: e.target.value })} />
             <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
@@ -77,11 +79,11 @@ export default function AdminUsersPage() {
               <option value="pending_verification">Pending verification</option>
               <option value="suspended">Suspended</option>
             </Select>
+            <Input type="date" aria-label="Joined from" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
+            <Input type="date" aria-label="Joined to" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
             <div className="flex gap-2">
               <Button type="submit" variant="outline">Apply filters</Button>
-              {hasActiveFilters && (
-                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
-              )}
+              <Button type="button" variant="secondary" disabled={!hasActiveFilters} onClick={clearFilters}>Clear</Button>
             </div>
           </form>
         </CardContent>

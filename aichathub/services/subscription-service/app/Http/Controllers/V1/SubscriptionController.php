@@ -200,7 +200,10 @@ class SubscriptionController extends Controller
 
         $transactionId  = (string) Str::uuid();
         $subscription   = $this->subscriptions->applyUpgrade($current, $newPackage, $transactionId);
-        $walletCredited = $this->activation->creditWallet($userId, (float) $newPackage->monthly_wallet_credit_usd, $subscription->id, 'Upgrade credit: '.$newPackage->name, $newPackage->creditBufferAmount());
+        // $transactionId, not $subscription->id — see the identical fix + explanation in
+        // SubscriptionActivationController::activateUpgrade() (the same bug, dormant here
+        // since this free-package branch wasn't yet exercised, but structurally identical).
+        $walletCredited = $this->activation->creditWallet($userId, (float) $newPackage->monthly_wallet_credit_usd, $transactionId, 'Upgrade credit: '.$newPackage->name, $newPackage->creditBufferAmount());
 
         return response()->json([
             'message'         => 'Upgraded successfully.',

@@ -23,6 +23,13 @@ class UserManagementController extends Controller
         $query = User::query();
 
         $query
+            // Single free-text box (admin topbar search) — ORs across name/email, unlike the
+            // name/email params below which stay independently ANDed for the Users page's own
+            // filter form.
+            ->when($request->filled('search'), fn (Builder $q) => $q->where(
+                fn (Builder $w) => $w->where('name', 'ILIKE', '%'.$request->query('search').'%')
+                    ->orWhere('email', 'ILIKE', '%'.$request->query('search').'%')
+            ))
             ->when($request->filled('name'), fn (Builder $q) => $q->where('name', 'ILIKE', '%'.$request->query('name').'%'))
             ->when($request->filled('email'), fn (Builder $q) => $q->where('email', 'ILIKE', '%'.$request->query('email').'%'))
             ->when($request->filled('phone'), fn (Builder $q) => $q->where('phone', 'ILIKE', '%'.$request->query('phone').'%'))

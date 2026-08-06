@@ -50,6 +50,26 @@ export function SkeletonListItem() {
   )
 }
 
+/** Matches KpiCard's shape: status strip + icon chip + big number + trend pill. */
+export function SkeletonKpiCard() {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <Skeleton className="h-[3px] w-full rounded-none" />
+      <div className="space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-7 w-7 rounded-lg" />
+        </div>
+        <Skeleton className="h-7 w-16" />
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-4 w-14 rounded-full" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /**
  * A "media card" shaped skeleton — icon-circle + label row on top, a large shimmer
  * block standing in for a chart/graph beneath. Used wherever a card is about to

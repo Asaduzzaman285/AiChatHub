@@ -9,6 +9,7 @@ use App\Http\Controllers\V1\Auth\FirebaseAuthController;
 use App\Http\Controllers\V1\Auth\RegisterController;
 use App\Http\Controllers\V1\Auth\LoginController;
 use App\Http\Controllers\V1\Auth\LogoutController;
+use App\Http\Controllers\V1\Auth\EmailChangeController;
 use App\Http\Controllers\V1\Auth\EmailVerificationController;
 use App\Http\Controllers\V1\Auth\PasswordResetController;
 use App\Http\Controllers\V1\Auth\TokenRefreshController;
@@ -45,6 +46,7 @@ Route::middleware('auth.jwt')->group(function () {
     Route::post('/auth/social/google/link', [SocialAccountController::class,'linkGoogle']);
     Route::delete('/auth/social/google',    [SocialAccountController::class,'unlinkGoogle']);
     Route::post('/auth/password/set',       [PasswordResetController::class,'setPassword']);
+    Route::post('/auth/email/change',       [EmailChangeController::class,  'request']);
 
     // Admin — nested under /auth (not a bare /admin prefix) so it's reachable
     // through api-gateway's existing /auth/{path?} wildcard, which only proxies

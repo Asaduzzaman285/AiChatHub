@@ -18,6 +18,7 @@ class EmailVerification extends Model
         'token',
         'used',
         'expires_at',
+        'new_email',
     ];
 
     protected function casts(): array

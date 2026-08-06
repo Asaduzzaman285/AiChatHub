@@ -39,6 +39,26 @@ class EmailVerificationController extends Controller
             ], 422);
         }
 
+        // An email-change confirmation (see EmailChangeController) — distinct from the
+        // original-registration case below: the account is already active/verified,
+        // just switching addresses. Re-check uniqueness here too, not just at request
+        // time, in case someone else claimed this address in the meantime.
+        if ($verification->new_email !== null) {
+            if (User::where('email', $verification->new_email)->exists()) {
+                return response()->json([
+                    'message' => 'That email is no longer available. Please request the change again with a different address.',
+                    'error'   => 'email_taken',
+                ], 422);
+            }
+
+            $verification->update(['used' => true]);
+            $verification->user->update(['email' => $verification->new_email]);
+
+            return response()->json([
+                'message' => 'Email address updated successfully.',
+            ]);
+        }
+
         // Activate the user
         $verification->update(['used' => true]);
         $verification->user->update([

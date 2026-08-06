@@ -29,6 +29,10 @@ class TransactionController extends Controller
     {
         $query = Transaction::query();
         $query->when($request->filled('user_id'), fn (Builder $q) => $q->where('user_id', $request->query('user_id')));
+        // Exact-ID lookup — used by the admin topbar search, which only ever offers a
+        // transaction UUID as-typed, never free text (transactions have no searchable
+        // name/email field of their own).
+        $query->when($request->filled('id'), fn (Builder $q) => $q->where('id', $request->query('id')));
         $this->applyFilters($query, $request);
 
         return $this->paginatedResponse($query, $request);

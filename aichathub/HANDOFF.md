@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-08-04 (evening)  
+**Last updated:** 2026-08-07  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -2265,6 +2265,163 @@ consumer-facing endpoint (topup, subscribe, billing) — scoped to the one concr
 since the frontend UI guards already block admins from those other flows and there's no
 `auth.jwt`-only path into them the way the AI routes had.
 
+### 2026-08-06 Session — CRITICAL money bug found by the user's own real usage: paid upgrades never credited the wallet
+
+Real bug, real money, found by the user actually subscribing and upgrading their own account (not
+synthetic testing): upgraded Basic → Standard for real via Stripe ($20, charged and confirmed
+`completed`), the plan itself correctly switched, but the wallet balance never moved — sat exactly
+where it was before the upgrade.
+
+**Root cause, confirmed against the live DB before touching any code**: `PackageActivationService
+::creditWallet()`'s idempotency guard (mirroring `WalletService::credit()`'s own guard) keys on
+`(type='credit', reference_type='subscription', reference_id=X)`. The original subscribe already
+writes a `credit|subscription|<subscription_id>` ledger row. `applyUpgrade()` never creates a new
+`UserSubscription` row — it updates the existing one in place — so the subscription's id never
+changes across upgrades. `SubscriptionActivationController::activateUpgrade()` (the real, paid-upgrade
+completion path, called by Payment Service once Stripe/bKash confirms payment) was passing
+`$subscription->id` as the credit reference — which, being identical to the reference the *original*
+subscribe already used, makes every single paid upgrade look like a duplicate of that very first
+credit. The guard silently no-ops it: wallet untouched, no error, no log, 201 returned to the
+frontend as if everything succeeded. **This is the exact same bug class already found and fixed for
+renewals on 2026-07-23** — `ProcessRenewalJob.php` has a comment literally documenting this precise
+failure mode and why it switched to using the per-cycle `transactionId` instead — but that fix was
+never applied to the upgrade path. `SubscriptionController::doUpgrade()`'s free-package branch had
+the identical latent bug (same `$subscription->id` reuse), just never exercised since no free-tier
+upgrade had happened yet.
+
+**Blast radius, checked directly against the DB**: only one completed paid `subscription_upgrade`
+transaction has ever existed in this environment — the reporting user's own — so no other user was
+affected. Structurally, though, this guaranteed failure on *every* paid upgrade, for every user,
+forever, until fixed — not an edge case.
+
+**Fix**: both call sites (`SubscriptionActivationController::activateUpgrade()` and
+`SubscriptionController::doUpgrade()`'s free branch) now pass the upgrade's own transaction ID as the
+credit reference instead of the subscription's permanent ID — mirroring the exact pattern
+`ProcessRenewalJob.php` already uses correctly. **Verified live**, not just code-reviewed: registered
+a disposable test user, simulated a real paid subscribe via the internal `/subscriptions/activate`
+endpoint (wallet: $0 → $10), then a real paid upgrade via `/subscriptions/activate-upgrade` with a
+fresh transaction ID (wallet: $10 → $30, two distinct ledger rows, no collision). `php -l` clean on
+both files; no restart needed (`subscription-service` is plain php-fpm, `opcache.validate_timestamps=1`
+picks up the change on the next request).
+
+**Reporting user's account corrected**: manually credited the missing $20 via the existing admin
+wallet-adjust endpoint (`POST /wallet/admin/{userId}/adjust`), balance $19.998106 → $39.998106,
+properly attributed in `audit_logs` with a description explaining the correction.
+
+**Separate, smaller finding from the same conversation**: there is no email-change capability
+anywhere in the app — checked `auth-service`'s routes directly, only email *verification*/*resend*
+exist, nothing for changing an account's email address once set. This affects every account, admin
+or consumer, not just the one flagged. Not fixed yet — flagged as a real, complete feature gap, not
+attempted this session.
+
+### 2026-08-06 Session (cont'd) — Admin dashboard + sidebar redesign, from a user-provided mockup
+
+User supplied a complete HTML/CSS mockup (`dashboard_redesign.html`, outside the repo) as the target
+visual direction and asked for it applied to the real admin dashboard/sidebar. Two scope decisions
+confirmed before building: the mockup's topbar search should be **real, functional search**, not
+decorative; KPI trend/status indicators should be **derived only from data already returned today**,
+nothing fabricated.
+
+- **New design tokens** (`frontend/src/app/globals.css`, `tailwind.config.ts`) — formalized
+  `--success`/`--warning`/`--info` (+ `-soft` variants), light/dark-aware, mirroring how `--chart-1..5`
+  were added last session. `Badge.tsx` left untouched (still hardcoded Tailwind colors) — only the
+  new dashboard components use these.
+- **Real free-text user search** — `UserManagementController::index()` (auth-service) gained a
+  `search` param (ORs across name/email in one query; the existing `name`/`email` params stay
+  independently ANDed for the Users page's own filter form, unchanged). `TransactionController::
+  adminIndex()` (payment-service) gained an exact-`id` filter, since `show()` is user-scoped and
+  can't do cross-user admin lookups — the new admin search only ever offers a transaction by its
+  exact UUID (transactions have no free-text-searchable field; confirmed before building, not
+  assumed). Both verified live with real curl calls against real data, not just code-reviewed.
+- **New `frontend/src/components/admin/AdminSearch.tsx`** — 300ms-debounced topbar search (no
+  debounce utility existed yet, kept local rather than adding a dependency), queries both endpoints
+  above, results panel styled to match the existing `DropdownMenuContent` look. Selecting a user
+  routes to `/admin/users?email=<exact>`, reusing that page's already-built filter — no new page.
+- **Sidebar/topbar redesign** (`admin/layout.tsx`) — gradient brand mark, pill-shaped active nav
+  state, a visual divider between operational nav (Dashboard…AI Models) and admin-management nav
+  (Admins/Roles/Audit Logs) via a new `group` field on `NAV_ITEMS`, topbar now houses `<AdminSearch />`
+  alongside the existing profile dropdown (was `justify-end`-only before, no search existed).
+- **Dashboard restructured into 3 rows** (`admin/page.tsx`) — previously 6 cards each mixed headline
+  numbers + breakdown charts; now split to match the mockup: **row 1** = 4 new `KpiCard`s (status
+  strip + icon chip + big number + trend pill — new `frontend/src/components/admin/DashboardWidgets.tsx`),
+  every value traced to a real already-fetched field (e.g. Subscriptions card's `watch` status/trend
+  is literally `past_due_subscriptions > 0`, nothing invented); **row 2** = 3 breakdown cards
+  (subscriptions-by-tier, transaction status, payment gateway) using new CSS-only `BarRow`/`DotRow`
+  primitives — **replaces last session's Recharts-based `BreakdownChart`** for these (simpler, no
+  chart-library overhead for 2-3 static rows, matches the mockup's exact visual language; `recharts`
+  stays installed/unused here in case something genuinely more complex needs it later); **row 3** =
+  AI usage (now also surfaces `total_cost_7d`, wasn't shown before) + provider health, restyled to a
+  green pill-row-with-checkmarks when every provider is healthy, falling back to the existing
+  per-row `Badge` list when any provider isn't (so a real problem still stands out, doesn't blend
+  into a uniform "all green" row). New `SkeletonKpiCard` added to `components/ui/Skeleton.tsx` for
+  the hero row's loading state.
+
+`tsc --noEmit` clean, `php -l` clean on both touched backend files. Both new backend endpoints
+verified live with real curl calls (search returned a real matching user; the exact-ID lookup
+returned the real Standard-upgrade transaction from earlier this session). **Not yet visually
+confirmed in a real browser** — colors in both light/dark theme, the search dropdown's actual
+interaction feel, and overall layout at real viewport sizes all need the user to check live, same
+limitation as every other frontend change this session (no browser-driving capability from here).
+
+### 2026-08-06 Session (cont'd, again) — Clear-filters visibility fix + date-range filtering across all 6 admin list pages
+
+User flagged (via a screenshot of the Subscriptions page) that the "Clear filters" button appeared
+missing. It wasn't actually missing — `hasActiveFilters && (...)` conditionally hid it until a
+filter was applied, a design choice from an earlier session that turned out to just read as broken.
+Fixed by always rendering the button, `disabled={!hasActiveFilters}` instead of hidden — same 6
+pages built on `useListFilters` (users, subscriptions, transactions, wallet, ai-usage, audit-logs).
+
+Also asked about date-range filtering, "needed for a specific date range." Checked the actual
+backend controllers first rather than assuming: **5 of 6 already had `from`/`to` date-range support
+(on `created_at`) that no frontend form ever exposed** — `UserManagementController`,
+`TransactionController::adminIndex()`, `WalletAdminController::ledger()`, `UsageLogAdminController`,
+`AuditLogController` all already had it, just unused. The 6th, `SubscriptionAdminController`, had
+its own already-working `renews_from`/`renews_to` (on `renews_at` — a more useful field for
+subscriptions than creation date). Added date-range `<input type="date">` pairs to all 6 pages'
+filter forms, wired to each page's correct real param names (no backend changes needed at all —
+every filter added was already fully functional server-side, just never surfaced). `tsc --noEmit`
+clean; verified live with real curl calls — `from=2026-08-06` on Users correctly returned only that
+day's one registration (not all ~15 test users), and a future date on both Users and Subscriptions
+correctly returned zero, confirming the filters actually narrow results rather than being silently
+ignored.
+
+### 2026-08-07 Session — Email-change capability built (closes the gap flagged 2026-08-06)
+
+Backend (`auth-service`): new `email_verifications.new_email` nullable column (migration
+`2026_08_06_000000_add_new_email_to_email_verifications_table`, already run) — a row with it set
+means "confirm this new address" rather than the original meaning ("verify your registration
+email"). New `EmailChangeController::request()` (`POST /auth/email/change`, authenticated) mirrors
+`PasswordResetController::setPassword()`'s `current_password` gate exactly (required only when
+`hasPassword()`), validates the new email is unique, and sends a confirmation link **to the new
+address** — `users.email` is not touched until that link is clicked, so a hijacked session can't
+silently redirect account control, and a typo can't lock anyone out. `EmailVerificationController::
+verify()` now branches on `new_email`: null keeps today's exact behavior (activate + welcome email);
+set means re-check uniqueness at confirm-time too (race guard), swap `users.email`, no welcome email
+(would be wrong for an existing user). Frontend: `ProfileView.tsx` (shared by `/profile` and
+`/admin/profile`) gained a "Change email" form mirroring the existing "Change password" form's UX
+exactly, same card.
+
+**Real bug caught by live testing, fixed same session**: the confirmation `Mail::send()` call was
+synchronous and unwrapped — hitting Mailgun sandbox's "recipient not authorized" limit (already a
+known constraint from the 2026-08-03 Mailgun session) crashed the whole request with a raw 500 stack
+trace instead of a clean error, and left an orphaned, undeliverable `email_verifications` row behind.
+Fixed with the same `catch (\Throwable $e)` + `Log::error` pattern `RegisterController`'s wallet-create
+call already uses — now returns a clean `502 send_failed` and deletes the orphaned row. Re-tested
+live after the fix to confirm both parts.
+
+**Verified live end-to-end**, not just code-reviewed: wrong current-password → clean 422; the
+send-failure path (Mailgun sandbox constraint) → clean 502, no orphaned DB row (confirmed before and
+after the fix); manually simulated a real confirmation click (`GET /auth/verify/{token}`) → confirmed
+`users.email` actually changed in the DB, the **old** email can no longer log in, the **new** email
+logs in successfully with the same password, and replaying the same (now-used) token correctly fails
+with `invalid_token`. Restored the shared `test@example.com` test account back to its original email
+afterward since it's referenced by name in this repo's own `scripts/test-*.sh` files.
+
+**Not separately re-verified this session** (relied on already-correct, mirrored logic instead of a
+fresh live test): a Google-only account (no password) requesting a change with no `current_password`
+required — the check is a direct copy of `setPassword()`'s already-proven-live conditional, same
+`hasPassword()` gate.
+
 ### Tomorrow's plan (as of 2026-08-02)
 
 **Quick wins first — low effort, no decisions needed:**
@@ -2307,11 +2464,48 @@ a provider is chosen) to replace Mailpit for real user-facing delivery, and a re
 session to confirm the Stripe webhook path end-to-end (needs the user's own Stripe CLI login;
 `STRIPE_WEBHOOK_SECRET` is still the `whsec_CHANGE_ME` placeholder).
 
-Still explicitly out of scope, by the user's own call: AI token-cost calculation, the revenue/business
-model, and sustainable AI-usage-limit strategy — separate track, not blocking anything above.
+~~Still explicitly out of scope, by the user's own call: AI token-cost calculation, the
+revenue/business model~~ — **now in active planning as of 2026-08-07, see below.** Sustainable
+AI-usage-limit strategy remains a separate, still-untouched track.
 
 **Keep doing real click-through testing** generally — every real bug found this entire project has come
 from actually exercising a feature, never from reading code.
+
+---
+
+### Tomorrow's plan (as of 2026-08-07) — token markup pricing + auto-debit/saved payment methods
+
+Two features discussed and understanding confirmed against the real code this session, **not yet
+implemented** — added here per explicit instruction ("add these things in the plan of tomorrow, we
+will do that"). Both need one real product decision made before work starts (see each item).
+
+**1. Token markup / revenue model.** User's description: for each model, take the provider's raw
+cost (e.g. $5/1M input tokens, $30/1M output) and apply a markup (e.g. 30%) on top to get the sell
+rate charged to users ($6.50/1M in that example) — the markup itself is the revenue. The per-token
+metering mechanism this needs **already exists and works** — `model_pricing`
+(`ai-gateway-service/database/migrations/0001_create_ai_tables.php:30-44`,
+`input_rate_per_million`/`output_rate_per_million`) and `CostTrackingMiddleware::calculateCost()`
+already divide a stored per-million rate down to charge each real request. **The real gap**:
+`model_pricing` only stores the final sell rate — no column for the provider's raw cost or a markup
+%, so today an admin manually pre-computes and types in the marked-up number directly (no system
+awareness that it's "$5 + 30%"). **Decision needed before implementing**: do we want the system to
+actually compute sell price from a stored provider-cost + markup% (so a markup-policy change updates
+pricing automatically, and margin becomes auditable per model) — this needs new columns and a
+recompute path — or is manually entering the already-marked-up number, like today, sufficient? These
+are meaningfully different amounts of work.
+
+**2. Auto-debit / saved payment methods.** User's description: first payment method used becomes the
+default saved account; users can save multiple and choose between them; auto-debit is opt-in; when
+wallet balance drops below a threshold (configurable per user), a configurable top-up amount
+auto-charges the default/chosen saved method. **Already fully built on the backend**: `PaymentMethodController`
+(`services/payment-service/app/Http/Controllers/V1/PaymentMethodController.php`) already does
+save/list/delete/set-default with multiple methods per user and "first save becomes default"
+behavior — Stripe cards only, no frontend UI yet (same gap flagged earlier as item 7 above).
+**Genuinely new, nothing built**: auto-debit trigger logic (no balance-threshold monitor, no
+auto-charge job exists anywhere), per-user configurable threshold + top-up amount (no storage for
+either yet), and a settings UI for all of it. **Decision needed before implementing**: bKash has no
+saved-token/re-charge equivalent in this codebase today — confirm whether auto-debit ships Stripe-only
+first, or needs a bKash equivalent before it's usable for bKash-paying users.
 
 ---
 

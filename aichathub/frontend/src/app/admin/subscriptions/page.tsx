@@ -25,11 +25,13 @@ interface Filters {
   user_id: string
   status: string
   auto_renew: string
+  renews_from: string
+  renews_to: string
 }
 
 export default function AdminSubscriptionsPage() {
   const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
-    useListFilters<Filters>({ user_id: '', status: '', auto_renew: '' })
+    useListFilters<Filters>({ user_id: '', status: '', auto_renew: '', renews_from: '', renews_to: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'subscriptions', applied, page],
@@ -48,7 +50,7 @@ export default function AdminSubscriptionsPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <form onSubmit={applyFilters} className="grid gap-3 sm:grid-cols-4">
+          <form onSubmit={applyFilters} className="grid items-start gap-3 sm:grid-cols-4">
             <Input placeholder="User ID" value={filters.user_id} onChange={(e) => setFilters({ ...filters, user_id: e.target.value })} />
             <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
               <option value="">Any status</option>
@@ -62,11 +64,11 @@ export default function AdminSubscriptionsPage() {
               <option value="true">Auto-renew on</option>
               <option value="false">Auto-renew off</option>
             </Select>
+            <Input type="date" aria-label="Renews from" value={filters.renews_from} onChange={(e) => setFilters({ ...filters, renews_from: e.target.value })} />
+            <Input type="date" aria-label="Renews to" value={filters.renews_to} onChange={(e) => setFilters({ ...filters, renews_to: e.target.value })} />
             <div className="flex gap-2">
               <Button type="submit" variant="outline">Apply filters</Button>
-              {hasActiveFilters && (
-                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
-              )}
+              <Button type="button" variant="secondary" disabled={!hasActiveFilters} onClick={clearFilters}>Clear</Button>
             </div>
           </form>
         </CardContent>

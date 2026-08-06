@@ -25,20 +25,21 @@ import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { hasPermission } from '@/lib/permissions'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
+import { AdminSearch } from '@/components/admin/AdminSearch'
 import type { User } from '@/types'
 
 const NAV_ITEMS = [
-  { href: '/admin', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
-  { href: '/admin/users', label: 'Users', icon: Users, permission: 'users.view' },
-  { href: '/admin/subscriptions', label: 'Subscriptions', icon: MessagesSquare, permission: 'subscriptions.view' },
-  { href: '/admin/packages', label: 'Packages', icon: Package, permission: 'packages.manage' },
-  { href: '/admin/transactions', label: 'Transactions', icon: CreditCard, permission: 'payments.view' },
-  { href: '/admin/wallet', label: 'Wallet', icon: Wallet, permission: 'wallet.view' },
-  { href: '/admin/ai-usage', label: 'AI Usage', icon: Receipt, permission: 'ai_usage.view' },
-  { href: '/admin/ai-models', label: 'AI Models', icon: BrainCircuit, permission: 'models.manage' },
-  { href: '/admin/admins', label: 'Admins', icon: ShieldCheck, permission: 'admins.manage' },
-  { href: '/admin/roles', label: 'Roles', icon: UserCog, permission: 'admins.manage' },
-  { href: '/admin/audit-logs', label: 'Audit Logs', icon: ClipboardList, permission: 'audit_logs.view' },
+  { href: '/admin', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view', group: 'operational' as const },
+  { href: '/admin/users', label: 'Users', icon: Users, permission: 'users.view', group: 'operational' as const },
+  { href: '/admin/subscriptions', label: 'Subscriptions', icon: MessagesSquare, permission: 'subscriptions.view', group: 'operational' as const },
+  { href: '/admin/packages', label: 'Packages', icon: Package, permission: 'packages.manage', group: 'operational' as const },
+  { href: '/admin/transactions', label: 'Transactions', icon: CreditCard, permission: 'payments.view', group: 'operational' as const },
+  { href: '/admin/wallet', label: 'Wallet', icon: Wallet, permission: 'wallet.view', group: 'operational' as const },
+  { href: '/admin/ai-usage', label: 'AI Usage', icon: Receipt, permission: 'ai_usage.view', group: 'operational' as const },
+  { href: '/admin/ai-models', label: 'AI Models', icon: BrainCircuit, permission: 'models.manage', group: 'operational' as const },
+  { href: '/admin/admins', label: 'Admins', icon: ShieldCheck, permission: 'admins.manage', group: 'management' as const },
+  { href: '/admin/roles', label: 'Roles', icon: UserCog, permission: 'admins.manage', group: 'management' as const },
+  { href: '/admin/audit-logs', label: 'Audit Logs', icon: ClipboardList, permission: 'audit_logs.view', group: 'management' as const },
 ]
 
 /**
@@ -124,38 +125,44 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-56 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
-        <div className="flex items-center gap-2 p-6">
-          <Sparkles className="h-5 w-5 text-primary" />
+      <aside className="hidden w-60 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
+        <div className="flex items-center gap-2.5 p-6">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60">
+            <Sparkles className="h-4 w-4 text-primary-foreground" />
+          </div>
           <div>
-            <span className="block text-lg font-bold tracking-tight">Admin</span>
+            <span className="block text-base font-bold leading-tight tracking-tight">Admin</span>
             <span className="block text-xs capitalize text-muted-foreground">{user.admin_role?.replace('_', ' ')}</span>
           </div>
         </div>
-        <nav className="space-y-1 px-3">
-          {visibleItems.map((item) => {
+        <nav className="space-y-0.5 px-3">
+          {visibleItems.map((item, i) => {
             const active = pathname === item.href
             const Icon = item.icon
+            const showDivider = i > 0 && visibleItems[i - 1].group !== item.group
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
+              <div key={item.href}>
+                {showDivider && <div className="my-2 h-px bg-border" />}
+                <Link
+                  href={item.href}
+                  className={`flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-medium transition-colors ${
+                    active
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 ${active ? 'opacity-100' : 'opacity-75'}`} />
+                  {item.label}
+                </Link>
+              </div>
             )
           })}
         </nav>
       </aside>
 
       <div className="flex-1">
-        <header className="flex items-center justify-end border-b border-border px-6 py-4">
+        <header className="flex items-center justify-between border-b border-border px-6 py-4">
+          <AdminSearch />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent">

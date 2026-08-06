@@ -32,6 +32,8 @@ interface Filters {
   status: string
   type: string
   gateway: string
+  from: string
+  to: string
 }
 
 function RefundButton({ transaction }: { transaction: Transaction }) {
@@ -78,7 +80,7 @@ export default function AdminTransactionsPage() {
   const canRefund = hasPermission(currentAdmin, 'payments.refund')
 
   const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
-    useListFilters<Filters>({ user_id: '', status: '', type: '', gateway: '' })
+    useListFilters<Filters>({ user_id: '', status: '', type: '', gateway: '', from: '', to: '' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'transactions', applied, page],
@@ -97,7 +99,7 @@ export default function AdminTransactionsPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <form onSubmit={applyFilters} className="grid gap-3 sm:grid-cols-5">
+          <form onSubmit={applyFilters} className="grid items-start gap-3 sm:grid-cols-5">
             <Input placeholder="User ID" value={filters.user_id} onChange={(e) => setFilters({ ...filters, user_id: e.target.value })} />
             <Select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
               <option value="">Any status</option>
@@ -117,11 +119,11 @@ export default function AdminTransactionsPage() {
               <option value="stripe">Stripe</option>
               <option value="bkash">bKash</option>
             </Select>
+            <Input type="date" aria-label="Date from" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
+            <Input type="date" aria-label="Date to" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
             <div className="flex gap-2">
               <Button type="submit" variant="outline">Apply filters</Button>
-              {hasActiveFilters && (
-                <Button type="button" variant="secondary" onClick={clearFilters}>Clear</Button>
-              )}
+              <Button type="button" variant="secondary" disabled={!hasActiveFilters} onClick={clearFilters}>Clear</Button>
             </div>
           </form>
         </CardContent>

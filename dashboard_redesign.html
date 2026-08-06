@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Platform Admin — Dashboard Redesign</title>
+<style>
+  :root{
+    --bg:#F5F5FB;
+    --surface:#FFFFFF;
+    --surface-sunk:#FAFAFE;
+    --border:#E6E6F2;
+    --ink:#14152B;
+    --ink-soft:#63647E;
+    --ink-faint:#9797AC;
+
+    --brand:#6C4CF1;
+    --brand-ink:#5636E0;
+    --brand-soft:#EFEAFE;
+
+    --success:#12925A;
+    --success-soft:#E4F7EE;
+    --warning:#B4650B;
+    --warning-soft:#FCF0DE;
+    --danger:#C23A3A;
+    --danger-soft:#FBEAEA;
+    --info:#2C6FB0;
+    --info-soft:#E7F1FB;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+
+    --radius: 14px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    font-family:var(--sans);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{ display:flex; min-height:100vh; }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{
+    width:232px;
+    flex-shrink:0;
+    background:var(--surface);
+    border-right:1px solid var(--border);
+    padding:22px 14px;
+    display:flex;
+    flex-direction:column;
+  }
+  .brand{ display:flex; align-items:center; gap:10px; padding:0 8px 22px 8px; }
+  .brand-mark{
+    width:32px;height:32px;border-radius:9px;
+    background:linear-gradient(135deg,var(--brand),#9A7CF7);
+    display:flex;align-items:center;justify-content:center;
+    color:#fff; flex-shrink:0;
+  }
+  .brand-text .name{ font-weight:700; font-size:14.5px; line-height:1.15; }
+  .brand-text .sub{ font-size:11.5px; color:var(--ink-faint); }
+
+  .nav-group{ margin-bottom:4px; }
+  .nav-item{
+    display:flex; align-items:center; gap:10px;
+    padding:9px 10px; border-radius:9px;
+    font-size:13.5px; font-weight:500; color:var(--ink-soft);
+    cursor:default; margin-bottom:2px;
+  }
+  .nav-item svg{ opacity:.75; flex-shrink:0; }
+  .nav-item.active{
+    background:var(--brand); color:#fff;
+  }
+  .nav-item.active svg{ opacity:1; }
+  .nav-divider{ height:1px; background:var(--border); margin:10px 4px; }
+
+  /* ---------- Top bar ---------- */
+  .main{ flex:1; min-width:0; }
+  .topbar{
+    height:60px; background:var(--surface); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 28px;
+  }
+  .search-wrap{
+    display:flex; align-items:center; gap:8px;
+    background:var(--surface-sunk); border:1px solid var(--border);
+    padding:7px 12px; border-radius:9px; width:280px; color:var(--ink-faint);
+    font-size:13px;
+  }
+  .profile{ display:flex; align-items:center; gap:9px; font-size:13.5px; color:var(--ink-soft); }
+  .avatar{
+    width:28px;height:28px;border-radius:50%;
+    background:var(--brand-soft); color:var(--brand-ink);
+    display:flex;align-items:center;justify-content:center;
+    font-weight:700; font-size:12.5px;
+  }
+
+  .content{ padding:28px; max-width:1240px; }
+  .page-head{ margin-bottom:22px; display:flex; align-items:baseline; justify-content:space-between; }
+  .page-head h1{ font-size:23px; margin:0 0 4px 0; letter-spacing:-0.3px; }
+  .page-head p{ margin:0; color:var(--ink-soft); font-size:13.5px; }
+  .range-pill{
+    font-size:12.5px; color:var(--ink-soft); background:var(--surface);
+    border:1px solid var(--border); padding:6px 12px; border-radius:100px;
+  }
+
+  /* ---------- KPI hero row ---------- */
+  .kpi-grid{
+    display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:16px;
+  }
+  .kpi-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:0; overflow:hidden; position:relative;
+  }
+  .kpi-status{ height:3px; width:100%; }
+  .kpi-status.ok{ background:var(--success); }
+  .kpi-status.watch{ background:var(--warning); }
+  .kpi-body{ padding:16px 18px 14px 18px; }
+  .kpi-top{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .kpi-icon{
+    width:30px;height:30px;border-radius:8px; display:flex;align-items:center;justify-content:center;
+  }
+  .kpi-label{ font-size:12.5px; color:var(--ink-soft); font-weight:600; }
+  .kpi-num{ font-family:var(--mono); font-size:28px; font-weight:700; letter-spacing:-0.5px; line-height:1; }
+  .kpi-foot{ display:flex; align-items:center; justify-content:space-between; margin-top:10px; }
+  .trend{ font-size:11.5px; font-weight:700; padding:2px 7px; border-radius:100px; display:inline-flex; align-items:center; gap:3px; }
+  .trend.up{ background:var(--success-soft); color:var(--success); }
+  .trend.down{ background:var(--danger-soft); color:var(--danger); }
+  .trend.flat{ background:var(--surface-sunk); color:var(--ink-faint); }
+  .spark{ opacity:.9; }
+
+  /* ---------- Detail card grid ---------- */
+  .grid-3{ display:grid; grid-template-columns:1.1fr 1fr 1fr; gap:14px; margin-bottom:14px; }
+  .grid-2{ display:grid; grid-template-columns:1.4fr 1fr; gap:14px; }
+  .card{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:18px;
+  }
+  .card-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .card-head h3{ font-size:14.5px; margin:0; letter-spacing:-0.1px; }
+  .card-head .muted{ font-size:11.5px; color:var(--ink-faint); }
+
+  .stat-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:9px 0; border-bottom:1px solid var(--surface-sunk);
+  }
+  .stat-row:last-child{ border-bottom:none; padding-bottom:0; }
+  .stat-left{ display:flex; align-items:center; gap:9px; }
+  .dot{ width:8px;height:8px;border-radius:50%; flex-shrink:0; }
+  .stat-name{ font-size:13px; color:var(--ink-soft); }
+  .stat-val{ font-family:var(--mono); font-size:13.5px; font-weight:700; }
+  .stat-val.success{ color:var(--success); }
+  .stat-val.warning{ color:var(--warning); }
+  .stat-val.danger{ color:var(--danger); }
+  .stat-val.info{ color:var(--info); }
+
+  /* bars */
+  .bar-row{ margin-bottom:12px; }
+  .bar-row:last-child{ margin-bottom:0; }
+  .bar-label{ display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:5px; }
+  .bar-label .name{ color:var(--ink-soft); font-weight:500; }
+  .bar-label .num{ font-family:var(--mono); font-weight:700; }
+  .bar-track{ height:7px; background:var(--surface-sunk); border-radius:100px; overflow:hidden; }
+  .bar-fill{ height:100%; border-radius:100px; }
+
+  .pill-row{ display:flex; gap:8px; flex-wrap:wrap; }
+  .pill{
+    display:flex; align-items:center; gap:6px;
+    font-size:12px; font-weight:600; padding:6px 10px; border-radius:100px;
+    background:var(--success-soft); color:var(--success);
+  }
+
+  .empty-state{
+    display:flex; align-items:center; gap:10px;
+    background:var(--surface-sunk); border:1px dashed var(--border);
+    border-radius:10px; padding:12px 14px; color:var(--ink-soft); font-size:12.5px;
+  }
+
+  .footnote{
+    margin-top:22px; font-size:11.5px; color:var(--ink-faint);
+    border-top:1px solid var(--border); padding-top:14px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" fill="white"/></svg>
+      </div>
+      <div class="brand-text">
+        <div class="name">Admin</div>
+        <div class="sub">Platform Admin</div>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <div class="nav-item active">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><circle cx="17.5" cy="8.5" r="2.3"/><path d="M15 14.2c2.7.2 5 2.4 5 5.8"/></svg>
+        Users
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+        Subscriptions
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
+        Packages
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h18M6 15h2M10 15h4"/><rect x="2" y="5" width="20" height="15" rx="2"/></svg>
+        Transactions
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M16 6V4.5A1.5 1.5 0 0 0 14.5 3h-5A1.5 1.5 0 0 0 8 4.5V6"/></svg>
+        Wallet
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>
+        AI Usage
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+        AI Models
+      </div>
+      <div class="nav-divider"></div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.5 3.6-7 8-7s8 2.5 8 7"/></svg>
+        Admins
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 6v6c0 5 4 8.5 9 10 5-1.5 9-5 9-10V6l-9-4Z"/></svg>
+        Roles
+      </div>
+      <div class="nav-item">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 3h16v18l-8-4-8 4V3Z"/></svg>
+        Audit Logs
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div class="topbar">
+      <div class="search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        Search users, transactions…
+      </div>
+      <div class="profile">
+        <div class="avatar">C</div>
+        checkouttest1@example.com
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Platform overview across every service.</p>
+        </div>
+        <div class="range-pill">Last 7 days</div>
+      </div>
+
+      <!-- KPI ROW -->
+      <div class="kpi-grid">
+
+        <!-- Users -->
+        <div class="kpi-card">
+          <div class="kpi-status ok"></div>
+          <div class="kpi-body">
+            <div class="kpi-top">
+              <span class="kpi-label">Total users</span>
+              <div class="kpi-icon" style="background:var(--brand-soft);color:var(--brand-ink)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><circle cx="17.5" cy="8.5" r="2.3"/><path d="M15 14.2c2.7.2 5 2.4 5 5.8"/></svg>
+              </div>
+            </div>
+            <div class="kpi-num">35</div>
+            <div class="kpi-foot">
+              <span class="trend up">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 17 12 9l8 8M12 9v12"/></svg>
+                +3 new
+              </span>
+              <span style="font-size:11px;color:var(--ink-faint)">14 active</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Subscriptions -->
+        <div class="kpi-card">
+          <div class="kpi-status ok"></div>
+          <div class="kpi-body">
+            <div class="kpi-top">
+              <span class="kpi-label">Active subscriptions</span>
+              <div class="kpi-icon" style="background:var(--success-soft);color:var(--success)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+              </div>
+            </div>
+            <div class="kpi-num">9</div>
+            <div class="kpi-foot">
+              <span class="trend flat">0 past due</span>
+              <span style="font-size:11px;color:var(--ink-faint)">3 tiers</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Revenue -->
+        <div class="kpi-card">
+          <div class="kpi-status watch"></div>
+          <div class="kpi-body">
+            <div class="kpi-top">
+              <span class="kpi-label">Total revenue</span>
+              <div class="kpi-icon" style="background:var(--warning-soft);color:var(--warning)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v20M17 6.5c0-1.9-2.2-3-5-3s-5 1.3-5 3 2 2.6 5 3 5 1.1 5 3-2.2 3-5 3-5-1.1-5-3"/></svg>
+              </div>
+            </div>
+            <div class="kpi-num">$165.00</div>
+            <div class="kpi-foot">
+              <span class="trend down">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 7l8 8 8-8M12 15V3"/></svg>
+                2 failed
+              </span>
+              <span style="font-size:11px;color:var(--ink-faint)">11 completed</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Wallet -->
+        <div class="kpi-card">
+          <div class="kpi-status ok"></div>
+          <div class="kpi-body">
+            <div class="kpi-top">
+              <span class="kpi-label">Wallet balance</span>
+              <div class="kpi-icon" style="background:var(--info-soft);color:var(--info)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M16 6V4.5A1.5 1.5 0 0 0 14.5 3h-5A1.5 1.5 0 0 0 8 4.5V6"/></svg>
+              </div>
+            </div>
+            <div class="kpi-num">$262.31</div>
+            <div class="kpi-foot">
+              <span class="trend flat">$0.00 pending</span>
+              <span style="font-size:11px;color:var(--ink-faint)">held</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ROW 2: three detail cards -->
+      <div class="grid-3">
+
+        <!-- Subscriptions by tier -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Subscriptions by tier</h3>
+            <span class="muted">9 active</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">Basic</span><span class="num">5</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:56%;background:var(--brand)"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">Standard</span><span class="num">3</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:33%;background:#9A7CF7"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">Pro</span><span class="num">1</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:11%;background:#C9B8FB"></div></div>
+          </div>
+        </div>
+
+        <!-- Payment status -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Transaction status</h3>
+            <span class="muted">24 total</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--success)"></span><span class="stat-name">Completed</span></div>
+            <span class="stat-val success">11</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--warning)"></span><span class="stat-name">Pending</span></div>
+            <span class="stat-val warning">11</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--danger)"></span><span class="stat-name">Failed</span></div>
+            <span class="stat-val danger">2</span>
+          </div>
+        </div>
+
+        <!-- Gateway split -->
+        <div class="card">
+          <div class="card-head">
+            <h3>Payment gateway</h3>
+            <span class="muted">11 completed</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">stripe</span><span class="num">10</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:91%;background:var(--brand)"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span class="name">bkash</span><span class="num">1</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:9%;background:var(--info)"></div></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ROW 3: AI usage + provider health -->
+      <div class="grid-2">
+
+        <div class="card">
+          <div class="card-head">
+            <h3>AI usage (7d)</h3>
+            <span class="muted">938 requests</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--brand)"></span><span class="stat-name">Successful requests</span></div>
+            <span class="stat-val" style="color:var(--brand-ink)">938</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--danger)"></span><span class="stat-name">Errors</span></div>
+            <span class="stat-val danger">0</span>
+          </div>
+          <div class="stat-row">
+            <div class="stat-left"><span class="dot" style="background:var(--ink-faint)"></span><span class="stat-name">Avg. cost / request</span></div>
+            <span class="stat-val" style="color:var(--ink-soft)">$0.0012</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Provider health</h3>
+          </div>
+          <div class="pill-row" style="margin-bottom:12px;">
+            <span class="pill"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 13 4 4L19 7"/></svg>OpenAI</span>
+            <span class="pill"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 13 4 4L19 7"/></svg>Anthropic</span>
+            <span class="pill"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 13 4 4L19 7"/></svg>Gemini</span>
+          </div>
+          <div class="empty-state">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+            No circuit-breaker activity recorded in the last 7 days.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="footnote">
+        Mockup for handoff — spacing, colors and tokens can move into your design system as CSS variables (see &lt;style&gt; root). Values shown mirror the current production dashboard 1:1; only layout and visual treatment changed.
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

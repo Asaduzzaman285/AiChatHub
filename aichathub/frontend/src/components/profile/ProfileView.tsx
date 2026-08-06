@@ -1,12 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'sonner'
-import { CheckCircle2, KeyRound, Sparkles } from 'lucide-react'
+import { CheckCircle2, KeyRound, Mail, Sparkles } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -37,6 +37,9 @@ type PasswordForm = z.infer<typeof passwordSchema>
 export function ProfileView() {
   const queryClient = useQueryClient()
   const [showPasswordForm, setShowPasswordForm] = useState(false)
+  const [showEmailForm, setShowEmailForm] = useState(false)
+  const [newEmail, setNewEmail] = useState('')
+  const [emailCurrentPassword, setEmailCurrentPassword] = useState('')
 
   const { data: me, isLoading: meLoading } = useQuery({
     queryKey: ['auth', 'me'],
@@ -72,6 +75,30 @@ export function ProfileView() {
     },
     onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — try again in a moment.").message),
   })
+
+  const changeEmail = useMutation({
+    mutationFn: async () =>
+      apiClient.post<{ message: string }>('/api/v1/auth/email/change', {
+        new_email: newEmail,
+        current_password: me?.has_password ? emailCurrentPassword : undefined,
+      }),
+    onSuccess: ({ data }) => {
+      // Deliberately not invalidating ['auth','me'] — the email hasn't actually
+      // changed yet, it only will once the confirmation link (sent to the new
+      // address) is clicked.
+      toast.success(data.message)
+      setShowEmailForm(false)
+      setNewEmail('')
+      setEmailCurrentPassword('')
+    },
+    onError: (err: unknown) => toast.error(describeError(err, "We didn't hear back in time — try again in a moment.").message),
+  })
+
+  const submitEmailChange = (e: FormEvent) => {
+    e.preventDefault()
+    if (!newEmail) return
+    changeEmail.mutate()
+  }
 
   const unlinkGoogle = useMutation({
     mutationFn: async () => apiClient.delete('/api/v1/auth/social/google'),
@@ -209,6 +236,51 @@ export function ProfileView() {
               </Button>
             )}
           </div>
+
+          <div className="flex items-center justify-between text-sm border-t border-border pt-4">
+            <div>
+              <p className="font-medium">Email address</p>
+              <p className="text-xs text-muted-foreground">{me?.email}</p>
+            </div>
+            {!showEmailForm && (
+              <Button variant="outline" className="gap-1.5" onClick={() => setShowEmailForm(true)}>
+                <Mail className="h-4 w-4" />
+                Change email
+              </Button>
+            )}
+          </div>
+
+          {showEmailForm && (
+            <form onSubmit={submitEmailChange} className="space-y-3 border-t border-border pt-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">New email</label>
+                <input
+                  type="email" required value={newEmail} onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              {me?.has_password && (
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Current password</label>
+                  <input
+                    type="password" required value={emailCurrentPassword} onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                We&apos;ll send a confirmation link to the new address — your sign-in email won&apos;t change until you click it.
+              </p>
+              <div className="flex gap-2">
+                <Button type="submit" disabled={changeEmail.isPending}>
+                  {changeEmail.isPending ? 'Sending…' : 'Send confirmation link'}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => { setShowEmailForm(false); setNewEmail(''); setEmailCurrentPassword('') }}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          )}
 
           <div className="flex items-center justify-between text-sm border-t border-border pt-4">
             <div>
