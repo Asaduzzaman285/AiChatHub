@@ -8,6 +8,7 @@ use App\Http\Controllers\V1\ImageController;
 use App\Http\Controllers\V1\AudioController;
 use App\Http\Controllers\V1\TranscriptionController;
 use App\Http\Controllers\V1\ModelController;
+use App\Http\Controllers\V1\UsageController;
 use App\Http\Controllers\HealthController;
 use Illuminate\Support\Facades\Route;
 
@@ -27,6 +28,10 @@ Route::middleware('auth.jwt')->group(function () {
         Route::post('/generate/image',  [ImageController::class,       'generate']);
         Route::post('/generate/audio',  [AudioController::class,       'generate']);
         Route::post('/transcribe',      [TranscriptionController::class,'transcribe']);
+
+        // Customer-scoped counterpart to /models/admin/usage-logs — own usage only.
+        Route::get('/models/usage/summary', [UsageController::class, 'summary']);
+        Route::get('/models/usage',         [UsageController::class, 'index']);
     });
 
     // Nested under /models (not bare /admin) so it's reachable through

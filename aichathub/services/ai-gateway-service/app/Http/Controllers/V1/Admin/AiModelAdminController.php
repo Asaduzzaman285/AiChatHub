@@ -142,17 +142,35 @@ class AiModelAdminController extends Controller
         return response()->json(['model' => $this->format($model->fresh())]);
     }
 
+    /**
+     * Sell rates are computed here, never accepted directly from the admin —
+     * provider_*_rate is what the model actually costs us, markup_percentage is
+     * the configured margin, and input/output/flat_rate_per_million are derived
+     * from the two. CostTrackingMiddleware only ever reads the derived columns,
+     * unchanged by this — it has no idea pricing is markup-based underneath.
+     */
     private function createPricing(AiModel $model, array $data): void
     {
+        $markup = (float) $data['markup_percentage'];
+        $factor = 1 + ($markup / 100);
+
+        $providerInput  = $data['provider_input_rate_per_million']  ?? null;
+        $providerOutput = $data['provider_output_rate_per_million'] ?? null;
+        $providerFlat   = $data['provider_flat_rate_per_unit']      ?? null;
+
         ModelPricing::create([
-            'model_id'                => $model->id,
-            'pricing_type'            => $data['pricing_type'],
-            'input_rate_per_million'  => $data['input_rate_per_million']  ?? null,
-            'output_rate_per_million' => $data['output_rate_per_million'] ?? null,
-            'flat_rate_per_unit'      => $data['flat_rate_per_unit']      ?? null,
-            'currency'                => $data['currency'] ?? 'USD',
-            'effective_from'          => now(),
-            'is_active'               => true,
+            'model_id'                          => $model->id,
+            'pricing_type'                      => $data['pricing_type'],
+            'provider_input_rate_per_million'   => $providerInput,
+            'provider_output_rate_per_million'  => $providerOutput,
+            'provider_flat_rate_per_unit'       => $providerFlat,
+            'markup_percentage'                 => $markup,
+            'input_rate_per_million'            => $providerInput  !== null ? round($providerInput  * $factor, 6) : null,
+            'output_rate_per_million'           => $providerOutput !== null ? round($providerOutput * $factor, 6) : null,
+            'flat_rate_per_unit'                => $providerFlat   !== null ? round($providerFlat   * $factor, 4) : null,
+            'currency'                          => $data['currency'] ?? 'USD',
+            'effective_from'                    => now(),
+            'is_active'                         => true,
         ]);
     }
 
@@ -173,11 +191,14 @@ class AiModelAdminController extends Controller
             'capabilities'             => 'nullable|array',
             'is_active'                => 'sometimes|boolean',
             // Pricing — required together at creation; optional as a group on update.
-            'pricing_type'             => [$isCreate ? 'required' : 'sometimes', Rule::in(self::PRICING_TYPES)],
-            'input_rate_per_million'   => 'required_if:pricing_type,token_based|nullable|numeric|min:0',
-            'output_rate_per_million'  => 'required_if:pricing_type,token_based|nullable|numeric|min:0',
-            'flat_rate_per_unit'       => 'required_unless:pricing_type,token_based|nullable|numeric|min:0',
-            'currency'                 => 'nullable|string|size:3',
+            // Sell rate (input/output/flat_rate_per_*) is never accepted directly — it's
+            // always computed from provider cost + markup_percentage, see createPricing().
+            'pricing_type'                      => [$isCreate ? 'required' : 'sometimes', Rule::in(self::PRICING_TYPES)],
+            'provider_input_rate_per_million'   => 'required_if:pricing_type,token_based|nullable|numeric|min:0',
+            'provider_output_rate_per_million'  => 'required_if:pricing_type,token_based|nullable|numeric|min:0',
+            'provider_flat_rate_per_unit'       => 'required_unless:pricing_type,token_based|nullable|numeric|min:0',
+            'markup_percentage'                 => 'required_with:pricing_type|nullable|numeric|min:0',
+            'currency'                           => 'nullable|string|size:3',
         ]);
     }
 
@@ -198,11 +219,15 @@ class AiModelAdminController extends Controller
             'is_active'         => $model->is_active,
             'created_at'        => $model->created_at,
             'pricing'           => $pricing ? [
-                'pricing_type'             => $pricing->pricing_type,
-                'input_rate_per_million'   => $pricing->input_rate_per_million,
-                'output_rate_per_million'  => $pricing->output_rate_per_million,
-                'flat_rate_per_unit'       => $pricing->flat_rate_per_unit,
-                'currency'                 => $pricing->currency,
+                'pricing_type'                      => $pricing->pricing_type,
+                'input_rate_per_million'             => $pricing->input_rate_per_million,
+                'output_rate_per_million'            => $pricing->output_rate_per_million,
+                'flat_rate_per_unit'                 => $pricing->flat_rate_per_unit,
+                'provider_input_rate_per_million'    => $pricing->provider_input_rate_per_million,
+                'provider_output_rate_per_million'   => $pricing->provider_output_rate_per_million,
+                'provider_flat_rate_per_unit'        => $pricing->provider_flat_rate_per_unit,
+                'markup_percentage'                  => $pricing->markup_percentage,
+                'currency'                            => $pricing->currency,
             ] : null,
         ];
     }

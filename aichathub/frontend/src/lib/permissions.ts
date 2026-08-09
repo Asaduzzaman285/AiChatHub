@@ -27,7 +27,6 @@ export const ALL_PERMISSIONS: { group: string; permissions: { value: string; lab
     permissions: [
       { value: 'users.view', label: 'View users' },
       { value: 'users.suspend', label: 'Suspend / unsuspend users' },
-      { value: 'chat_logs.view', label: "View users' chat history" },
     ],
   },
   {

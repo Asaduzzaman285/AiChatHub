@@ -23,5 +23,15 @@ return [
             'port'     => env('REDIS_PORT', '6379'),
             'database' => '0',
         ],
+        // config/cache.php's redis store points at this connection name — never
+        // needed until wallet-queue-worker (this service's first-ever queue worker)
+        // started exercising a queue code path that resolves the cache store,
+        // caught live as "Redis connection [cache] not configured."
+        'cache' => [
+            'host'     => env('REDIS_HOST', 'redis'),
+            'password' => env('REDIS_PASSWORD', null),
+            'port'     => env('REDIS_PORT', '6379'),
+            'database' => '1',
+        ],
     ],
 ];

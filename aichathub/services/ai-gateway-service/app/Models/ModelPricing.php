@@ -19,6 +19,8 @@ class ModelPricing extends Model
     protected $fillable = [
         'model_id', 'pricing_type', 'input_rate_per_million', 'output_rate_per_million',
         'flat_rate_per_unit', 'currency', 'effective_from', 'effective_until', 'is_active',
+        'provider_input_rate_per_million', 'provider_output_rate_per_million',
+        'provider_flat_rate_per_unit', 'markup_percentage',
     ];
 
     protected function casts(): array
@@ -30,6 +32,10 @@ class ModelPricing extends Model
             'is_active'               => 'boolean',
             'effective_from'          => 'datetime',
             'effective_until'         => 'datetime',
+            'provider_input_rate_per_million'  => 'decimal:6',
+            'provider_output_rate_per_million' => 'decimal:6',
+            'provider_flat_rate_per_unit'      => 'decimal:4',
+            'markup_percentage'                => 'decimal:2',
         ];
     }
 

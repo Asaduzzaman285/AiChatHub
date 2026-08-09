@@ -11,3 +11,4 @@ Route::post('/payments/checkout', [PaymentInternalController::class, 'createChec
 Route::post('/payments/refund', [PaymentInternalController::class, 'refund']);
 Route::get('/payments/{id}', [PaymentInternalController::class, 'show']);
 Route::get('/payment-methods/{userId}/default', [PaymentInternalController::class, 'defaultPaymentMethod']);
+Route::get('/payment-method/{id}', [PaymentInternalController::class, 'byId']);

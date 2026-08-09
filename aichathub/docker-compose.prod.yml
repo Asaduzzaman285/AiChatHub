@@ -1,0 +1,371 @@
+# ─────────────────────────────────────────────
+# AI ChatHub — Production
+# ─────────────────────────────────────────────
+# Standalone file, not an overlay combined with docker-compose.yml via `-f base -f
+# this` — Compose merges list-type keys (volumes, ports) by CONCATENATING them, not
+# replacing, so there is no clean way to "subtract" dev's bind-mounts/host-ports
+# through an overlay. Simpler and less error-prone to define the production shape
+# fully here instead: run with
+#   docker-compose -f docker-compose.prod.yml up -d --build
+#
+# What's different from docker-compose.yml, and why:
+#   - No `./services/X:/var/www` bind-mounts — every Dockerfile already COPYs the
+#     real code into the image (confirmed: services all end in `COPY --chown=www:www . .`),
+#     so the mount was only ever a dev convenience for live-reload, never a requirement.
+#   - No host `ports:` on internal services — only `caddy` below publishes 80/443.
+#     Postgres/Redis/every service-nginx/frontend all stay reachable ONLY on the
+#     `aichathub` network, not from outside the box.
+#   - No `minio`/`mailpit` — production points FILESYSTEM_DISK/MAIL_* at real external
+#     providers (a real S3-compatible bucket, real Mailgun), not in-cluster stand-ins.
+#   - Each service's `env_file` still points at `services/X/.env` — that file just
+#     needs to BE the production-filled version on this server (copy each
+#     `.env.production.example` to `.env` and fill in real values; nothing reads a
+#     differently-named file).
+
+networks:
+  aichathub:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+
+services:
+
+  # ─── INFRASTRUCTURE ───────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aichathub-postgres
+    restart: unless-stopped
+    networks: [aichathub]
+    environment:
+      POSTGRES_DB: ai_chathub_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set — no dev default in production}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    mem_limit: 1g
+
+  redis:
+    image: redis:7-alpine
+    container_name: aichathub-redis
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set — no dev default in production}
+    mem_limit: 512m
+
+  # ─── REVERSE PROXY (the only public entry point) ──
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: aichathub-caddy
+    restart: unless-stopped
+    networks: [aichathub]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN must be set (e.g. app.yourdomain.com)}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN must be set (e.g. api.yourdomain.com)}
+    volumes:
+      - ./infrastructure/docker/Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [frontend, api-gateway-nginx]
+
+  # ─── AUTH SERVICE ─────────────────────────
+
+  auth-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/auth-service:prod
+    container_name: aichathub-auth
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/auth-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  auth-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-auth-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/auth.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [auth-service]
+
+  auth-queue-worker:
+    image: aichathub/auth-service:prod
+    container_name: aichathub-auth-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/auth-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=auth --tries=3 --sleep=3
+    mem_limit: 256m
+
+  # ─── SUBSCRIPTION SERVICE ─────────────────
+
+  subscription-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/subscription-service:prod
+    container_name: aichathub-subscription
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/subscription-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  subscription-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-subscription-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/subscription.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [subscription-service]
+
+  subscription-queue-worker:
+    image: aichathub/subscription-service:prod
+    container_name: aichathub-subscription-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/subscription-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=subscription --tries=3 --sleep=3 --timeout=120
+    mem_limit: 256m
+
+  subscription-scheduler:
+    image: aichathub/subscription-service:prod
+    container_name: aichathub-subscription-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/subscription-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+    mem_limit: 192m
+
+  # ─── WALLET SERVICE ───────────────────────
+
+  wallet-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/wallet-service:prod
+    container_name: aichathub-wallet
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/wallet-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  wallet-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-wallet-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/wallet.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [wallet-service]
+
+  wallet-queue-worker:
+    image: aichathub/wallet-service:prod
+    container_name: aichathub-wallet-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/wallet-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=wallet --tries=3 --sleep=3 --timeout=120
+    mem_limit: 256m
+
+  wallet-scheduler:
+    image: aichathub/wallet-service:prod
+    container_name: aichathub-wallet-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/wallet-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+    mem_limit: 192m
+
+  # ─── PAYMENT SERVICE ──────────────────────
+
+  payment-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/payment-service:prod
+    container_name: aichathub-payment
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/payment-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  payment-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-payment-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/payment.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [payment-service]
+
+  payment-queue-worker:
+    image: aichathub/payment-service:prod
+    container_name: aichathub-payment-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/payment-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=payment --tries=3 --sleep=3 --timeout=120
+    mem_limit: 256m
+
+  payment-scheduler:
+    image: aichathub/payment-service:prod
+    container_name: aichathub-payment-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/payment-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+    mem_limit: 192m
+
+  # ─── AI GATEWAY SERVICE (Octane/Swoole) ───
+
+  ai-gateway-service:
+    build: { context: ./infrastructure/docker/php-octane, dockerfile: Dockerfile }
+    image: aichathub/ai-gateway-service:prod
+    container_name: aichathub-ai-gateway
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/ai-gateway-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 512m
+
+  ai-gateway-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-ai-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/ai.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [ai-gateway-service]
+
+  ai-gateway-queue-worker:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/ai-gateway-service-fpm:prod
+    container_name: aichathub-ai-gateway-queue-worker
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/ai-gateway-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan queue:work redis --queue=ai_gateway --tries=3 --sleep=1
+    mem_limit: 256m
+
+  # ─── CHAT SERVICE (Octane/Swoole) ─────────
+
+  chat-service:
+    build: { context: ./infrastructure/docker/php-octane, dockerfile: Dockerfile }
+    image: aichathub/chat-service:prod
+    container_name: aichathub-chat
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/chat-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 512m
+
+  chat-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-chat-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/chat.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [chat-service]
+
+  # ─── BILLING SERVICE ──────────────────────
+
+  billing-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/billing-service:prod
+    container_name: aichathub-billing
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/billing-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  billing-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-billing-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/billing.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [billing-service]
+
+  # ─── NOTIFICATION SERVICE ─────────────────
+
+  notification-service:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/notification-service:prod
+    container_name: aichathub-notification
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/notification-service/.env]
+    depends_on: [postgres, redis]
+    mem_limit: 384m
+
+  notification-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-notification-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/notification.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [notification-service]
+
+  # ─── API GATEWAY ──────────────────────────
+
+  api-gateway:
+    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    image: aichathub/api-gateway:prod
+    container_name: aichathub-api-gateway
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/api-gateway/.env]
+    depends_on:
+      - auth-service
+      - subscription-service
+      - wallet-service
+      - payment-service
+      - ai-gateway-service
+      - chat-service
+    mem_limit: 384m
+
+  api-gateway-nginx:
+    image: nginx:1.25-alpine
+    container_name: aichathub-gateway-nginx
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./infrastructure/docker/nginx/gateway.conf:/etc/nginx/conf.d/default.conf
+    depends_on: [api-gateway]
+
+  # ─── FRONTEND ─────────────────────────────
+  # NEXT_PUBLIC_* values are baked in at `npm run build` time from
+  # frontend/.env.production (see frontend/.env.production.example) — NOT read from
+  # this service's `environment:` at runtime, so nothing is set here for them. That
+  # file must exist with real values before `docker-compose ... build frontend` runs.
+
+  frontend:
+    build: { context: ./frontend, dockerfile: Dockerfile }
+    image: aichathub/frontend:prod
+    container_name: aichathub-frontend
+    restart: unless-stopped
+    networks: [aichathub]
+    depends_on: [api-gateway]
+    mem_limit: 512m

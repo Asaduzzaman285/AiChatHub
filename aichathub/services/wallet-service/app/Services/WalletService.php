@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Jobs\TriggerAutoDebitJob;
+use App\Models\AutoDebitSetting;
 use App\Models\CreditLedger;
 use App\Models\Wallet;
 use App\Models\WalletLedgerEntry;
@@ -315,6 +317,8 @@ class WalletService
         $criticalThreshold = (float) config('wallet.critical_balance_threshold', 1.00);
         $balance           = (float) $wallet->balance;
 
+        $this->maybeTriggerAutoDebit($userId, $balance);
+
         if ($balance <= $criticalThreshold) {
             Redis::publish('wallet-events', json_encode([
                 'event'   => 'wallet.balance_critical',
@@ -327,6 +331,21 @@ class WalletService
                 'payload' => ['user_id' => $userId, 'balance' => $balance, 'threshold' => $lowThreshold],
             ]));
             $this->notifyLowBalance($userId, $balance, critical: false);
+        }
+    }
+
+    /**
+     * Queued, never synchronous — deduct() is the live chat-streaming hot path and must
+     * never block on a Stripe round-trip. TriggerAutoDebitJob re-checks `enabled` itself
+     * on execution, so dispatching here on every under-threshold deduct (not just the
+     * moment it crosses) is safe — a disabled/already-topped-up setting is just a no-op.
+     */
+    private function maybeTriggerAutoDebit(string $userId, float $balance): void
+    {
+        $setting = AutoDebitSetting::where('user_id', $userId)->where('enabled', true)->first();
+
+        if ($setting && $balance < (float) $setting->threshold_usd) {
+            TriggerAutoDebitJob::dispatch($userId);
         }
     }
 

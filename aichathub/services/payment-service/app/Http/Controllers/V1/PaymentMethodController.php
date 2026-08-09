@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\PaymentMethod;
+use App\Services\StripeGateway;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +13,8 @@ use Stripe\StripeClient;
 
 class PaymentMethodController extends Controller
 {
+    public function __construct(private StripeGateway $stripe) {}
+
     /** GET /payment-methods */
     public function index(Request $request): JsonResponse
     {
@@ -43,6 +46,16 @@ class PaymentMethodController extends Controller
 
         if ($pm->type !== 'card' || ! $pm->card) {
             return response()->json(['message' => 'Only card payment methods are supported.', 'error' => 'unsupported_type'], 422);
+        }
+
+        // Attach to a Stripe Customer now, once, rather than deferring to charge time —
+        // this is what lets a later off-session charge (auto-debit, renewal) use
+        // off_session: true instead of a bare payment_method with nothing backing it.
+        try {
+            $customerId = $this->stripe->resolveOrCreateCustomer($userId);
+            $this->stripe->attachToCustomer($pm->id, $customerId);
+        } catch (ApiErrorException $e) {
+            return response()->json(['message' => 'Could not save this card.', 'error' => $e->getMessage()], 422);
         }
 
         $makeDefault = (bool) ($data['set_default'] ?? false);

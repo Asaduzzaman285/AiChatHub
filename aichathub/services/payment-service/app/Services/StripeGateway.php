@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\StripeCustomer;
 use App\Models\Transaction;
 use Illuminate\Support\Str;
 use Stripe\Exception\ApiErrorException;
@@ -17,7 +18,49 @@ class StripeGateway
     }
 
     /**
-     * Charge a saved payment method (for subscription purchase / renewal).
+     * One Stripe Customer per user, created lazily. Needed so saved-card charges can
+     * go through Stripe's off_session flow (see charge() below) instead of a bare
+     * payment_method with nothing backing it — real cards under SCA can reject that.
+     */
+    public function resolveOrCreateCustomer(string $userId): string
+    {
+        $existing = StripeCustomer::where('user_id', $userId)->first();
+        if ($existing) {
+            return $existing->stripe_customer_id;
+        }
+
+        $customer = $this->stripe->customers->create(['metadata' => ['user_id' => $userId]]);
+
+        StripeCustomer::create(['user_id' => $userId, 'stripe_customer_id' => $customer->id]);
+
+        return $customer->id;
+    }
+
+    /**
+     * Attach a saved PaymentMethod to the user's Stripe Customer — called once at
+     * save time (PaymentMethodController::store()). Stripe errors if a PaymentMethod
+     * is attached twice, so "already attached to this customer" is treated as
+     * success rather than a failure.
+     */
+    public function attachToCustomer(string $paymentMethodId, string $customerId): void
+    {
+        try {
+            $this->stripe->paymentMethods->attach($paymentMethodId, ['customer' => $customerId]);
+        } catch (ApiErrorException $e) {
+            if (! str_contains($e->getMessage(), 'already been attached')) {
+                throw $e;
+            }
+        }
+    }
+
+    /**
+     * Charge a saved payment method (for subscription purchase / renewal / auto-debit).
+     * Goes through the customer + off_session flow rather than a bare payment_method —
+     * this is a merchant-initiated charge with no user present, and Stripe needs to
+     * know that to apply the right SCA exemption logic instead of just failing outright
+     * on cards that require it. attachToCustomer() is called defensively here (not just
+     * at save time) so this stays correct even for payment methods saved before this
+     * existed, without needing a data backfill.
      */
     public function charge(
         string $userId,
@@ -28,16 +71,20 @@ class StripeGateway
         string $description
     ): array {
         try {
+            $customerId = $this->resolveOrCreateCustomer($userId);
+            $this->attachToCustomer($paymentMethodToken, $customerId);
+
             $amountCents = (int) round($amount * 100);
 
             $intent = $this->stripe->paymentIntents->create([
-                'amount'               => $amountCents,
-                'currency'             => strtolower($currency),
-                'payment_method'       => $paymentMethodToken,
-                'confirm'              => true,
-                'description'          => $description,
-                'metadata'             => ['user_id' => $userId],
-                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
+                'amount'         => $amountCents,
+                'currency'       => strtolower($currency),
+                'customer'       => $customerId,
+                'payment_method' => $paymentMethodToken,
+                'off_session'    => true,
+                'confirm'        => true,
+                'description'    => $description,
+                'metadata'       => ['user_id' => $userId],
             ], ['idempotency_key' => $idempotencyKey]);
 
             return [
@@ -51,6 +98,10 @@ class StripeGateway
                 'success'           => false,
                 'gateway_reference' => null,
                 'status'            => 'failed',
+                // 'authentication_required' means the card genuinely needs the customer
+                // to come back and confirm — distinct from a plain decline, worth being
+                // able to tell apart later even though nothing branches on it yet.
+                'error_code'        => $e->getError()->code ?? null,
                 'error'             => $e->getMessage(),
             ];
         }
@@ -111,6 +162,19 @@ class StripeGateway
     public function retrieveCheckoutSession(string $sessionId): \Stripe\Checkout\Session
     {
         return $this->stripe->checkout->sessions->retrieve($sessionId);
+    }
+
+    /**
+     * Used to resolve a dispute webhook (which only carries a payment_intent/charge
+     * id) back to our own Transaction — the PaymentIntent's metadata carries
+     * transaction_id (set at creation via payment_intent_data.metadata in
+     * createCheckoutSession() above), so no separate id-mapping table is needed.
+     *
+     * @throws ApiErrorException
+     */
+    public function retrievePaymentIntent(string $paymentIntentId): \Stripe\PaymentIntent
+    {
+        return $this->stripe->paymentIntents->retrieve($paymentIntentId);
     }
 
     /**

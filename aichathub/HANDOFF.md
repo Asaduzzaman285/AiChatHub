@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-08-07  
+**Last updated:** 2026-08-09 (evening)  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -2506,6 +2506,264 @@ auto-charge job exists anywhere), per-user configurable threshold + top-up amoun
 either yet), and a settings UI for all of it. **Decision needed before implementing**: bKash has no
 saved-token/re-charge equivalent in this codebase today — confirm whether auto-debit ships Stripe-only
 first, or needs a bKash equivalent before it's usable for bKash-paying users.
+
+**Both decisions resolved 2026-08-09**: token markup — build it properly (computed, not manual), see
+below, done same day. Auto-debit — Stripe-only for now, bKash explicitly deferred to **Phase 2**, not
+started this session (frontend UI for saved payment methods + the whole auto-debit feature remain
+queued, unstarted).
+
+### 2026-08-09 Session — Token markup pricing shipped (AI model sell price now computed, not typed)
+
+Implemented exactly what was decided: an admin enters what a model's provider actually charges (e.g.
+$5/1M input tokens, $30/1M output) plus a markup % (e.g. 30%), and the sell rate charged to users is
+now **computed and stored**, not manually typed. Per-model margin is now visible directly in the admin
+list (`"30% markup"` sub-line) instead of being invisible/unrecorded.
+
+- **Migration** (`ai-gateway-service`, `0002_add_provider_cost_to_model_pricing_table`) — added
+  `provider_input_rate_per_million`, `provider_output_rate_per_million`, `provider_flat_rate_per_unit`,
+  `markup_percentage` to `model_pricing`, plus backfilled all 12 existing seeded models'
+  active pricing rows with `provider_cost = current sell rate`, `markup = 0%` — verified live the
+  backfill landed correctly and changes nothing about what any existing model actually bills.
+- **`AiModelAdminController::createPricing()`** now computes `sell_rate = provider_cost * (1 +
+  markup/100)` server-side; the sell-rate fields (`input_rate_per_million` etc.) are no longer accepted
+  as admin input at all — they're derived, full stop. **Deliberately did not touch
+  `CostTrackingMiddleware::calculateCost()`** — the live, already-proven money-charging hot path reads
+  the exact same computed columns it always has, so this change carries zero risk to real per-request
+  billing correctness.
+- **Frontend** (`admin/ai-models/page.tsx`) — pricing form now takes provider cost + markup % instead of
+  a direct sell-rate number, with a client-side computed preview (clearly labeled as a preview — the
+  server's own computation on save is still the real source of truth) so the admin sees the resulting
+  sell rate as they type.
+- **Verified live against the real stack**, not just code-reviewed: created a real model via the real
+  admin API with $5/$30 provider cost + 30% markup → confirmed computed sell rate exactly $6.50/$39.00.
+  Edited the same model's markup to 50% → confirmed a **new** versioned pricing row was created at
+  $7.50/$45.00 (5 × 1.5, 30 × 1.5) while the old 30%-markup row was correctly closed
+  (`is_active=false`, `effective_until` set) — the existing close-old/open-new versioning behavior
+  (preserves historical accuracy for past `usage_logs`) works unchanged with the new computed fields.
+  Deactivated the test model afterward so it can't be selected by a real user.
+
+`tsc --noEmit` and `php -l` clean throughout.
+
+### 2026-08-09 Session (cont'd, big one) — ChatGPT-style redesign + saved payment methods + auto-debit
+
+Four-phase implementation, all built and verified live in one session: removing admin chat-history
+viewing (privacy), the full consumer redesign, saved-payment-methods UI, and auto-debit (Stripe-only).
+
+**Phase 0 — admin chat-history viewing removed entirely (real privacy fix, not just unlinked)**:
+deleted `admin/users/[userId]/chat/page.tsx` + `.../[sessionId]/page.tsx`, the nav entry point, the
+`chat_logs.view` permission from the catalog, and — the part that actually matters for privacy — the
+backend endpoints themselves (`GET /sessions/admin/users/{userId}`, `.../[sessionId]/messages`) and
+their controller in chat-service. Verified live: the old endpoint now returns a clean 404, not just a
+missing frontend link.
+
+**Phase 1 — ChatGPT-style redesign**: chat session history moved out of `chat/page.tsx` into a new
+`ChatSessionContext` (`frontend/src/contexts/ChatSessionContext.tsx`), consumed by both
+`(dashboard)/layout.tsx`'s sidebar (now the persistent chat-history list, always visible) and
+`chat/page.tsx` (just renders the active conversation now). New `SettingsModal`
+(`components/settings/SettingsModal.tsx`) consolidates what were four separate routed pages —
+`/profile`, `/billing`, `/wallet`, `/pricing` — into one modal with an internal Account/Billing/
+Wallet/Plans mini-nav, opened from a new bottom-of-sidebar user menu instead of top-nav links. Each
+tab's content (`BillingView`/`WalletView`/`PlansView`) was extracted verbatim from the old page
+files — same logic, same API calls, just relocated; `ProfileView` already existed as a standalone
+component from an earlier session. All four old routes are now thin client-redirect stubs
+(`router.replace('/chat?settings=<tab>')`), and the layout reads that query param to auto-open the
+right tab — old bookmarks/links still work, just land in the modal instead of a dead page.
+**Compare** no longer swaps out the entire screen (sidebar included) — it's now a toggle within the
+same content pane, sidebar stays visible; the underlying stateless fan-out API is unchanged.
+
+**Phase 2 — saved payment methods UI**: backend was already fully built (confirmed before writing
+any code) — this phase is pure frontend. Installed `@stripe/stripe-js` + `@stripe/react-stripe-js`
+(zero Stripe frontend SDK existed before today), added `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` to
+`.env.local`. New `PaymentMethodsView` (inside the Wallet tab): list/set-default/remove against the
+already-working backend, plus a real Stripe Elements `<CardElement>` add-card form — card details
+tokenize client-side via Stripe.js and never touch our own backend, only the resulting opaque
+PaymentMethod id does.
+
+**Phase 3 — auto-debit (Stripe-only; bKash explicitly Phase 2, per the decision logged earlier this
+session)**: new `auto_debit_settings` table in wallet-service (migration `0002_create_auto_debit_
+settings_table`), `AutoDebitController` (`GET`/`PUT /wallet/auto-debit`), `AutoDebitChargeService`
+mirroring subscription-service's already-proven `PaymentChargeService::chargeSavedCard()`'s exact
+two-call shape (resolve token, then `POST /internal/payments/charge`), a new payment-service internal
+endpoint `GET /internal/payment-method/{id}` (for when a user picks a specific saved card rather than
+"use my default"). Trigger point: `WalletService::checkBalanceThresholds()` — already ran on every
+`deduct()` for the existing low/critical-balance email notifications, so the auto-debit check was
+added right there rather than a new call site, dispatching a new queued `TriggerAutoDebitJob`
+(deliberately async — the live chat-deduct hot path must never block on a Stripe round-trip).
+
+**Two real bugs found by live testing, both fixed same session, neither would have been caught by
+code review**:
+1. `TriggerAutoDebitJob` declared `public string $queue = 'wallet';` — fatal PHP trait-composition
+   error, since `Illuminate\Bus\Queueable` (used via the job's own `use Queueable` trait) already
+   declares that property. Caught live as a 500 the instant the job was ever dispatched. Fixed with
+   `$this->onQueue('wallet')` in the constructor instead (the trait's own safe API for this).
+2. Discovered wallet-service (and payment-service, identically) has never had a working queue worker
+   exercise a code path that resolves the `cache` Redis connection — `config/database.php` only
+   defined a `default` redis connection, but `config/cache.php`'s redis store points at a connection
+   named `cache` that never existed. Never surfaced before because **`wallet-queue-worker` (also new
+   this session) is the first-ever queue worker for this service** — payment-service has the same
+   latent gap, just never triggered it yet. Fixed by adding the missing `cache` redis connection
+   (separate Redis logical DB, `database: '1'`, from the queue's own `database: '0'`).
+3. Also new this session: `wallet-queue-worker` docker-compose service (`queue:work redis
+   --queue=wallet`) — without it, `TriggerAutoDebitJob` would just sit in the `jobs` table forever,
+   never processed. Confirmed necessary and working live, not assumed.
+
+**Verified live end-to-end, not just code-reviewed**: enabled auto-debit on a real test account with
+an artificially low threshold, credited then debited the wallet via the real admin adjust endpoint
+(itself calling the same `WalletService::deduct()` every real chat message uses) to cross the
+threshold, confirmed via `docker logs`/`laravel.log` that `TriggerAutoDebitJob` actually ran end to
+end — resolved that no saved payment method existed yet (correct, none was added), logged a clean
+warning, and exited without crashing. The "successful charge + wallet credit" branch of
+`AutoDebitChargeService` reuses `PaymentChargeService::chargeSavedCard()`'s exact, already-live-proven
+two-call shape and `WalletService::credit()`'s existing idempotency guard, so it's built on proven
+primitives — but actually charging a real saved card end-to-end needs a card added through the new
+Stripe Elements UI first, which is a real-browser-only step (client-side tokenization is a deliberate
+Stripe security design) that couldn't be driven from here this session.
+
+`tsc --noEmit` clean across the whole frontend; `php -l` clean across every touched file in
+chat-service, wallet-service, and payment-service. **Not yet visually confirmed in a real browser** —
+the new sidebar, Settings modal, inline compare toggle, and Stripe card-entry form all need a live
+click-through, same limitation flagged for every frontend change this session (no browser-driving
+capability from here). Dev server confirmed compiling clean and serving every route without a 500.
+
+### Deferred / explicitly out of scope this session
+- bKash auto-debit (Phase 2, per the decision logged earlier).
+- A real, successful Stripe charge through the new auto-debit flow (needs a real saved card added via
+  the browser first).
+- Any visual/UX polish pass on the new Settings modal and sidebar — built and verified functionally
+  correct, not yet eyeballed for spacing/sizing in a real browser.
+- **Mobile sidebar** — the new sidebar (`(dashboard)/layout.tsx`) is `hidden ... sm:flex`, i.e. it
+  disappears entirely below the `sm` breakpoint with no hamburger/toggle to bring it back. On a
+  phone-width screen there is currently no way to reach chat history, "New chat," or Settings/logout.
+  Known gap, **explicitly deferred by the user to a future phase**, not forgotten.
+- **AI Fiesta-style model roster / Multi Chat mode** — discussed but not yet planned or built. Their
+  pattern: a persistent, account-level "preferences" modal (toggle which models are in your multi-chat
+  set + per-provider sub-model choice, shown at login and editable later) is separate from a per-session
+  "Single Chat vs Multi Chat" mode switch; the composer just reflects whichever models are currently
+  toggled on. Contrast with our current `showCompare` in `chat/page.tsx`: ad hoc, re-picked from
+  scratch (2-4 models via checkboxes) every time compare is opened, nothing persisted. Moving toward
+  their model would mean adding a persisted "preferred compare models" list (Settings-reachable) that
+  pre-populates `compareModelIds` instead of starting empty. Not scoped or started — reference-gathering
+  only so far.
+
+### 2026-08-09 Session (cont'd) — Customer-facing usage view (per-model token/cost breakdown)
+
+User asked whether customers can see their own AI usage (tokens/spend per model) — they couldn't.
+`usage_logs` already recorded everything needed per request (`user_id`, `model_id`, `prompt_tokens`/
+`completion_tokens`/`total_tokens`, `actual_cost`, written by `UsageLoggingMiddleware`), but the only
+reader was the admin-only `GET /models/admin/usage-logs`. Added a customer-scoped read path:
+
+- New `UsageController` (ai-gateway-service, `app/Http/Controllers/V1/UsageController.php`) — not
+  under `Admin/`, no `admin.gate` middleware:
+  - `summary()` — `GET /models/usage/summary?period=7d|30d|all` — per-model totals (prompt/completion/
+    total tokens, cost), grouped by model, plus one overall totals row, hard-scoped to
+    `authUserId($request)`.
+  - `index()` — `GET /models/usage?per_page=` — paginated recent-activity list, same shape as the
+    admin equivalent but scoped to the caller only (no `user_id` query param, which would otherwise
+    leak other users' logs).
+  - Both routes nested inside the existing `block.admin` middleware group (alongside `/chat/stream`,
+    `/generate/*`) since pure admin accounts have no wallet and never generate usage rows.
+- Frontend: new `UsageView.tsx` (period toggle, summary cards, per-model table, recent-activity table
+  — same shape as `WalletView.tsx`), a new `usage` tab in `SettingsModal.tsx` (between Wallet and
+  Plans), a new `formatNumber()` helper in `lib/utils.ts` (no thousands-separator helper existed
+  before), and three new types in `types/index.ts` (`UsageSummary`, `UsageSummaryModel`,
+  `UsageLogEntry`).
+- **Framing decision, made explicit in the plan**: this system has no per-model token quota — customers
+  spend from one shared USD wallet, so "tokens left per model" isn't a real concept here. This view
+  shows consumption, not a remaining balance.
+
+**Real bug found and fixed live**: `summary()`'s base query originally did `where('user_id', ...)` /
+`where('created_at', ...)` unqualified. The moment the per-model query joins in `ai_models` (which also
+has its own `created_at` from `$table->timestamps()`), Postgres can't resolve which table's column is
+meant — caught live as `SQLSTATE[42702]: Ambiguous column: created_at`. Worth noting how this
+manifested: every client-side curl attempt against it just timed out (20-60s) with no visible error,
+because the actual PDOException + full stack-trace logging on the Octane worker took longer than the
+client's own timeout — it read like a hang, not an error, until `storage/logs/laravel.log` was checked
+directly inside the container. Fixed by table-qualifying both `where()` calls
+(`usage_logs.user_id`, `usage_logs.created_at`).
+
+Verified live end-to-end: manually inserted a known `usage_logs` row for `test@example.com` (a real
+chat request against the sandbox `deepseek-v4-flash` model failed with "insufficient credits or quota"
+at the provider level before reaching the logging point, so a direct DB insert was used instead, same
+approach as the email-change verification earlier this session) — confirmed `summary()` (all three
+period variants) and `index()` both returned it correctly and exactly matched a hand-written aggregate
+SQL query run directly against Postgres; confirmed the response contained none of another real user's
+27 pre-existing usage rows (queried directly — no cross-user leak); deleted the test row afterward.
+`php -l` and `tsc --noEmit` both clean. **Not yet visually confirmed in a real browser** (new Usage tab
+in Settings), same standing limitation as the rest of this session's frontend work.
+
+### 2026-08-09 Session (cont'd) — Deployment-readiness plan (target Aug 17-18) + no-server-needed prep shipped
+
+User wants to deploy by Aug 17-18. Audited the stack for real production readiness (found: `APP_DEBUG=
+true`/`APP_ENV=local` on all 9 services, zero TLS anywhere in any nginx config, Stripe still test-mode
+with a placeholder webhook secret, no AI provider key actually funded, `.github/workflows/` empty).
+Built a day-by-day plan (Day 1 Aug 10 → Day 8-9 Aug 17-18, single VPS + Docker Compose per the user's
+call, not a cloud/K8s migration — right-sized for the timeline) covering provisioning, TLS, credential
+rotation, the app-layer fixes below, a browser QA pass, minimal CI/monitoring, and a full dry-run
+rehearsal before go-live. Plan lives in the session's plan-mode file; the durable version of it is this
+section plus the artifacts below, all committed to the repo so they survive between sessions.
+
+**Shipped today — everything that doesn't require server access yet**, so it's ready the moment the
+VPS exists:
+- `docker-compose.prod.yml` (new) — standalone production compose, not a `-f base -f prod` overlay
+  (Compose concatenates list keys like `volumes`/`ports` rather than letting an overlay remove them, so
+  subtracting dev's bind-mounts/host-ports through an overlay isn't reliable — a full standalone file
+  avoids that trap). No bind-mounts (every Dockerfile already `COPY`s real code in), no host ports on
+  any internal service (only `caddy` publishes 80/443), no `minio`/`mailpit` (production points at real
+  external S3/mail), required env vars (`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `APP_DOMAIN`,
+  `API_DOMAIN`) enforced via Compose's `:?` syntax so it fails fast instead of silently booting
+  insecure. Validated with `docker-compose -f docker-compose.prod.yml config`.
+- `infrastructure/docker/Caddyfile` (new) — reverse proxy, automatic Let's Encrypt TLS via two domain
+  blocks (`APP_DOMAIN` → frontend, `API_DOMAIN` → api-gateway-nginx).
+- `.env.production.example` per service (9 backend + frontend) — mirrors each existing `.env.example`
+  with `APP_ENV=production`/`APP_DEBUG=false`/`LOG_LEVEL=warning`, `CHANGE_ME` markers on every secret
+  that needs rotating (DB/Redis passwords, `INTERNAL_SERVICE_KEY`, `JWT_SECRET`, Stripe live keys, AI
+  provider keys, real S3/Mailgun credentials), and comments flagging which values must match exactly
+  across services (Redis password, internal key, JWT secret).
+- `frontend/.dockerignore` (new) + `frontend/.env.production.example` (new) — **real bug found and
+  fixed here**: there was no `.dockerignore`, and Next.js's env-file precedence puts `.env.local` ABOVE
+  `.env.production` during a production build. Without the exclusion, a real production build run from
+  this directory would have silently baked in dev's `NEXT_PUBLIC_API_URL` (localhost) and dev's Stripe
+  test key into the production bundle instead of the real production values — caught by reasoning
+  through the Dockerfile's build stage, not by a failed build (there was nothing yet to fail against).
+- **Real bug fixed**: `notification-service`'s live `.env` had an empty `APP_KEY` — found while auditing
+  all 9 services' keys for the production template pass. Fixed with `artisan key:generate --force`.
+- **Real gap fixed**: `wallet-service/.env.example` was missing `PAYMENT_SERVICE_URL` (added for
+  auto-debit earlier this session, but only to the real `.env`, never backported to the example file) —
+  a fresh clone following the example would have been missing it. Fixed.
+- **Stripe Customer object added** (`payment-service`) — the SCA/off-session gap flagged earlier this
+  session. New `stripe_customers` table/model (one Customer per user, created lazily). `StripeGateway`
+  gained `resolveOrCreateCustomer()` and `attachToCustomer()`; `PaymentMethodController::store()` now
+  attaches every saved card to the user's Customer at save time; `StripeGateway::charge()` now sends
+  `customer` + `off_session: true` instead of a bare `payment_method` with `automatic_payment_methods`.
+  Verified live: real Stripe test-mode Customer created (`cus_V2aSX2IMU19VHY`), real card
+  (`pm_card_visa`) attached, and a real off-session `PaymentIntent` succeeded end-to-end
+  (`pi_3U2VMK9JOowLTpKH01DrgdxM`) via a disposable one-off artisan command (test data cleaned up after).
+- **`charge.dispute.created`/`charge.dispute.closed` handling added** (`payment-service`) — the other
+  flagged gap. New `transactions.disputed_at` column; `ProcessStripeWebhookJob` now resolves a dispute's
+  `payment_intent` back to a `Transaction` two ways (direct `gateway_reference` match for saved-card/
+  auto-debit charges, falling back to reading `transaction_id` out of the PaymentIntent's own metadata
+  for Checkout-Session-based charges — these two charge paths store different things in
+  `gateway_reference`, discovered while implementing this), marks it `disputed` with dispute details in
+  `metadata`, and reverts to `completed`/`refunded` on `won`/`lost` closure. Logged at `Log::critical`
+  specifically so it's impossible to miss once Sentry is wired up (Day 6 of the plan).
+  **Real bug found and fixed during verification**: `Transaction`'s `$fillable` was missing the new
+  `disputed_at` column entirely — the mass-assignment `update()` call was silently dropping it (no
+  error, just never persisted). Caught by actually checking the DB row after a live test run, not by
+  assuming the update worked. Verified live end-to-end (both the dispute-created and dispute-won paths)
+  via a real `Transaction`+`PaymentIntent` created through the actual internal charge endpoint, a
+  synthetic `WebhookEvent` row shaped like a real Stripe dispute payload, and a disposable one-off
+  command running the job synchronously — all test rows deleted afterward.
+
+`php -l` clean across every touched file in payment-service. Two more real, live-caught bugs this
+session (on top of the ones from earlier sessions), both found by actually checking the database after
+running the code, not by reading it and assuming it was correct — same discipline as everything else
+this session.
+
+### Deployment-readiness — still open (see the plan for the full day-by-day breakdown)
+Everything past this point needs the user's own action first (server, domain, Stripe activation, AI
+provider funding, S3 bucket, Mailgun domain) before the remaining `[Me]` steps — reverse-proxy
+deployment, credential wiring, webhook registration, the still-outstanding browser click-through QA
+pass, CI/monitoring/backups, and the final dry-run rehearsal — can proceed.
 
 ---
 

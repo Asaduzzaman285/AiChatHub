@@ -15,7 +15,7 @@ class Transaction extends Model
         'user_id', 'type', 'status', 'amount', 'currency', 'exchange_rate',
         'gateway', 'gateway_reference', 'payment_method_id', 'idempotency_key',
         'description', 'metadata', 'error_message', 'gateway_fee', 'net_amount',
-        'completed_at', 'failed_at', 'refunded_at',
+        'completed_at', 'failed_at', 'refunded_at', 'disputed_at',
     ];
 
     protected function casts(): array
@@ -29,6 +29,7 @@ class Transaction extends Model
             'completed_at'  => 'datetime',
             'failed_at'     => 'datetime',
             'refunded_at'   => 'datetime',
+            'disputed_at'   => 'datetime',
         ];
     }
 

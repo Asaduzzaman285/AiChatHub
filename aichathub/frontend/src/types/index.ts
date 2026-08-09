@@ -79,6 +79,13 @@ export interface WalletBalance {
   currency: string
 }
 
+export interface AutoDebitSettings {
+  enabled: boolean
+  threshold_usd: number
+  topup_amount_usd: number
+  payment_method_id: string | null
+}
+
 export interface WalletCreditStatus {
   credit_balance: number
   credit_limit: number
@@ -99,6 +106,36 @@ export interface LedgerEntry {
   reference_id: string | null
   currency: string
   exchange_rate: string
+  created_at: string
+}
+
+// ─── Usage ─────────────────────────────────────────────────────────────────
+// Aggregates come back from Postgres SUM()/decimal columns as strings via the
+// pgsql PDO driver, same reason LedgerEntry's amount/balance fields are strings.
+
+export interface UsageSummaryModel {
+  model_id: string
+  name: string
+  provider: string
+  prompt_tokens: string
+  completion_tokens: string
+  total_tokens: string
+  cost: string
+}
+
+export interface UsageSummary {
+  period: '7d' | '30d' | 'all'
+  models: UsageSummaryModel[]
+  totals: { total_tokens: string; cost: string }
+}
+
+export interface UsageLogEntry {
+  id: string
+  model: { id: string; provider: string; name: string; model_id: string } | null
+  operation_type: string
+  status: string
+  total_tokens: number
+  actual_cost: string
   created_at: string
 }
 
@@ -314,6 +351,10 @@ export interface AdminModelPricing {
   input_rate_per_million: string | null
   output_rate_per_million: string | null
   flat_rate_per_unit: string | null
+  provider_input_rate_per_million: string | null
+  provider_output_rate_per_million: string | null
+  provider_flat_rate_per_unit: string | null
+  markup_percentage: string | null
   currency: string
 }
 

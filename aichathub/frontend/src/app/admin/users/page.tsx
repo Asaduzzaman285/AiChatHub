@@ -1,9 +1,7 @@
 'use client'
 
-import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { MessagesSquare } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -37,7 +35,6 @@ interface Filters {
 export default function AdminUsersPage() {
   const { user: currentAdmin } = useAuthStore()
   const canSuspend = hasPermission(currentAdmin, 'users.suspend')
-  const canViewChat = hasPermission(currentAdmin, 'chat_logs.view')
   const queryClient = useQueryClient()
 
   const { filters, setFilters, applied, page, setPage, applyFilters, clearFilters, hasActiveFilters } =
@@ -123,11 +120,6 @@ export default function AdminUsersPage() {
                       <td className="py-2 text-muted-foreground">{formatDate(u.created_at)}</td>
                       <td className="py-2">
                         <div className="flex justify-end gap-2">
-                          {canViewChat && (
-                            <Link href={`/admin/users/${u.id}/chat`} title="View chat history">
-                              <Button variant="outline" className="px-2 py-1.5"><MessagesSquare className="h-3.5 w-3.5" /></Button>
-                            </Link>
-                          )}
                           {canSuspend && (
                             <Button
                               variant={u.status === 'suspended' ? 'outline' : 'destructive'}

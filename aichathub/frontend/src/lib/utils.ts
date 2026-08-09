@@ -13,3 +13,8 @@ export function formatCurrency(amount: number | string, currency = 'USD'): strin
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
 }
+
+export function formatNumber(n: number | string): string {
+  const value = typeof n === 'string' ? parseFloat(n) : n
+  return new Intl.NumberFormat('en-US').format(value)
+}

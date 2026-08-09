@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+
+# Never let local dev env values leak into a Docker build context. This matters more
+# than it looks: Next.js's env precedence puts .env.local ABOVE .env.production during
+# a production build, so without this exclusion, a real production build run from this
+# directory would silently use dev's NEXT_PUBLIC_API_URL (localhost) and dev's Stripe
+# test key instead of .env.production's real values.
+.env.local
+.env.*.local
+
+npm-debug.log*

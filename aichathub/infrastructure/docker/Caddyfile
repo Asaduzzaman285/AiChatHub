@@ -1,0 +1,29 @@
+# Production reverse proxy — the only thing that should ever be publicly reachable.
+# Caddy handles Let's Encrypt TLS automatically (cert issuance + renewal) just from
+# these two domain blocks; no certbot/cron to set up separately. Both domains are
+# read from the environment so this file doesn't need editing per-deploy — set
+# APP_DOMAIN / API_DOMAIN in the server's shell environment (or a root .env used by
+# `docker-compose --env-file`) before `docker-compose -f docker-compose.prod.yml up`.
+
+{$APP_DOMAIN} {
+	reverse_proxy frontend:3000
+	encode gzip
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
+{$API_DOMAIN} {
+	# No response buffering — required for the chat SSE stream (/api/v1/chat/*).
+	# api-gateway-nginx already disables its own buffering for that path
+	# (gateway.conf); Caddy's reverse_proxy is unbuffered end-to-end by default,
+	# so no extra directive is needed here to keep it a true stream.
+	reverse_proxy api-gateway-nginx:80
+	encode gzip
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+	}
+}

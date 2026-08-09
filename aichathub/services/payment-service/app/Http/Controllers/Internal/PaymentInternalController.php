@@ -187,6 +187,19 @@ class PaymentInternalController extends Controller
         return response()->json(['payment_method_token' => $method->token]);
     }
 
+    /** GET /internal/payment-methods/{id} — used by wallet-service's auto-debit, when a
+     * user has picked a specific saved card rather than "use my default". */
+    public function byId(string $id): JsonResponse
+    {
+        $method = PaymentMethod::where('id', $id)->where('is_active', true)->first();
+
+        if (! $method) {
+            return response()->json(['payment_method_token' => null]);
+        }
+
+        return response()->json(['payment_method_token' => $method->token]);
+    }
+
     /** GET /internal/payments/{id} */
     public function show(string $id): JsonResponse
     {
