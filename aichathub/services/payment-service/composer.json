@@ -6,6 +6,7 @@
         "php": "^8.3",
         "illuminate/redis": "^12.0",
         "laravel/framework": "^12.0",
+        "sentry/sentry-laravel": "^4.0",
         "stripe/stripe-php": "^13.0",
         "theihasan/laravel-bkash": "^1.3"
     },

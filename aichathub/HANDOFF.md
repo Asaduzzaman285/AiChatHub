@@ -2765,6 +2765,62 @@ provider funding, S3 bucket, Mailgun domain) before the remaining `[Me]` steps �
 deployment, credential wiring, webhook registration, the still-outstanding browser click-through QA
 pass, CI/monitoring/backups, and the final dry-run rehearsal — can proceed.
 
+### 2026-08-11 Session — Sentry error tracking (partial), a real production incident, and a scope decision
+
+**Scope decision**: Stripe stays on dev/test credentials through this launch — live-account activation
+moves to **Phase 2**. Not a blocker for Aug 17-18 anymore.
+
+**A real incident happened this session, worth recording plainly**: installing `sentry/sentry-laravel`
+via `composer require` inside a running container hit pathologically slow file extraction (the
+Windows↔container bind-mount I/O path, worsened by real-time antivirus scanning — a known Docker
+Desktop-on-Windows weak spot). The attempted fix — adding named Docker volumes for each service's
+`vendor/` directory in the *dev* `docker-compose.yml`, mirroring the pattern the frontend already uses
+for `node_modules` — had a side effect that wasn't caught before applying it: the new volumes
+auto-populated from the Docker *image's* `vendor/` (incomplete, since the Dockerfile's build-time
+`composer install` silently swallows failures via `|| true`), not from the real, working `vendor/` that
+had been living on the bind mount the whole time. This broke all 9 backend services simultaneously.
+**Fully reverted** — `docker-compose.yml` is back to its exact original state (confirmed: 0 leftover
+volume references) — and a background recovery process was left running unattended for about an hour
+before being noticed and killed, which (combined with the container churn from two full recreate
+cycles) plausibly explains the sustained high CPU/disk load that followed, even after the revert. A
+full computer + Docker Desktop restart cleared it; confirmed via a real `200 {"status":"ok"}` from
+`/api/v1/health` afterward. **Lesson for next time**: don't restructure dev `docker-compose.yml` volumes
+to fix a slow install — just give `composer` a longer `COMPOSER_PROCESS_TIMEOUT` and be patient; that
+approach (used for every service below) worked cleanly with zero side effects once tried.
+
+**Sentry — actually shipped this session** (pattern proven, identical across each service): `composer
+require sentry/sentry-laravel` (with `COMPOSER_PROCESS_TIMEOUT=600`, no volume changes), add `use
+Sentry\Laravel\Integration;` + `Integration::handles($exceptions);` as the first line inside
+`bootstrap/app.php`'s existing `->withExceptions()` closure, then `php artisan sentry:publish --dsn=...`
+(publishes `config/sentry.php`, adds `SENTRY_LARAVEL_DSN`/`SENTRY_TRACES_SAMPLE_RATE` to `.env` — the
+publish command itself sends a real test event + transaction, so it self-verifies). Sample rate lowered
+from the docs' default `1.0` to `0.1` in every service — 100% tracing across services handling every
+chat/payment request would burn through Sentry's free-tier quota fast for no real benefit at launch
+scale. Single shared `aichathub-backend` Sentry project across all services, per the plan.
+
+**Done and live-verified** (real test event sent, confirmed via `sentry:test`): `auth-service`,
+`subscription-service`, `wallet-service`. **`payment-service`'s composer install finished cleanly
+after this session paused** (confirmed: `sentry/sentry-laravel ... DONE`, no errors) — but
+`bootstrap/app.php`/`config/sentry.php`/`.env` wiring was NOT yet done for it, that's the literal first
+step next session, not a re-check. **Not started**:
+`ai-gateway-service`, `chat-service`, `billing-service`, `notification-service`, `api-gateway`, the
+Next.js frontend (`@sentry/nextjs`), and the database backup script (`backup.sh` +
+`Dockerfile.backup` + `db-backup` compose service) — all still exactly as planned, none abandoned.
+
+**`.env.example`/`.env.production.example` updated alongside every service done so far** with blank/
+`CHANGE_ME` `SENTRY_LARAVEL_DSN` + `SENTRY_TRACES_SAMPLE_RATE=0.1` defaults, matching this session's
+established template pattern.
+
+### Tomorrow's priority
+1. Confirm `payment-service`'s Sentry install actually finished; wire it if not already done.
+2. Repeat the exact same 4-step pattern for `ai-gateway-service`, `chat-service`, `billing-service`,
+   `notification-service`, `api-gateway` — no shortcuts, no volume changes, same patient
+   `COMPOSER_PROCESS_TIMEOUT` approach that worked cleanly for the first 3.
+3. `@sentry/nextjs` for the frontend (`sentry.client/server/edge.config.ts` + wrap `next.config.mjs`).
+4. The database backup script + `db-backup` compose service, verified against dev MinIO before
+   anything touches the real production S3 bucket.
+5. Full `php -l`/`tsc --noEmit` verification pass once everything above is in.
+
 ---
 
 ## Service Implementation Checklist
