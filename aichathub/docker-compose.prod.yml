@@ -50,6 +50,28 @@ services:
       - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     mem_limit: 1g
 
+  # Daily 03:00 UTC pg_dump -> gzip -> S3-compatible bucket, no local disk involved.
+  # Recommend also setting an S3 lifecycle rule on the bucket to auto-expire old
+  # backups after N days — a one-time bucket-console setting, not worth scripting here.
+  db-backup:
+    build: { context: ./infrastructure/docker/postgres, dockerfile: Dockerfile.backup }
+    image: aichathub/db-backup:prod
+    container_name: aichathub-db-backup
+    restart: unless-stopped
+    networks: [aichathub]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ai_chathub_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set — no dev default in production}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:?BACKUP_S3_BUCKET must be set}
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:?BACKUP_AWS_ACCESS_KEY_ID must be set}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:?BACKUP_AWS_SECRET_ACCESS_KEY must be set}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION:-us-east-1}
+      AWS_ENDPOINT: ${BACKUP_AWS_ENDPOINT:?BACKUP_AWS_ENDPOINT must be set (S3-compatible endpoint URL)}
+    depends_on: [postgres]
+    mem_limit: 128m
+
   redis:
     image: redis:7-alpine
     container_name: aichathub-redis

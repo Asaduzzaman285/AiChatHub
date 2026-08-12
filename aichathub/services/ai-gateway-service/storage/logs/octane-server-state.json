@@ -1,6 +1,6 @@
 {
-    "masterProcessId": 9,
-    "managerProcessId": 10,
+    "masterProcessId": 10,
+    "managerProcessId": 11,
     "state": {
         "appName": "AI ChatHub AI Gateway Service",
         "host": "0.0.0.0",

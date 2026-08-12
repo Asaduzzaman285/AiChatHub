@@ -6,7 +6,8 @@
         "php": "^8.3",
         "firebase/php-jwt": "^6.0",
         "illuminate/redis": "^12.0",
-        "laravel/framework": "^12.0"
+        "laravel/framework": "^12.0",
+        "sentry/sentry-laravel": "^4.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

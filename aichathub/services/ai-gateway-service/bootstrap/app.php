@@ -14,6 +14,7 @@ use Laravel\Ai\Exceptions\AiException;
 use Laravel\Ai\Exceptions\InsufficientCreditsException;
 use Laravel\Ai\Exceptions\ProviderOverloadedException;
 use Laravel\Ai\Exceptions\RateLimitedException;
+use Sentry\Laravel\Integration;
 
 $app = Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -38,6 +39,8 @@ $app = Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
+        Integration::handles($exceptions);
+
         // Always return JSON for API routes — never redirect
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             return response()->json([

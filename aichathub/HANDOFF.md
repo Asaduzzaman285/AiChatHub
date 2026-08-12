@@ -2798,28 +2798,93 @@ from the docs' default `1.0` to `0.1` in every service — 100% tracing across s
 chat/payment request would burn through Sentry's free-tier quota fast for no real benefit at launch
 scale. Single shared `aichathub-backend` Sentry project across all services, per the plan.
 
-**Done and live-verified** (real test event sent, confirmed via `sentry:test`): `auth-service`,
-`subscription-service`, `wallet-service`. **`payment-service`'s composer install finished cleanly
-after this session paused** (confirmed: `sentry/sentry-laravel ... DONE`, no errors) — but
-`bootstrap/app.php`/`config/sentry.php`/`.env` wiring was NOT yet done for it, that's the literal first
-step next session, not a re-check. **Not started**:
-`ai-gateway-service`, `chat-service`, `billing-service`, `notification-service`, `api-gateway`, the
-Next.js frontend (`@sentry/nextjs`), and the database backup script (`backup.sh` +
-`Dockerfile.backup` + `db-backup` compose service) — all still exactly as planned, none abandoned.
+**All 9 backend services done and live-verified this session** (real test event + transaction sent,
+confirmed via each service's own `sentry:publish`/`sentry:test` output): `auth-service`,
+`subscription-service`, `wallet-service`, `payment-service`, `ai-gateway-service`, `chat-service`,
+`billing-service`, `notification-service`, `api-gateway`. `ai-gateway-service` and `chat-service` run
+on Octane (Swoole) — both were explicitly restarted after the `bootstrap/app.php` edit, since Octane's
+persistent worker doesn't pick up code changes without one (the other 7 are plain php-fpm, no restart
+needed). Every service's `.env`/`.env.example`/`.env.production.example` got the same
+`SENTRY_LARAVEL_DSN` + `SENTRY_TRACES_SAMPLE_RATE=0.1` treatment (lowered from the docs' `1.0` default
+— full tracing on every request across 9 always-on services, several handling every chat/payment call,
+would burn through Sentry's free-tier quota fast for no real launch-time benefit).
 
-**`.env.example`/`.env.production.example` updated alongside every service done so far** with blank/
-`CHANGE_ME` `SENTRY_LARAVEL_DSN` + `SENTRY_TRACES_SAMPLE_RATE=0.1` defaults, matching this session's
-established template pattern.
+**Frontend done**: `@sentry/nextjs` installed, `sentry.client/server/edge.config.ts` added,
+`next.config.mjs` wrapped with `withSentryConfig`, `NEXT_PUBLIC_SENTRY_DSN` added to both env
+templates (blank-safe, matches the backend pattern). No real frontend DSN yet — that's a separate
+"aichathub-frontend" Sentry project, still to be created same way as the backend one was. `tsc --noEmit`
+clean.
 
-### Tomorrow's priority
-1. Confirm `payment-service`'s Sentry install actually finished; wire it if not already done.
-2. Repeat the exact same 4-step pattern for `ai-gateway-service`, `chat-service`, `billing-service`,
-   `notification-service`, `api-gateway` — no shortcuts, no volume changes, same patient
-   `COMPOSER_PROCESS_TIMEOUT` approach that worked cleanly for the first 3.
-3. `@sentry/nextjs` for the frontend (`sentry.client/server/edge.config.ts` + wrap `next.config.mjs`).
-4. The database backup script + `db-backup` compose service, verified against dev MinIO before
-   anything touches the real production S3 bucket.
-5. Full `php -l`/`tsc --noEmit` verification pass once everything above is in.
+**Database backup — built and live-verified against dev MinIO** (not just written, actually run): new
+`infrastructure/docker/postgres/backup.sh` (`pg_dump` → `gzip` → `aws s3 cp` against any S3-compatible
+endpoint via `--endpoint-url`, not just real AWS) and `Dockerfile.backup` (`FROM postgres:16-alpine` —
+matches the server's own `pg_dump` version exactly — plus `aws-cli`, run via Alpine's built-in
+`busybox crond`, daily 03:00 UTC). New `db-backup` service in `docker-compose.prod.yml`, all its S3
+env vars required via Compose's `:?` syntax (fails fast rather than silently skipping backups if
+unset). Verified live: built the image locally, created a real MinIO bucket, ran the backup once by
+hand against dev's real Postgres data, confirmed a real ~100KB gzipped dump landed in MinIO — proving
+the full mechanism before it ever touches the real production S3 bucket. Test bucket and image
+cleaned up afterward.
+
+**Verification**: `php -l` clean across all 9 touched `bootstrap/app.php` files; `docker-compose
+config` valid for both the dev file and `docker-compose.prod.yml` (including the new `db-backup`
+service); `tsc --noEmit` clean on the frontend.
+
+**Scope note**: Stripe stays on dev/test credentials through this launch — live-account activation
+moves to Phase 2, not a blocker for Aug 17-18.
+
+### 2026-08-12 Session — Real infrastructure acquired: domain, server, R2 credentials
+
+Genuine Day 1 progress, all real (not templates/plans anymore):
+
+- **Domain**: `alveta.ai`, registered and active, DNS managed in Cloudflare. Confirmed the CEO's
+  Cloudflare account (`Rasel@subscription...`) owns it; the user was invited as a collaborator with
+  DNS-role access.
+- **Server**: Contabo Cloud VPS 8 (2026), **running**, IP `169.58.166.97`, EU region.
+- **R2 storage**: bucket `alveta` created (Cloudflare R2, S3-compatible). Real credentials received
+  (Account ID, API Token, Access Key, Secret Access Key, S3 API endpoint) — not recorded here, will be
+  used directly when filling in the real server `.env` files from the `.env.production.example`
+  templates already in the repo.
+- **Real incident, resolved during this session**: the collaborator account initially showed "No
+  access" for R2 specifically — DNS-role access and R2-role access are separate permissions in
+  Cloudflare, granting one doesn't include the other. Also hit an "Authentication error" from trying to
+  log into the account owner's own Cloudflare login directly (not recommended — 2FA/session conflicts
+  are the likely cause of that specific error). Resolved correctly: R2 permission added to the existing
+  invited collaborator account rather than sharing the owner's actual login.
+- **Mailgun**: domain-add flow started for `mg.alveta.ai` (EU region, 2048-bit DKIM, DMARC enabled) —
+  submission not yet confirmed complete as of this session's pause.
+- **SSH access**: a dedicated key pair was generated on the operator's machine specifically for this
+  server (`~/.ssh/alveta_contabo`, not the machine's general-purpose key — kept isolated so this
+  server's access doesn't overlap with anything else the general key is used for). Public key handed to
+  the user to paste into Contabo's Reset Credentials → SSH-Key panel. **Not yet confirmed installed/
+  connected** — first thing to verify next session.
+
+### Tomorrow's priority (in order)
+1. Confirm the SSH key was added in Contabo; test the connection.
+2. Add the two DNS A records (`app`/`api`.alveta.ai → `169.58.166.97`) in Cloudflare, if not already
+   done.
+3. Finish the Mailgun `mg.alveta.ai` submission, add the DNS records it gives back to Cloudflare,
+   verify.
+4. **Decide + obtain a funded AI provider API key** — still the one credential with no progress at all.
+5. Once SSH works: install Docker + Compose, configure the firewall (ufw 22/80/443), on the real
+   server — this is Day 1's `[Me]` task, finally unblocked.
+6. Fill the real `.env` files from the `.env.production.example` templates — R2 credentials are already
+   in hand for this; DB/Redis/JWT/internal-service-key passwords still need generating.
+7. Deploy `docker-compose.prod.yml` + Caddy for real, confirm TLS certificate issuance.
+8. Register the live Stripe webhook once domain+TLS are confirmed live (Stripe itself stays on test
+   credentials per the Phase 2 deferral — only the webhook registration needs the real domain).
+9. The still-outstanding full browser click-through QA pass — hasn't happened yet, unrelated to any of
+   the above, can happen any time.
+
+### Remaining for deployment readiness
+- CI/CD (`.github/workflows/` still empty) — explicitly deprioritized this session, lowest actual
+  launch-day risk of the four items originally discussed (protects future changes, not this launch).
+- Uptime monitoring — inherently needs a real public URL to monitor, can't be set up before Day 2's
+  domain/TLS work happens for real.
+- Everything else in the original day-by-day deployment plan (VPS provisioning, Stripe live activation
+  now deferred, AI provider key funding, S3 bucket, Mailgun domain verification, the still-outstanding
+  full browser click-through QA pass, and the final dry-run rehearsal) — unchanged, still needs the
+  user's own action first.
 
 ---
 

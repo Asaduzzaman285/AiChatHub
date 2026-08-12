@@ -1,0 +1,18 @@
+# Same base as the `postgres` service itself — pg_dump's version has to match (or be
+# newer than) the server's, and this guarantees an exact match rather than hoping a
+# generic client stays compatible.
+FROM postgres:16-alpine
+
+# aws-cli works against any S3-compatible endpoint via --endpoint-url (see backup.sh),
+# not just real AWS — that's how this reaches dev's MinIO and DigitalOcean
+# Spaces/Cloudflare R2/etc. in production alike.
+RUN apk add --no-cache aws-cli
+
+COPY backup.sh /usr/local/bin/backup.sh
+RUN chmod +x /usr/local/bin/backup.sh
+
+# Alpine's built-in busybox crond reads /etc/crontabs/<user> — no separate cron
+# daemon package to install. Daily at 03:00 UTC.
+RUN echo "0 3 * * * /usr/local/bin/backup.sh >> /proc/1/fd/1 2>&1" > /etc/crontabs/root
+
+CMD ["crond", "-f", "-l", "2"]

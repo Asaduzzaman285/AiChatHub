@@ -23,6 +23,11 @@ return [
     // When left empty or `null` the Laravel environment will be used (usually discovered from `APP_ENV` in your `.env`)
     'environment' => env('SENTRY_ENVIRONMENT'),
 
+    // No explicit value here defaults to the container's OS hostname, which is an
+    // unhelpful random Docker container ID — every one of the 9 services shares one
+    // Sentry project, so this is what actually tells events apart in the dashboard.
+    'server_name' => env('APP_NAME'),
+
     // Override the organization ID used for trace continuation checks.
     'org_id' => env('SENTRY_ORG_ID') === null ? null : (int) env('SENTRY_ORG_ID'),
 

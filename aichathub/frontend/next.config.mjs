@@ -1,3 +1,5 @@
+import { withSentryConfig } from '@sentry/nextjs'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -19,4 +21,9 @@ const nextConfig = {
   },
 }
 
-export default nextConfig
+// No NEXT_PUBLIC_SENTRY_DSN set locally — the SDK just no-ops, this wrapper is safe
+// to leave on unconditionally rather than branching dev vs prod config.
+export default withSentryConfig(nextConfig, {
+  silent: true,
+  disableLogger: true,
+})
