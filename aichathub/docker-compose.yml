@@ -71,8 +71,9 @@ services:
 
   auth-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: auth-service }
     container_name: aichathub-auth
     restart: unless-stopped
     networks: [aichathub]
@@ -100,8 +101,9 @@ services:
   # manually `docker exec -d`-ing a worker in by hand after every `up`.
   auth-queue-worker:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: auth-service }
     container_name: aichathub-auth-queue-worker
     restart: unless-stopped
     networks: [aichathub]
@@ -116,8 +118,9 @@ services:
 
   subscription-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: subscription-service }
     container_name: aichathub-subscription
     restart: unless-stopped
     networks: [aichathub]
@@ -144,8 +147,9 @@ services:
   # on a 24h delay after a failed attempt) never actually runs.
   subscription-queue-worker:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: subscription-service }
     container_name: aichathub-subscription-queue-worker
     restart: unless-stopped
     networks: [aichathub]
@@ -168,8 +172,9 @@ services:
   # without needing host-level cron.
   subscription-scheduler:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: subscription-service }
     container_name: aichathub-subscription-scheduler
     restart: unless-stopped
     networks: [aichathub]
@@ -184,8 +189,9 @@ services:
 
   wallet-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: wallet-service }
     container_name: aichathub-wallet
     restart: unless-stopped
     networks: [aichathub]
@@ -212,8 +218,9 @@ services:
   # without a worker consuming it, the job just sits in the jobs table forever.
   wallet-queue-worker:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: wallet-service }
     container_name: aichathub-wallet-queue-worker
     restart: unless-stopped
     networks: [aichathub]
@@ -231,8 +238,9 @@ services:
   # ReconcileWalletReservationsCommand for the full reasoning.
   wallet-scheduler:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: wallet-service }
     container_name: aichathub-wallet-scheduler
     restart: unless-stopped
     networks: [aichathub]
@@ -247,8 +255,9 @@ services:
 
   payment-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: payment-service }
     container_name: aichathub-payment
     restart: unless-stopped
     networks: [aichathub]
@@ -276,8 +285,9 @@ services:
   # them before this was added (found live while auditing production-readiness).
   payment-queue-worker:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: payment-service }
     container_name: aichathub-payment-queue-worker
     restart: unless-stopped
     networks: [aichathub]
@@ -292,8 +302,9 @@ services:
   # `->everyFifteenMinutes()` schedule (routes/console.php).
   payment-scheduler:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: payment-service }
     container_name: aichathub-payment-scheduler
     restart: unless-stopped
     networks: [aichathub]
@@ -315,8 +326,9 @@ services:
   # reverse-proxies to it instead of using fastcgi_pass.
   ai-gateway-service:
     build:
-      context: ./infrastructure/docker/php-octane
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php-octane/Dockerfile
+      args: { SERVICE_DIR: ai-gateway-service }
     container_name: aichathub-ai-gateway
     restart: unless-stopped
     networks: [aichathub]
@@ -346,8 +358,9 @@ services:
   # need for Octane/Swoole.
   ai-gateway-queue-worker:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: ai-gateway-service }
     container_name: aichathub-ai-gateway-queue-worker
     restart: unless-stopped
     networks: [aichathub]
@@ -365,8 +378,9 @@ services:
   # holds a php-fpm worker open for the full response otherwise.
   chat-service:
     build:
-      context: ./infrastructure/docker/php-octane
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php-octane/Dockerfile
+      args: { SERVICE_DIR: chat-service }
     container_name: aichathub-chat
     restart: unless-stopped
     networks: [aichathub]
@@ -391,8 +405,9 @@ services:
 
   billing-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: billing-service }
     container_name: aichathub-billing
     restart: unless-stopped
     networks: [aichathub]
@@ -418,8 +433,9 @@ services:
 
   notification-service:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: notification-service }
     container_name: aichathub-notification
     restart: unless-stopped
     networks: [aichathub]
@@ -445,8 +461,9 @@ services:
 
   api-gateway:
     build:
-      context: ./infrastructure/docker/php
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: infrastructure/docker/php/Dockerfile
+      args: { SERVICE_DIR: api-gateway }
     container_name: aichathub-api-gateway
     restart: unless-stopped
     networks: [aichathub]

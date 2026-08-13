@@ -66,7 +66,7 @@ class EmailChangeController extends Controller
             'expires_at' => now()->addHours(24),
         ]);
 
-        $verifyUrl = config('app.url').'/api/v1/auth/verify/'.$token;
+        $verifyUrl = config('services.api_public_url').'/api/v1/auth/verify/'.$token;
         $newEmail  = $data['new_email'];
         $name      = $user->name;
 

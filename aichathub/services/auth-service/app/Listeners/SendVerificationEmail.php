@@ -30,7 +30,7 @@ class SendVerificationEmail implements ShouldQueue
             'expires_at' => now()->addHours(24),
         ]);
 
-        $verifyUrl = config('app.url') . '/api/v1/auth/verify/' . $token;
+        $verifyUrl = config('services.api_public_url') . '/api/v1/auth/verify/' . $token;
 
         Mail::send([], [], function ($message) use ($user, $verifyUrl) {
             $message->to($user->email, $user->name)

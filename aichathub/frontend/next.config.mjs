@@ -3,6 +3,12 @@ import { withSentryConfig } from '@sentry/nextjs'
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Required for the Dockerfile's production build — it copies .next/standalone
+  // into the final image (a self-contained server bundle, no node_modules needed
+  // at runtime). Without this, `next build` never produces that directory at all,
+  // and the Docker build fails at the COPY step — never caught before now since
+  // this is the first real (non-dev-mode) build this app has ever gone through.
+  output: 'standalone',
 
   async rewrites() {
     return [

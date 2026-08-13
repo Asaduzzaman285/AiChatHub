@@ -25,6 +25,22 @@ return [
             'driver' => 'deepseek',
             'key'    => env('DEEPSEEK_API_KEY'),
         ],
+        // Perplexity has no dedicated driver in laravel/ai, but its API is
+        // OpenAI-compatible — the package's generic 'openai-compatible' driver
+        // (Laravel\Ai\Providers\OpenAiCompatibleProvider) just needs a base 'url'
+        // plus a default model, no custom driver code required.
+        'perplexity' => [
+            'driver' => 'openai-compatible',
+            'key'    => env('PERPLEXITY_API_KEY'),
+            'url'    => 'https://api.perplexity.ai',
+            'models' => [
+                'text' => [
+                    'default'   => 'sonar',
+                    'cheapest'  => 'sonar',
+                    'smartest'  => 'sonar-pro',
+                ],
+            ],
+        ],
         'elevenlabs' => [
             'driver' => 'elevenlabs',
             'key'    => env('ELEVENLABS_API_KEY'),

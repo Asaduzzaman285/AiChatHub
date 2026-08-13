@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { Suspense, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
@@ -20,6 +20,14 @@ import type { User } from '@/types'
  *  4. Redirects to /chat
  */
 export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={null}>
+      <AuthCallbackHandler />
+    </Suspense>
+  )
+}
+
+function AuthCallbackHandler() {
   const router       = useRouter()
   const searchParams = useSearchParams()
   const { setAuth, clearAuth } = useAuthStore()

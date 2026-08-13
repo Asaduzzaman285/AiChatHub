@@ -20,4 +20,12 @@ return [
     'subscription_url'     => env('SUBSCRIPTION_SERVICE_URL', 'http://subscription-nginx'),
     'frontend_url'         => env('FRONTEND_URL', 'http://localhost:3000'),
 
+    // Public-facing base URL for links a user actually clicks (email verification,
+    // email-change confirmation). Deliberately separate from APP_URL: in production
+    // APP_URL is the internal-only Docker hostname (auth-service isn't publicly
+    // reachable, only api-gateway's proxy is), so a link built from APP_URL would
+    // point somewhere the user's browser can never resolve. Defaults to the same
+    // value APP_URL already used to be in dev, where it happens to be reachable.
+    'api_public_url'       => env('API_PUBLIC_URL', 'http://localhost:8001'),
+
 ];

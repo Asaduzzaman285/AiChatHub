@@ -1344,6 +1344,118 @@ way to actually grow the "10" in the first place.
 
 ---
 
+## 2026-08-13 Session — Production deployment to alveta.ai (Contabo VPS, 169.58.166.97)
+
+First full production deployment. Real domain (`alveta.ai`, Cloudflare DNS), real Contabo VPS, real
+Mailgun/Firebase/DeepSeek/Perplexity credentials. `app.alveta.ai` (frontend) and `api.alveta.ai`
+(api-gateway) are both live with valid Let's Encrypt TLS via Caddy. Six real, previously-invisible bugs
+were found and fixed — every one of them only surfaced because production has no dev bind-mount to mask
+the gap. All fixes are in source (not just patched live on the server), so the next full rebuild+deploy
+already has them baked in.
+
+### Bug 1 (the big one) — built Docker images never contained real app code
+`docker-compose.prod.yml` copied dev's `build.context: ./infrastructure/docker/php[-octane]` verbatim.
+That directory holds only a generic placeholder `composer.json`/`vendor` used for dev's Docker
+layer-caching — dev never noticed because `./services/X:/var/www` bind-mounts overlay it with the real
+code at runtime. Production has no bind-mount, so the built images were genuinely just the placeholder:
+Octane services (`chat-service`, `ai-gateway-service`) crash-looped on `Could not open input file:
+artisan`; php-fpm services "worked" (process starts fine) but would 404/500 on every real request.
+**Fix**: both Dockerfiles (`infrastructure/docker/php/Dockerfile`, `.../php-octane/Dockerfile`) now take
+an `ARG SERVICE_DIR` and the build `context` is the repo root in both `docker-compose.yml` (dev, 17
+build blocks) and `docker-compose.prod.yml` (prod, 9 build blocks), each with `args: { SERVICE_DIR:
+<name> }`. Dev needed the same fix since it shares the physical Dockerfiles.
+
+### Bug 2 — every service's `APP_KEY` was blank
+`scripts/generate-prod-envs.sh` never generated one. Silently broke encryption on php-fpm services,
+hard-crashed the two Octane services (`MissingAppKeyException` on boot). Fixed by generating a unique
+`base64:` key per service and force-recreating all 9 containers.
+
+### Bug 3 — `DB_SCHEMA` missing `,public` in every `.env.production.example`
+Dev's real `.env` (git-ignored) had `auth_svc,public` etc. — fixed ad hoc at some point, never carried
+back into the template. `uuid-ossp`'s functions live in the `public` schema; Laravel's `schema` config
+does `SET search_path TO <exactly this>`, no implicit `public` — so every migration failed on
+`uuid_generate_v4() does not exist`. Fixed in all 8 services' `.env.example` **and**
+`.env.production.example`, plus the live server. Migrations + seeders (`ModelSeeder`, `PackageSeeder`)
+then ran clean.
+
+### Bug 4 — stale nginx→upstream DNS caching (will recur on every future redeploy unless watched)
+After force-recreating the php-fpm containers to pick up the `APP_KEY` fix, they got new Docker-network
+IPs — but the still-running nginx sidecars had resolved+cached the *old* IPs at their own startup and
+kept forwarding there. Docker recycled those old IPs onto *different* containers: `auth-nginx` was
+silently proxying every request to the `payment` service (confirmed via `/api/v1/health` returning
+`{"service":"payment"}` when hit through `auth-nginx`). Restarting nginx fixed it immediately, but this
+is a real recurring risk, not a one-off — **durable fix**: all 9 nginx configs
+(`infrastructure/docker/nginx/*.conf`) now `resolver 127.0.0.11 valid=10s;` (Docker's embedded DNS) with
+`fastcgi_pass`/`proxy_pass` targets moved into `set $upstream ...;` variables, since nginx only
+re-resolves hostnames used via a variable, never a static directive. Confirmed working: recreating
+`auth-service` again later (for Bug 6's fix) required zero manual nginx restart.
+
+### Bug 5 — email verification links pointed at an internal-only Docker hostname
+`SendVerificationEmail.php` and `EmailChangeController.php` both built the link from
+`config('app.url')`. In dev, `APP_URL` happens to be a real browser-reachable address
+(`http://localhost:8001`), so this was invisible. In production `APP_URL` is deliberately the
+internal-only hostname (`http://auth-nginx` — auth-service isn't publicly reachable, only api-gateway's
+proxy is), by design, for internal service-to-service calls. The verification email a real user received
+literally could not be resolved by their browser (`DNS_PROBE_FINISHED_NXDOMAIN`). **Fix**: new
+`services.api_public_url` config key (`API_PUBLIC_URL` env var, defaults to the old dev value so dev is
+unaffected) used only for user-clickable links, kept separate from `APP_URL`. Verified live: triggered a
+real resend to a real inbox, new link correctly pointed at `https://api.alveta.ai/...`, clicking it
+returned `"Email verified successfully"`, login then succeeded with a real JWT.
+
+### Bug 6 — no way to create the first admin (chicken-and-egg)
+`AdminUserController::store()` is itself gated behind `admin.gate` middleware, and no seeder/console
+command bootstraps the first one. Fresh production DB had zero rows in `admin_users`. Not something to
+"fix" in code (the gate is intentional) — bootstrapped the first admin directly via SQL, promoting the
+already-verified founder account to `platform_admin`:
+```sql
+INSERT INTO auth_svc.admin_users (id, user_id, role, is_active, created_at)
+VALUES (gen_random_uuid(), '<user_id>', 'platform_admin', true, now());
+```
+Confirmed via a fresh login: JWT now carries `"is_admin":true,"admin_role":"platform_admin",
+"admin_permissions":["*"]`.
+
+### Perplexity — added as a real, working AI provider (not a stub)
+`ai-gateway-service/config/ai.php` gained a `perplexity` entry using the existing `openai-compatible`
+driver (`Ai::instance('perplexity')` → `OpenAiCompatibleProvider`, needs only `key`+`url` since
+Perplexity's API is OpenAI-compatible) — `key: env('PERPLEXITY_API_KEY')`,
+`url: 'https://api.perplexity.ai'`. `PERPLEXITY_API_KEY` added to `.env.example` and
+`.env.production.example` (previously `DEEPSEEK_API_KEY` was also completely missing from
+`.env.production.example` despite being a supported/funded provider — added too).
+
+### Mailgun — dedicated account, not the shared one first offered
+The Mailgun account initially available (`rasel@subscriptionpro.co`) already had two *other* companies'
+domains on it (`mail.soluta.co`, `mail.subscriptionpro.co`) and hit its 1-domain plan limit adding a
+third. Rather than upgrading/borrowing that shared account (mixed sending reputation risk, ownership
+outside our control), created a fresh dedicated Mailgun account for `mg.alveta.ai`. Self-managed DKIM at
+2048-bit (not Mailgun's "automatic sender security" / Red Sift DMARC integration — kept as a third
+party we don't need). DNS records (SPF TXT, DKIM TXT, 2× MX, tracking CNAME, plus a manually-added
+`p=none` DMARC TXT — no Red Sift) added directly to Cloudflare, domain verified same day. Real SMTP
+credentials wired into `auth-service`/`notification-service` `.env`; `MAIL_FROM_ADDRESS` updated to
+`noreply@mg.alveta.ai` in both `.env.production.example` files (was `noreply@alveta.ai`, mismatched the
+subdomain-isolation approach). Verified live: real registration → real email delivered → real click →
+verified → logged in, full loop, on a real inbox.
+
+### Real finding, not a bug — DeepSeek account had no funds
+First live chat attempt correctly reached every layer (auth, wallet, subscription check, gateway
+routing, DeepSeek's API itself) and got a real provider-level rejection:
+`"AI provider [deepseek] has insufficient credits or quota."` (from `storage/logs/laravel.log` on
+`ai-gateway-service`). Nothing to fix in code — needs a balance top-up at `platform.deepseek.com/usage`
+on the account tied to the configured API key.
+
+### Also required (dashboard-only, no code) — Firebase authorized domains
+Google Sign-In failed with `auth/unauthorized-domain` until `app.alveta.ai` was added under Firebase
+Console → Authentication → Settings → Authorized domains. Confirmed working after.
+
+### Deliberately left for later
+- Bare `alveta.ai` (apex domain) has no DNS record or Caddy site block — only `app.` and `api.`
+  subdomains are wired up. Deliberate, user's call: reserve the apex for a future marketing page.
+- Stripe stays in test mode; live webhook registration and live-account activation are still pending
+  (blocked on nothing now that TLS is live — just not done yet).
+- Full manual browser click-through QA (wallet, subscription, file upload) not yet done — everything
+  verified so far was via curl/API calls plus one manual login+chat test.
+
+---
+
 ## How to Start Everything Tomorrow
 
 ```bash

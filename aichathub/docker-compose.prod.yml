@@ -45,9 +45,21 @@ services:
       POSTGRES_DB: ai_chathub_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set — no dev default in production}
+      # Read by rotate-passwords.sh (runs after init.sql) to overwrite each service's
+      # DB user password — init.sql itself is git-tracked and only ever has dev
+      # placeholders, real secrets only ever live here.
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?AUTH_DB_PASSWORD must be set}
+      SUB_DB_PASSWORD: ${SUB_DB_PASSWORD:?SUB_DB_PASSWORD must be set}
+      WALLET_DB_PASSWORD: ${WALLET_DB_PASSWORD:?WALLET_DB_PASSWORD must be set}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?PAYMENT_DB_PASSWORD must be set}
+      BILLING_DB_PASSWORD: ${BILLING_DB_PASSWORD:?BILLING_DB_PASSWORD must be set}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:?AI_DB_PASSWORD must be set}
+      CHAT_DB_PASSWORD: ${CHAT_DB_PASSWORD:?CHAT_DB_PASSWORD must be set}
+      NOTIF_DB_PASSWORD: ${NOTIF_DB_PASSWORD:?NOTIF_DB_PASSWORD must be set}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql
+      - ./infrastructure/docker/postgres/rotate-passwords.sh:/docker-entrypoint-initdb.d/20-rotate-passwords.sh
     mem_limit: 1g
 
   # Daily 03:00 UTC pg_dump -> gzip -> S3-compatible bucket, no local disk involved.
@@ -104,7 +116,7 @@ services:
   # ─── AUTH SERVICE ─────────────────────────
 
   auth-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: auth-service } }
     image: aichathub/auth-service:prod
     container_name: aichathub-auth
     restart: unless-stopped
@@ -135,7 +147,7 @@ services:
   # ─── SUBSCRIPTION SERVICE ─────────────────
 
   subscription-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: subscription-service } }
     image: aichathub/subscription-service:prod
     container_name: aichathub-subscription
     restart: unless-stopped
@@ -176,7 +188,7 @@ services:
   # ─── WALLET SERVICE ───────────────────────
 
   wallet-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: wallet-service } }
     image: aichathub/wallet-service:prod
     container_name: aichathub-wallet
     restart: unless-stopped
@@ -217,7 +229,7 @@ services:
   # ─── PAYMENT SERVICE ──────────────────────
 
   payment-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: payment-service } }
     image: aichathub/payment-service:prod
     container_name: aichathub-payment
     restart: unless-stopped
@@ -258,7 +270,7 @@ services:
   # ─── AI GATEWAY SERVICE (Octane/Swoole) ───
 
   ai-gateway-service:
-    build: { context: ./infrastructure/docker/php-octane, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php-octane/Dockerfile, args: { SERVICE_DIR: ai-gateway-service } }
     image: aichathub/ai-gateway-service:prod
     container_name: aichathub-ai-gateway
     restart: unless-stopped
@@ -277,7 +289,7 @@ services:
     depends_on: [ai-gateway-service]
 
   ai-gateway-queue-worker:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: ai-gateway-service } }
     image: aichathub/ai-gateway-service-fpm:prod
     container_name: aichathub-ai-gateway-queue-worker
     restart: unless-stopped
@@ -290,7 +302,7 @@ services:
   # ─── CHAT SERVICE (Octane/Swoole) ─────────
 
   chat-service:
-    build: { context: ./infrastructure/docker/php-octane, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php-octane/Dockerfile, args: { SERVICE_DIR: chat-service } }
     image: aichathub/chat-service:prod
     container_name: aichathub-chat
     restart: unless-stopped
@@ -311,7 +323,7 @@ services:
   # ─── BILLING SERVICE ──────────────────────
 
   billing-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: billing-service } }
     image: aichathub/billing-service:prod
     container_name: aichathub-billing
     restart: unless-stopped
@@ -332,7 +344,7 @@ services:
   # ─── NOTIFICATION SERVICE ─────────────────
 
   notification-service:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: notification-service } }
     image: aichathub/notification-service:prod
     container_name: aichathub-notification
     restart: unless-stopped
@@ -353,7 +365,7 @@ services:
   # ─── API GATEWAY ──────────────────────────
 
   api-gateway:
-    build: { context: ./infrastructure/docker/php, dockerfile: Dockerfile }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: api-gateway } }
     image: aichathub/api-gateway:prod
     container_name: aichathub-api-gateway
     restart: unless-stopped
