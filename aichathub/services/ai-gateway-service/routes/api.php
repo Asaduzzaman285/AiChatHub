@@ -25,6 +25,7 @@ Route::middleware('auth.jwt')->group(function () {
     Route::middleware('block.admin')->group(function () {
         Route::post('/chat/stream',     [ChatController::class,        'stream']);
         Route::post('/chat/compare',    [ChatController::class,        'compare']);
+        Route::post('/chat/compact',    [ChatController::class,        'compact']);
         Route::post('/generate/image',  [ImageController::class,       'generate']);
         Route::post('/generate/audio',  [AudioController::class,       'generate']);
         Route::post('/transcribe',      [TranscriptionController::class,'transcribe']);

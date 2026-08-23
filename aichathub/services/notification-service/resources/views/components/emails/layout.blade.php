@@ -11,7 +11,7 @@
         <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
           <tr>
             <td style="background-color:#111827; padding:24px 32px;">
-              <span style="color:#ffffff; font-size:18px; font-weight:700; letter-spacing:-0.02em;">✨ AI ChatHub</span>
+              <span style="color:#ffffff; font-size:18px; font-weight:700; letter-spacing:-0.02em;">✨ Alveta.ai</span>
             </td>
           </tr>
           <tr>
@@ -21,7 +21,7 @@
           </tr>
           <tr>
             <td style="padding:20px 32px; background-color:#fafafa; border-top:1px solid #f0f0f0;">
-              <p style="margin:0; font-size:12px; color:#9ca3af;">AI ChatHub &middot; This is an automated message, please don't reply directly.</p>
+              <p style="margin:0; font-size:12px; color:#9ca3af;">Alveta.ai &middot; This is an automated message, please don't reply directly.</p>
             </td>
           </tr>
         </table>

@@ -16,7 +16,7 @@ class ChatServiceClient
         $this->internalKey = config('services.internal_key', '');
     }
 
-    public function appendMessage(string $sessionId, string $userId, string $role, string $content, array $usage = []): void
+    public function appendMessage(string $sessionId, string $userId, string $role, string $content, array $usage = [], array $attachmentIds = []): void
     {
         try {
             Http::timeout(15)
@@ -25,6 +25,7 @@ class ChatServiceClient
                     'user_id' => $userId,
                     'role'    => $role,
                     'content' => $content,
+                    ...(! empty($attachmentIds) ? ['attachment_ids' => $attachmentIds] : []),
                 ], $usage));
         } catch (\Exception $e) {
             // Persistence failure shouldn't fail an already-completed chat response —
@@ -35,7 +36,7 @@ class ChatServiceClient
 
     /**
      * @param string[] $ids
-     * @return array<int, array{id: string, base64: string, mime_type: string, original_name: string}>
+     * @return array<int, array{id: string, mime_type: string, original_name: string, base64?: string, extracted_text?: string}>
      */
     public function resolveAttachments(array $ids): array
     {

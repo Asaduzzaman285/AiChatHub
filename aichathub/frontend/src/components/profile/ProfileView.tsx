@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatPreciseCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import type { Subscription, User, WalletBalance } from '@/types'
 
@@ -180,8 +180,8 @@ export function ProfileView() {
               </div>
             ) : wallet ? (
               <div className="space-y-1">
-                <p className="text-2xl font-bold">{formatCurrency(wallet.available_balance, wallet.currency)}</p>
-                <p className="text-xs text-muted-foreground">available to spend</p>
+                <p className="text-2xl font-bold">{formatPreciseCurrency(wallet.balance, wallet.currency)}</p>
+                <p className="text-xs text-muted-foreground">balance</p>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">Wallet not found.</p>

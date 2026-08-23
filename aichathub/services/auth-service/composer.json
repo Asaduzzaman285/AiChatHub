@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/auth-service",
-    "description": "AI ChatHub — Auth Service",
+    "name": "alveta/auth-service",
+    "description": "Alveta.ai — Auth Service",
     "type": "project",
     "require": {
         "php": "^8.3",

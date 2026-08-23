@@ -11,6 +11,11 @@ use Sentry\Laravel\Integration;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
+        // Without this, routes/console.php (where Schedule::command(...) calls live) never gets
+        // loaded — confirmed live via `php artisan schedule:list` showing zero registered tasks
+        // despite the wallet-scheduler container running `schedule:work` continuously. Reservation
+        // reconciliation has likely never actually run automatically until this fix.
+        commands: __DIR__.'/../routes/console.php',
         apiPrefix: 'api/v1',
         then: function () {
             Route::prefix('api/internal')

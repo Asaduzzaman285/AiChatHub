@@ -71,6 +71,39 @@
     --info: 210 70% 65%;
     --info-soft: 210 40% 18%;
   }
+
+  /* Private chats only — scoped to the chat page's root wrapper, not a global theme
+     toggle. Deliberately zero-saturation neutral gray (unlike .dark above, which is
+     still violet-tinted) so it reads as its own distinct "incognito" identity rather
+     than just an inverted version of the normal branding — --primary in particular
+     is plain light gray, not violet, so buttons/user-bubbles/focus rings carry no
+     brand color at all while inside a private chat. */
+  .incognito {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 11%;
+    --card-foreground: 0 0% 92%;
+    --primary: 0 0% 80%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 16%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 0 0% 16%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 92%;
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 96%;
+    --border: 0 0% 20%;
+    --input: 0 0% 20%;
+    --ring: 0 0% 50%;
+
+    --success: 152 40% 45%;
+    --success-soft: 152 20% 16%;
+    --warning: 32 60% 50%;
+    --warning-soft: 32 25% 16%;
+    --info: 210 40% 55%;
+    --info-soft: 210 25% 18%;
+  }
 }
 
 @layer base {

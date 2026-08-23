@@ -34,6 +34,14 @@ Route::any('/webhooks/{path?}', [ProxyController::class, 'proxyPayment'])
     ->where('path', '.*')
     ->middleware('throttle:webhooks');
 
+// Public pricing listing — the landing page needs real package data without a JWT.
+// Downstream PackageController::index() is already unauthenticated/user-independent
+// (confirmed: not inside subscription-service's own auth.jwt group) — this just carves
+// the plain GET /packages case out of the otherwise-authenticated group below.
+// Registered before that group so this exact match wins; /packages/{slug}, admin
+// listing, and everything else under /packages/* still requires auth via the wildcard.
+Route::get('/packages', [ProxyController::class, 'proxySubscription'])->middleware('throttle:api');
+
 // Protected routes — JWT validated at gateway before proxying
 Route::middleware(['auth.jwt.gateway', 'throttle:api'])->group(function () {
     Route::any('/packages/{path?}',       [ProxyController::class, 'proxySubscription'])->where('path', '.*');
@@ -48,6 +56,7 @@ Route::middleware(['auth.jwt.gateway', 'throttle:api'])->group(function () {
     Route::any('/generate/{path?}',       [ProxyController::class, 'proxyAiGateway'])->where('path', '.*');
     Route::any('/transcribe',             [ProxyController::class, 'proxyAiGateway']);
     Route::any('/sessions/{path?}',       [ProxyController::class, 'proxyChat'])->where('path', '.*');
+    Route::any('/projects/{path?}',       [ProxyController::class, 'proxyChat'])->where('path', '.*');
     Route::any('/upload/{path?}',         [ProxyController::class, 'proxyChat'])->where('path', '.*');
     Route::any('/invoices/{path?}',       [ProxyController::class, 'proxyBilling'])->where('path', '.*');
     Route::any('/receipts/{path?}',       [ProxyController::class, 'proxyBilling'])->where('path', '.*');

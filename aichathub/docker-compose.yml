@@ -373,6 +373,14 @@ services:
 
   # ─── CHAT SERVICE ─────────────────────────
 
+  # Malware scanning for FileAttachmentController::upload() — internal-only, no
+  # published port. Official image ships freshclam auto-updates for the virus DB.
+  clamav:
+    image: clamav/clamav:stable
+    container_name: aichathub-clamav
+    restart: unless-stopped
+    networks: [aichathub]
+
   # Octane (Swoole) — same reasoning as ai-gateway-service above; chat-service also has
   # the streaming SSE endpoint (see FileAttachmentController/message streaming) that
   # holds a php-fpm worker open for the full response otherwise.
@@ -388,7 +396,7 @@ services:
       - ./services/chat-service:/var/www
     env_file:
       - ./services/chat-service/.env
-    depends_on: [postgres, redis]
+    depends_on: [postgres, redis, clamav]
 
   chat-nginx:
     image: nginx:1.25-alpine
@@ -400,6 +408,23 @@ services:
     volumes:
       - ./infrastructure/docker/nginx/chat.conf:/etc/nginx/conf.d/default.conf
     depends_on: [chat-service]
+
+  # Runs chat:expire-private-sessions on a schedule (see chat-service/routes/console.php) —
+  # same schedule:work-must-run-continuously pattern as wallet/subscription/payment-scheduler.
+  chat-scheduler:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/php-octane/Dockerfile
+      args: { SERVICE_DIR: chat-service }
+    container_name: aichathub-chat-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    volumes:
+      - ./services/chat-service:/var/www
+    env_file:
+      - ./services/chat-service/.env
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
 
   # ─── BILLING SERVICE ──────────────────────
 

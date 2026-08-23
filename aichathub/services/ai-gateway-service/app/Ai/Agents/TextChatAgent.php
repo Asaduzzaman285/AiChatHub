@@ -5,15 +5,19 @@ namespace App\Ai\Agents;
 use App\Ai\Middleware\CostTrackingMiddleware;
 use App\Ai\Middleware\UsageLoggingMiddleware;
 use Laravel\Ai\Attributes\MaxTokens;
-use Laravel\Ai\Attributes\Temperature;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Contracts\HasMiddleware;
 use Laravel\Ai\Messages\Message;
 use Laravel\Ai\Promptable;
 
+// No #[Temperature(...)] here on purpose — confirmed live that Anthropic's newest
+// Claude 5-generation models (claude-sonnet-5, likely claude-opus-5 too) reject the
+// request outright with 400 "`temperature` is deprecated for this model" the instant
+// this attribute is present, regardless of value. Every provider we use is fine with
+// temperature simply being omitted (falls back to that provider's own default), so
+// dropping it here is the safe fix for all 8 providers, not a per-model workaround.
 #[MaxTokens(4096)]
-#[Temperature(0.7)]
 class TextChatAgent implements Agent, Conversational, HasMiddleware
 {
     use Promptable;

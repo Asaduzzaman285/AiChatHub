@@ -12,6 +12,12 @@ FROM php:8.3-fpm-alpine
 # generic placeholder composer.json/vendor, not the real app).
 ARG SERVICE_DIR
 
+# Which pool-sizing file to use — see www.prod.conf's own comment for why this
+# can't just be one file: dev and prod hosts differ by an order of magnitude
+# in available resources. Defaults to the dev-tuned file; docker-compose.prod.yml
+# overrides this to www.prod.conf for every php-fpm service.
+ARG PHP_FPM_CONF=www.conf
+
 # System dependencies
 RUN apk add --no-cache \
     postgresql-dev \
@@ -51,8 +57,8 @@ COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 COPY infrastructure/docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
 
 # FPM pool config — factory default (pm.max_children = 5) was far too low, see
-# www.conf's own comment.
-COPY infrastructure/docker/php/www.conf /usr/local/etc/php-fpm.d/www.conf
+# www.conf's own comment. Which file gets copied here depends on PHP_FPM_CONF above.
+COPY infrastructure/docker/php/${PHP_FPM_CONF} /usr/local/etc/php-fpm.d/www.conf
 
 # Create non-root user
 RUN addgroup -g 1000 www && adduser -u 1000 -G www -s /bin/sh -D www

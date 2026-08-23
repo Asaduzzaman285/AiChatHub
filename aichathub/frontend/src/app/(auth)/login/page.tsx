@@ -7,6 +7,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
+import { Logo } from '@/components/Logo'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { postLoginPath } from '@/lib/post-login-redirect'
@@ -62,7 +63,7 @@ export default function LoginPage() {
 
         {/* Logo */}
         <div className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight">AI ChatHub</h1>
+          <Logo className="mx-auto h-7 w-auto text-foreground" />
           <p className="mt-2 text-sm text-muted-foreground">Sign in to your account</p>
         </div>
 

@@ -12,6 +12,7 @@ export interface User {
   is_admin: boolean
   admin_role: string | null
   admin_permissions: string[]
+  welcome_seen_at: string | null
 }
 
 export interface AuthTokens {
@@ -195,7 +196,7 @@ export interface Receipt {
 
 export interface AiModel {
   id: string
-  provider: 'openai' | 'anthropic' | 'gemini' | 'xai' | 'elevenlabs'
+  provider: 'openai' | 'anthropic' | 'gemini' | 'xai' | 'elevenlabs' | 'deepseek' | 'perplexity' | 'qwen' | 'moonshot'
   name: string
   model_id: string
   type: 'text' | 'image_generation' | 'audio_tts' | 'audio_stt' | 'embedding'
@@ -209,6 +210,11 @@ export interface AiModel {
     file_upload: boolean
   }
   available: boolean  // Based on the caller's current subscription package
+  pricing: {
+    input_rate_per_million: string
+    output_rate_per_million: string
+    currency: string
+  } | null
 }
 
 // ─── Chat ──────────────────────────────────────────────────────────────────
@@ -216,10 +222,26 @@ export interface AiModel {
 export interface ChatSession {
   id: string
   model_id: string
+  // Free to move between projects (or out, via null) after creation — unlike
+  // is_private below, which is locked at creation and enforced server-side.
+  project_id: string | null
   title: string
   status: 'active' | 'archived'
   message_count: number
   total_cost: number
+  // Set once at creation, never changed afterward — enforced server-side, not just
+  // an unused field on the client. expires_at is null for non-private chats.
+  is_private: boolean
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  color: string | null
+  sessions_count: number
   created_at: string
   updated_at: string
 }
@@ -233,8 +255,17 @@ export interface ChatMessage {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
-  cost: number
+  // Laravel's `decimal:6` cast serializes to a JSON string ("0.016709"), not a
+  // number — confirmed live (a real crash: calling .toFixed() on it throws, since
+  // strings don't have that method). Always run this through Number(...) before
+  // any arithmetic or formatting.
+  cost: string
   created_at: string
+  metadata: { compare_group_id?: string; type?: 'compaction_summary' } | null
+  // Populated server-side once a message with attachment_ids is persisted — previously
+  // always empty/absent since nothing wrote file_attachments.message_id at all, so an
+  // uploaded image reached the model fine but never showed up again in the history.
+  attachments?: FileAttachment[]
 }
 
 export interface FileAttachment {

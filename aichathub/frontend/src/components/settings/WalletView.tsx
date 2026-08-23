@@ -9,7 +9,7 @@ import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import { PaymentMethodsView } from '@/components/settings/PaymentMethodsView'
 import { AutoDebitView } from '@/components/settings/AutoDebitView'
 import apiClient from '@/lib/api-client'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatPreciseCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import type { LedgerEntry, WalletBalance } from '@/types'
 
@@ -72,11 +72,14 @@ export function WalletView() {
               </div>
             ) : wallet ? (
               <div className="space-y-1">
-                <p className="text-3xl font-bold">{formatCurrency(wallet.available_balance, wallet.currency)}</p>
-                <p className="text-sm text-muted-foreground">available to spend</p>
+                <p className="text-3xl font-bold">{formatPreciseCurrency(wallet.balance, wallet.currency)}</p>
+                <p className="text-sm text-muted-foreground">balance</p>
                 <p className="text-sm text-muted-foreground">
-                  {formatCurrency(wallet.balance, wallet.currency)} balance
-                  {wallet.reserved_balance > 0 && ` · ${formatCurrency(wallet.reserved_balance, wallet.currency)} reserved`}
+                  {formatPreciseCurrency(wallet.balance, wallet.currency)}
+                  {wallet.available_balance > wallet.balance &&
+                    ` + ${formatCurrency(wallet.available_balance - wallet.balance, wallet.currency)} buffer`}
+                  {' '}available to spend
+                  {wallet.reserved_balance > 0 && ` · ${formatPreciseCurrency(wallet.reserved_balance, wallet.currency)} reserved`}
                 </p>
               </div>
             ) : (
@@ -150,9 +153,9 @@ export function WalletView() {
                       <td className="py-2 text-muted-foreground">{entry.description}</td>
                       <td className={`py-2 text-right ${entry.type === 'credit' || entry.type === 'refund' ? 'text-green-600' : 'text-destructive'}`}>
                         {entry.type === 'credit' || entry.type === 'refund' ? '+' : '−'}
-                        {formatCurrency(entry.amount, entry.currency)}
+                        {formatPreciseCurrency(entry.amount, entry.currency)}
                       </td>
-                      <td className="py-2 text-right">{formatCurrency(entry.balance_after, entry.currency)}</td>
+                      <td className="py-2 text-right">{formatPreciseCurrency(entry.balance_after, entry.currency)}</td>
                     </tr>
                   ))}
                 </tbody>

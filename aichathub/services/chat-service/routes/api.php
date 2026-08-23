@@ -3,6 +3,7 @@
 use App\Http\Controllers\V1\SessionController;
 use App\Http\Controllers\V1\MessageController;
 use App\Http\Controllers\V1\FileAttachmentController;
+use App\Http\Controllers\V1\ProjectController;
 use App\Http\Controllers\HealthController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +23,12 @@ Route::middleware('auth.jwt')->group(function () {
     Route::get('/sessions/{sessionId}/messages',      [MessageController::class, 'index']);
     Route::post('/sessions/{sessionId}/messages',     [MessageController::class, 'store']);
 
+    Route::get('/upload/recent', [FileAttachmentController::class, 'recent']);
     Route::post('/upload',   [FileAttachmentController::class, 'upload']);
     Route::delete('/upload/{id}', [FileAttachmentController::class, 'destroy']);
+
+    Route::get('/projects',        [ProjectController::class, 'index']);
+    Route::post('/projects',       [ProjectController::class, 'store']);
+    Route::patch('/projects/{id}', [ProjectController::class, 'update']);
+    Route::delete('/projects/{id}', [ProjectController::class, 'destroy']);
 });

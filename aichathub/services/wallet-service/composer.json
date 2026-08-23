@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/wallet-service",
-    "description": "AI ChatHub — Wallet Service",
+    "name": "alveta/wallet-service",
+    "description": "Alveta.ai — Wallet Service",
     "type": "project",
     "require": {
         "php": "^8.3",

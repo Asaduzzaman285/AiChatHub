@@ -219,7 +219,16 @@ return [
     |
     */
 
-    'max_execution_time' => 30,
+    // Vendor default (30s) was silently killing this service's own core workload —
+    // AI streaming responses routinely run longer than that (confirmed live: a
+    // response truncated mid-sentence at ~31s, no error event, no [DONE], and the
+    // assistant's reply was never persisted since the request was killed before
+    // ChatController::stream()'s ->then() callback ever got to run). Unlike a normal
+    // PHP exception, Octane's own watchdog doesn't throw anything our code can catch —
+    // it just terminates the connection outright. Matches this service's other
+    // stream-related timeouts (api-gateway's ProxyController and both nginx sidecars
+    // are already at 300s).
+    'max_execution_time' => 300,
 
     /*
     |--------------------------------------------------------------------------

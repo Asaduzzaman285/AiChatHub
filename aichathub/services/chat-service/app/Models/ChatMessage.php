@@ -31,4 +31,9 @@ class ChatMessage extends Model
     {
         return $this->belongsTo(ChatSession::class, 'session_id');
     }
+
+    public function attachments()
+    {
+        return $this->hasMany(FileAttachment::class, 'message_id');
+    }
 }

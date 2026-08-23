@@ -79,7 +79,7 @@ export default function RegisterPage() {
 
         <div className="text-center">
           <h1 className="text-3xl font-bold tracking-tight">Create account</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Get started with AI ChatHub</p>
+          <p className="mt-2 text-sm text-muted-foreground">Get started with Alveta.ai</p>
         </div>
 
         <GoogleSignInButton label="Sign up with Google" mode="signup" />

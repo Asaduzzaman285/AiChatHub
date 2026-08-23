@@ -21,7 +21,7 @@ class ReceiptMail extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'Your AI ChatHub receipt');
+        return new Envelope(subject: 'Your Alveta.ai receipt');
     }
 
     public function content(): Content

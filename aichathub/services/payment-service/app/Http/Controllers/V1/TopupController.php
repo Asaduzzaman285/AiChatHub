@@ -47,7 +47,7 @@ class TopupController extends Controller
                 $userId,
                 'wallet_topup',
                 $amount,
-                'AI ChatHub wallet top-up',
+                'Alveta.ai wallet top-up',
                 ['type' => 'wallet_topup'],
             )
             : $this->beginCheckout(
@@ -56,7 +56,7 @@ class TopupController extends Controller
                 'wallet_topup',
                 $amount,
                 strtoupper($data['currency'] ?? 'USD'),
-                'AI ChatHub wallet top-up',
+                'Alveta.ai wallet top-up',
                 ['type' => 'wallet_topup'],
             );
 

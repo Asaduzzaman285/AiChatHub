@@ -54,6 +54,12 @@ export function PlansView() {
       setChoosingSlug(null)
       queryClient.invalidateQueries({ queryKey: ['subscription'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      // Without this, chat/page.tsx's useAvailableModels() kept serving the pre-purchase
+      // model list from cache — the newly-unlocked models (and the chat access that
+      // depends on there being at least one available model) only showed up after a
+      // full reload, which creates a brand-new React Query client from scratch.
+      // Confirmed live: purchasing a plan left chat unusable until a manual reload.
+      queryClient.invalidateQueries({ queryKey: ['models'] })
     },
     onError: (err: unknown) => {
       const { ambiguous, message } = describeError(
@@ -65,6 +71,7 @@ export function PlansView() {
         setChoosingSlug(null)
         queryClient.invalidateQueries({ queryKey: ['subscription'] })
         queryClient.invalidateQueries({ queryKey: ['wallet'] })
+        queryClient.invalidateQueries({ queryKey: ['models'] })
       }
     },
     onSettled: () => setPendingSlug(null),
@@ -99,6 +106,7 @@ export function PlansView() {
       setChoosingSlug(null)
       queryClient.invalidateQueries({ queryKey: ['subscription'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      queryClient.invalidateQueries({ queryKey: ['models'] })
     },
     onError: (err: unknown) => {
       const { ambiguous, message } = describeError(
@@ -110,6 +118,7 @@ export function PlansView() {
         setChoosingSlug(null)
         queryClient.invalidateQueries({ queryKey: ['subscription'] })
         queryClient.invalidateQueries({ queryKey: ['wallet'] })
+        queryClient.invalidateQueries({ queryKey: ['models'] })
       }
     },
     onSettled: () => setPendingSlug(null),

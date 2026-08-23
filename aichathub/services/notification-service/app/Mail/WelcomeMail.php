@@ -16,7 +16,7 @@ class WelcomeMail extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'Welcome to AI ChatHub');
+        return new Envelope(subject: 'Welcome to Alveta.ai');
     }
 
     public function content(): Content

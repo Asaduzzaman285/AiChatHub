@@ -22,10 +22,10 @@ class NotificationService
         }
 
         [$mailable, $subject, $content] = match ($type) {
-            'welcome'        => [new WelcomeMail($data['name']), 'Welcome to AI ChatHub', "Welcome {$data['name']}!"],
+            'welcome'        => [new WelcomeMail($data['name']), 'Welcome to Alveta.ai', "Welcome {$data['name']}!"],
             'receipt'        => [
                 new ReceiptMail($data['name'], (float) $data['amount'], $data['currency'] ?? 'USD', $data['description']),
-                'Your AI ChatHub receipt',
+                'Your Alveta.ai receipt',
                 "Receipt: {$data['description']} — {$data['amount']} {$data['currency']}",
             ],
             'low_balance'    => [

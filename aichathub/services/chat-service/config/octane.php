@@ -219,7 +219,13 @@ return [
     |
     */
 
-    'max_execution_time' => 30,
+    // Same reasoning as ai-gateway-service's identical fix: the vendor default (30s)
+    // silently kills the connection outright (no exception, nothing catchable) once
+    // exceeded — confirmed live as the actual cause of assistant replies never getting
+    // persisted for long AI responses. This service now also makes its own outbound
+    // calls (auto-title generation, document text extraction) that don't need to be
+    // capped this tight either.
+    'max_execution_time' => 300,
 
     /*
     |--------------------------------------------------------------------------

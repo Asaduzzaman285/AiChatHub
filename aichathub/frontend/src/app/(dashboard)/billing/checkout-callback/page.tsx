@@ -69,6 +69,10 @@ export default function CheckoutCallbackPage() {
         if (data.status === 'completed') {
           queryClient.invalidateQueries({ queryKey: ['wallet'] })
           queryClient.invalidateQueries({ queryKey: ['subscription'] })
+          // Same gap as the direct-purchase path in PlansView.tsx — without this, a
+          // package bought via card/bKash checkout also left chat access stuck on the
+          // pre-purchase model list until a manual reload.
+          queryClient.invalidateQueries({ queryKey: ['models'] })
           setPhase('success')
           return
         }

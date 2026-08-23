@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/billing-service",
-    "description": "AI ChatHub — Billing Service",
+    "name": "alveta/billing-service",
+    "description": "Alveta.ai — Billing Service",
     "type": "project",
     "require": {
         "php": "^8.3",

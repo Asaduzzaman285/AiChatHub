@@ -19,6 +19,7 @@ class MessageController extends Controller
         }
 
         $messages = ChatMessage::where('session_id', $sessionId)
+            ->with('attachments')
             ->orderBy('created_at')
             ->get();
 
@@ -40,8 +41,13 @@ class MessageController extends Controller
         }
 
         $data = $request->validate([
-            'role'    => 'required|in:user,assistant,system',
-            'content' => 'required|string',
+            'role'     => 'required|in:user,assistant,system',
+            'content'  => 'required|string',
+            // Used by the "compact conversation" feature to tag a carried-over summary
+            // ({type: 'compaction_summary'}) so the frontend can render it distinctly —
+            // stored as role 'assistant' (not 'system') so it flows unchanged through the
+            // existing user/assistant history-building logic on future turns.
+            'metadata' => 'nullable|array',
         ]);
 
         $message = ChatMessage::create([
@@ -49,6 +55,7 @@ class MessageController extends Controller
             'user_id'    => $this->authUserId($request),
             'role'       => $data['role'],
             'content'    => $data['content'],
+            'metadata'   => $data['metadata'] ?? null,
         ]);
 
         $session->increment('message_count');

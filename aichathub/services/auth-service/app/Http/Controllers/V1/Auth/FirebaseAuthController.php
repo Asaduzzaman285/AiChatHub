@@ -159,6 +159,7 @@ class FirebaseAuthController extends Controller
                 'is_admin'           => (bool) $admin,
                 'admin_role'         => $admin?->role,
                 'admin_permissions'  => $admin?->permissions ?? [],
+                'welcome_seen_at'    => $user->welcome_seen_at,
             ],
             'is_new_user' => ! $user->wasRecentlyCreated ? false : true,
         ]));

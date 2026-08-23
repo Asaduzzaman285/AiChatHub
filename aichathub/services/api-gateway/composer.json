@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/api-gateway",
-    "description": "AI ChatHub — API Gateway",
+    "name": "alveta/api-gateway",
+    "description": "Alveta.ai — API Gateway",
     "type": "project",
     "require": {
         "php": "^8.3",

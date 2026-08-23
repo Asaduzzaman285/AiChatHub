@@ -23,18 +23,31 @@ class ModelController extends Controller
             ->orderBy('provider')
             ->orderBy('name')
             ->get()
-            ->map(fn (AiModel $model) => [
-                'id'                => $model->id,
-                'model_id'          => $model->model_id,
-                'provider'          => $model->provider,
-                'name'              => $model->name,
-                'type'              => $model->type,
-                'description'       => $model->description,
-                'context_window'    => $model->context_window,
-                'max_output_tokens' => $model->max_output_tokens,
-                'capabilities'      => $model->capabilities,
-                'available'         => in_array($model->model_id, $allowed, true),
-            ]);
+            ->map(function (AiModel $model) use ($allowed) {
+                // Customer-facing rates only (input/output/currency) — the provider_*
+                // cost fields and markup_percentage on ModelPricing are for admin margin
+                // calculations and never belonged in a response any authenticated user
+                // can read.
+                $pricing = $model->activePricing();
+
+                return [
+                    'id'                => $model->id,
+                    'model_id'          => $model->model_id,
+                    'provider'          => $model->provider,
+                    'name'              => $model->name,
+                    'type'              => $model->type,
+                    'description'       => $model->description,
+                    'context_window'    => $model->context_window,
+                    'max_output_tokens' => $model->max_output_tokens,
+                    'capabilities'      => $model->capabilities,
+                    'available'         => in_array($model->model_id, $allowed, true),
+                    'pricing'           => $pricing ? [
+                        'input_rate_per_million'  => $pricing->input_rate_per_million,
+                        'output_rate_per_million' => $pricing->output_rate_per_million,
+                        'currency'                => $pricing->currency,
+                    ] : null,
+                ];
+            });
 
         return response()->json([
             'models'         => $models,

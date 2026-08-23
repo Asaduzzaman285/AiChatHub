@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/payment-service",
-    "description": "AI ChatHub — Payment Gateway Service",
+    "name": "alveta/payment-service",
+    "description": "Alveta.ai — Payment Gateway Service",
     "type": "project",
     "require": {
         "php": "^8.3",

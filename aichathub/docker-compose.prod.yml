@@ -116,7 +116,7 @@ services:
   # ─── AUTH SERVICE ─────────────────────────
 
   auth-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: auth-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: auth-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/auth-service:prod
     container_name: aichathub-auth
     restart: unless-stopped
@@ -147,7 +147,7 @@ services:
   # ─── SUBSCRIPTION SERVICE ─────────────────
 
   subscription-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: subscription-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: subscription-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/subscription-service:prod
     container_name: aichathub-subscription
     restart: unless-stopped
@@ -188,7 +188,7 @@ services:
   # ─── WALLET SERVICE ───────────────────────
 
   wallet-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: wallet-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: wallet-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/wallet-service:prod
     container_name: aichathub-wallet
     restart: unless-stopped
@@ -229,7 +229,7 @@ services:
   # ─── PAYMENT SERVICE ──────────────────────
 
   payment-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: payment-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: payment-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/payment-service:prod
     container_name: aichathub-payment
     restart: unless-stopped
@@ -277,7 +277,15 @@ services:
     networks: [aichathub]
     env_file: [./services/ai-gateway-service/.env]
     depends_on: [postgres, redis]
-    mem_limit: 512m
+    # 512m was undersized for an Octane worker's actual memory profile — Swoole
+    # workers are long-lived and accumulate across requests (unlike PHP-FPM, which
+    # resets per request), and this service holds image/document base64 payloads and
+    # conversation history in memory per request. Confirmed live: sitting at ~95% of
+    # 512m within hours of a fresh restart, well before any OOM kill actually fired —
+    # this was heading for one under real sustained traffic, causing exactly the
+    # "works, then randomly doesn't for a moment" pattern reported live. Host has 19GB
+    # free (23GB total, ~3.5GB used) — ample room for a generous bump.
+    mem_limit: 1536m
 
   ai-gateway-nginx:
     image: nginx:1.25-alpine
@@ -289,7 +297,7 @@ services:
     depends_on: [ai-gateway-service]
 
   ai-gateway-queue-worker:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: ai-gateway-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: ai-gateway-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/ai-gateway-service-fpm:prod
     container_name: aichathub-ai-gateway-queue-worker
     restart: unless-stopped
@@ -301,6 +309,15 @@ services:
 
   # ─── CHAT SERVICE (Octane/Swoole) ─────────
 
+  # Malware scanning for FileAttachmentController::upload() — internal-only, no
+  # published port. Official image ships freshclam auto-updates for the virus DB.
+  clamav:
+    image: clamav/clamav:stable
+    container_name: aichathub-clamav
+    restart: unless-stopped
+    networks: [aichathub]
+    mem_limit: 1024m
+
   chat-service:
     build: { context: ., dockerfile: infrastructure/docker/php-octane/Dockerfile, args: { SERVICE_DIR: chat-service } }
     image: aichathub/chat-service:prod
@@ -308,8 +325,10 @@ services:
     restart: unless-stopped
     networks: [aichathub]
     env_file: [./services/chat-service/.env]
-    depends_on: [postgres, redis]
-    mem_limit: 512m
+    depends_on: [postgres, redis, clamav]
+    # See ai-gateway-service's identical comment above — same Octane memory-growth
+    # issue, same live-confirmed ~95%-of-512m headroom problem, same fix.
+    mem_limit: 1536m
 
   chat-nginx:
     image: nginx:1.25-alpine
@@ -320,10 +339,22 @@ services:
       - ./infrastructure/docker/nginx/chat.conf:/etc/nginx/conf.d/default.conf
     depends_on: [chat-service]
 
+  # Runs chat:expire-private-sessions on a schedule (see chat-service/routes/console.php) —
+  # same schedule:work-must-run-continuously pattern as wallet/subscription/payment-scheduler.
+  chat-scheduler:
+    image: aichathub/chat-service:prod
+    container_name: aichathub-chat-scheduler
+    restart: unless-stopped
+    networks: [aichathub]
+    env_file: [./services/chat-service/.env]
+    depends_on: [postgres, redis]
+    command: php artisan schedule:work
+    mem_limit: 192m
+
   # ─── BILLING SERVICE ──────────────────────
 
   billing-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: billing-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: billing-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/billing-service:prod
     container_name: aichathub-billing
     restart: unless-stopped
@@ -344,7 +375,7 @@ services:
   # ─── NOTIFICATION SERVICE ─────────────────
 
   notification-service:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: notification-service } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: notification-service, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/notification-service:prod
     container_name: aichathub-notification
     restart: unless-stopped
@@ -365,7 +396,7 @@ services:
   # ─── API GATEWAY ──────────────────────────
 
   api-gateway:
-    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: api-gateway } }
+    build: { context: ., dockerfile: infrastructure/docker/php/Dockerfile, args: { SERVICE_DIR: api-gateway, PHP_FPM_CONF: www.prod.conf } }
     image: aichathub/api-gateway:prod
     container_name: aichathub-api-gateway
     restart: unless-stopped

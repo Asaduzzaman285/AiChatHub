@@ -3,14 +3,11 @@
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { AxiosError } from 'axios'
-import { ChevronDown, LogOut, Pencil, Plus, Settings as SettingsIcon, Sparkles, MessageSquare, Trash2 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
-import { SkeletonListItem } from '@/components/ui/Skeleton'
+import { Sidebar } from '@/components/layout/Sidebar'
 import { SettingsModal, type SettingsTab } from '@/components/settings/SettingsModal'
-import { ChatSessionProvider, useChatSession } from '@/contexts/ChatSessionContext'
-import { cn } from '@/lib/utils'
+import { ChatSessionProvider } from '@/contexts/ChatSessionContext'
 import type { User } from '@/types'
 
 /**
@@ -27,11 +24,16 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { user, clearAuth } = useAuthStore()
-  const { sessions, sessionsLoading, activeSessionId, setActiveSessionId, createSession, renameSession, deleteSession } = useChatSession()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('account')
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
+
+  // A brand-new account's very first login lands on /welcome instead of showing a
+  // popup — welcome_seen_at is null exactly once (Google or password login both hit
+  // this, since email/password registration doesn't auto-login). Guarded by pathname
+  // so it doesn't fight /welcome's own render once there.
+  useEffect(() => {
+    if (user && !user.welcome_seen_at && pathname !== '/welcome') router.replace('/welcome')
+  }, [user, pathname, router])
 
   const openSettings = (tab: SettingsTab) => {
     setSettingsTab(tab)
@@ -60,119 +62,15 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     router.replace('/login')
   }
 
-  const startRename = (id: string, title: string) => {
-    setRenamingId(id)
-    setRenameValue(title)
-  }
-
-  const commitRename = () => {
-    const title = renameValue.trim()
-    if (!renamingId) return
-    if (!title) { setRenamingId(null); return }
-    renameSession.mutate({ id: renamingId, title })
-    setRenamingId(null)
-  }
-
-  const confirmDelete = (id: string, title: string) => {
-    if (window.confirm(`Delete "${title}"? This can't be undone.`)) {
-      deleteSession.mutate(id)
-    }
-  }
-
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-64 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
-        <div className="flex items-center gap-2 p-4">
-          <Sparkles className="h-5 w-5 text-primary" />
-          <span className="font-display text-lg font-bold tracking-tight">AI ChatHub</span>
-        </div>
-
-        <div className="px-3 pb-2">
-          <button
-            onClick={() => { setActiveSessionId(null); router.push('/chat') }}
-            className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
-          >
-            <Plus className="h-4 w-4" />
-            New chat
-          </button>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-3">
-          {sessionsLoading ? (
-            <>{Array.from({ length: 6 }).map((_, i) => <SkeletonListItem key={i} />)}</>
-          ) : !sessions?.length ? (
-            <div className="p-6 text-center space-y-2">
-              <MessageSquare className="h-8 w-8 mx-auto text-muted-foreground/40" />
-              <p className="text-xs text-muted-foreground">No chats yet — start one above.</p>
-            </div>
-          ) : (
-            sessions.map((s) => (
-              <div
-                key={s.id}
-                className={cn(
-                  'group flex items-center gap-1 rounded-md px-2.5 py-2 text-sm transition-colors hover:bg-accent',
-                  s.id === activeSessionId && pathname === '/chat' && 'bg-accent'
-                )}
-              >
-                {renamingId === s.id ? (
-                  <input
-                    autoFocus
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitRename()
-                      if (e.key === 'Escape') setRenamingId(null)
-                    }}
-                    className="flex-1 min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-sm"
-                  />
-                ) : (
-                  <button
-                    onClick={() => { setActiveSessionId(s.id); router.push('/chat') }}
-                    className="flex-1 min-w-0 truncate text-left"
-                  >
-                    {s.title}
-                  </button>
-                )}
-                {renamingId !== s.id && (
-                  <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => startRename(s.id, s.title)} className="p-1 text-muted-foreground hover:text-foreground" aria-label="Rename chat">
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => confirmDelete(s.id, s.title)} className="p-1 text-muted-foreground hover:text-destructive" aria-label="Delete chat">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </nav>
-
-        <div className="border-t border-border p-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                  {user?.email?.[0]?.toUpperCase() ?? '?'}
-                </div>
-                <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">{user?.email}</span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onClick={() => openSettings('account')}>
-                <SettingsIcon className="h-4 w-4" />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleLogout}>
-                <LogOut className="h-4 w-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </aside>
+    // h-screen (capped at exactly the viewport), not min-h-screen (only a floor) —
+    // with min-h-screen, a sidebar taller than the viewport (many chats) just grew
+    // the whole page past 100vh and the *page* scrolled, so the "+ New chat" button
+    // and the user row at the bottom scrolled away with everything else instead of
+    // staying put. h-screen caps this container so Sidebar's own `nav` (already
+    // flex-1 overflow-y-auto) is what scrolls instead, keeping its header/footer fixed.
+    <div className="flex h-screen">
+      <Sidebar openSettings={openSettings} onLogout={handleLogout} />
 
       <div className="flex-1 overflow-hidden">{children}</div>
 

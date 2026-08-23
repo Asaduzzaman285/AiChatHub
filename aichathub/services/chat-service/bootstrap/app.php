@@ -11,6 +11,10 @@ use Sentry\Laravel\Integration;
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
+        // Needed for the new chat:expire-private-sessions schedule below to actually run — see the
+        // identical fix (and its real-world impact) in wallet/subscription/payment-service's own
+        // bootstrap/app.php.
+        commands: __DIR__.'/../routes/console.php',
         apiPrefix: 'api/v1',
         then: function () {
             Route::prefix('api/internal')

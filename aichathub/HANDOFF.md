@@ -1,5 +1,5 @@
 # AI ChatHub — Development Handoff Document
-**Last updated:** 2026-08-09 (evening)  
+**Last updated:** 2026-08-21  
 **Repo:** https://github.com/Asaduzzaman285/AiChatHub  
 **Local path:** `C:\Users\IT News\Downloads\aichathub\aichathub`  
 **Branch:** main
@@ -1453,6 +1453,640 @@ Console → Authentication → Settings → Authorized domains. Confirmed workin
   (blocked on nothing now that TLS is live — just not done yet).
 - Full manual browser click-through QA (wallet, subscription, file upload) not yet done — everything
   verified so far was via curl/API calls plus one manual login+chat test.
+
+---
+
+## 2026-08-17 Session — PHP-FPM prod pool sizing, 6 new AI provider keys + model catalog refresh, real document upload
+
+### PHP-FPM under-provisioned in production — found via staged k6 load test
+`www.conf`'s `pm.max_children = 8` was tuned for a 4-core dev laptop (see its own dated comment) and
+shipped unchanged into the 8-core/23GB prod VPS, capping the whole pool regardless of real host
+capacity. k6 staged-ramp test (1000 VUs against `/api/v1/health`) showed 0% failures but p95 5.46s on a
+trivial endpoint — a pool-starvation signature, not a code bug. Fixed with a dev/prod config split: new
+`ARG PHP_FPM_CONF` build-arg in the shared `infrastructure/docker/php/Dockerfile` picks between
+`www.conf` (dev default) and a new `infrastructure/docker/php/www.prod.conf` (`pm.max_children = 32`,
+sized for the actual host), wired per-service in `docker-compose.prod.yml`. Retest: +70% throughput
+(172→292 req/s), p95 roughly halved (5.46s→2.47s). Follow-up finding, not yet mitigated: post-fix,
+`api-gateway` peaked at 717% CPU (7+ of 8 cores) under the same 1000-VU load — a real capacity ceiling,
+not a config mistake. 2000-VU stage (next step in the user's own gradual-ramp methodology) not yet run.
+
+### 6 new AI provider keys wired in — Anthropic, Gemini, xAI, Qwen, Moonshot funded (OpenAI already was)
+4 of 6 (`openai`, `anthropic`, `gemini`, `xai`) already had dormant native-driver config in
+`ai-gateway-service/config/ai.php` from earlier scaffolding — just needed real keys. `qwen` and
+`moonshot` were net-new, added using the same `openai-compatible` driver pattern already proven for
+Perplexity (needs only `key` + `url`, no native driver). Live-verified every provider against its real
+`/models` endpoint before cataloging — caught two retired/wrong model IDs in the process
+(`gemini-2.5-flash` cut off for new users despite listing in the account's own `/models`; `grok-beta`
+fully retired) and one **non-fixable-from-here** account gap: Qwen returns `AccessDenied.Unpurchased`
+(403) on every model ID tried — Alibaba Cloud Model Studio needs model access activated on the account
+side, not a code or key problem.
+
+Model catalog refreshed to match the user's explicit instruction to curate down to only these 8
+providers' models (openai, anthropic, gemini, deepseek, perplexity, xai, qwen, moonshot): deactivated
+(not deleted — keeps `usage_logs`/`chat_messages` FK integrity) stale Claude 3 / old Gemini 2.5 / Grok
+beta rows, inserted current-gen replacements with real first-party pricing (GPT-5.6 Sol/Terra/Luna,
+Claude Opus/Sonnet 5 + Haiku 4.5, Gemini 3.1 Pro + 3.7 Flash, Grok 4.3, Kimi K2.5/K2.6/K3), kept
+`packages.model_access` in sync across every catalog edit. One self-caught mistake: an early blanket
+`is_active = false` swept up DALL-E 3 and Whisper (non-text OpenAI products never meant to be touched by
+a text-model curation pass) — caught and reactivated same session.
+Deliberately not added: Claude Fable 5 (2x cost, mandatory 30-day retention, no prefill — not a
+default-tier fit) and Claude Mythos 5 (gated behind Anthropic's invite-only program).
+
+### DeepSeek "claiming to be Claude" — investigated, confirmed not a routing bug
+User reported a chat where DeepSeek V4 Flash self-identified as Claude under pressure. Cross-referenced
+the exact `chat_messages` row against `ai_models` directly in the DB — routing was correct throughout
+(`provider=deepseek`, `model_id=deepseek-v4-flash`). This is LLM sycophancy (a known, provider-wide
+behavior, more pronounced on cheaper "flash" tiers), not a backend defect.
+
+### Real document upload (not just images) — full pipeline, all 3 layers
+The chat upload button (`+` icon) had been placeholder-images-only per an earlier quick fix; user asked
+for real file support. Built end-to-end:
+- `chat-service`: `FileAttachmentController::ALLOWED_MIMES` now also accepts PDF, DOCX, TXT, MD, CSV,
+  JSON (was JPEG/PNG/WebP/GIF only). Added `smalot/pdfparser` (pure-PHP, no new system deps — `zip`/
+  `dom`/`mbstring` extensions were already present in the shared Dockerfile) for PDF text extraction;
+  DOCX handled with a small hand-rolled `ZipArchive` + `word/document.xml` tag-strip (skipped
+  `phpoffice/phpword` — far heavier than this needs). New `ChatInternalController::extractText()` /
+  `extractDocxText()`, capped at 50k extracted chars per file so one huge PDF can't blow a model's
+  context window on its own.
+- `/internal/attachments/resolve` now returns `extracted_text` for document mimes alongside the
+  existing `base64` path for images (unchanged).
+- `ai-gateway-service`: `ChatController::stream()` now splits resolved attachments into images (still
+  gated behind `capabilities.vision`, unchanged) and documents (no vision gate — extracted text is
+  prepended to that one request's prompt only, never written into the persisted message or `history`,
+  so a large attachment isn't re-sent every subsequent turn).
+- Frontend: upload `accept` attribute expanded to match; non-image attachments in the pending-upload
+  chip now show a file icon instead of trying (and failing) to render an `<img>` thumbnail.
+
+---
+
+## 2026-08-18 Session (cont'd) — Chat UI overhaul, three real production bugs found live, compare mode rebuilt with context + persistence, auto-naming
+
+### Markdown rendering + recent-files quick-attach
+AI responses were rendering as raw text (no headings/bold/code blocks). Added `react-markdown` +
+`remark-gfm` + `rehype-highlight` (not `marked` + `dangerouslySetInnerHTML` — real XSS risk once
+untrusted document text can flow into a model's output) + `@tailwindcss/typography` for styling.
+Separately, added `GET /upload/recent` (chat-service) so the attach menu offers your last 15 uploads
+as one-click re-attach instead of forcing a fresh pick every time, ChatGPT-style.
+
+### Real bug — the `+` attach menu stopped opening entirely
+`DropdownMenuTrigger asChild` wrapping the shared `Button` component silently broke, because `Button`
+wasn't built with `forwardRef` — Radix needs to attach its own ref to the child to manage the popup.
+Every *other* dropdown trigger in the codebase already avoided `Button` for exactly this reason (plain
+`<button>` instead); this was the first place that didn't. Fixed `Button` itself with `forwardRef` so
+the pattern is safe everywhere going forward, not just here.
+
+### Real bug — SSE responses got fully buffered before reaching the browser, and long ones crashed
+`api-gateway`'s `ProxyController::forward()` used a fully blocking `Http::post()` for every route,
+including `/chat/stream` — it waited for the *entire* AI response before sending any bytes onward, so
+users never saw real token-by-token streaming, they just waited then got it all at once. Compounding
+this: the dedicated `/api/v1/chat` nginx location block (added for SSE) was missing
+`fastcgi_read_timeout`, silently falling back to nginx's 60s default. Since `api-gateway` sent zero
+bytes to its own nginx sidecar for the entire generation time, any response taking longer than 60s
+(easy once document-context prompts got long) got its connection killed mid-stream — confirmed live via
+Sentry: `RequestException`/cURL error 18 "transfer closed with outstanding read data remaining". Fixed
+both: `ProxyController` now uses Guzzle's real `stream: true` mode and relays chunks as they arrive;
+`gateway.conf`'s `/api/v1/chat` block got its own explicit `fastcgi_read_timeout 300`. Verified live —
+responses now genuinely stream, and a request that previously died at 60s completed cleanly.
+
+### Real bug — Claude Sonnet 5 / Opus 5 silently failed on *every* message
+`TextChatAgent` had `#[Temperature(0.7)]` hardcoded for every model/provider. Anthropic's newest Claude
+generation rejects any request containing `temperature` outright (`` `temperature` is deprecated for
+this model ``) — confirmed by replaying the exact captured outgoing request directly against Anthropic's
+API. Haiku 4.5 and every other provider tolerated it fine, which is why this went unnoticed. Removed the
+attribute entirely — every provider is fine with it simply being omitted (falls back to their own
+default), so this isn't a per-model workaround, it's the correct fix for all 8 providers.
+
+### Real bug — image uploads to Claude Haiku 4.5 / Sonnet 5 always got rejected
+The model-catalog reseed a few sessions back inserted new rows without setting `capabilities` at all —
+it silently defaulted to `{}`, so `$model->capabilities['vision'] ?? false` read false for every model
+added since, regardless of whether the model actually supports vision. Backfilled real capability data
+(`vision`/`streaming`/`file_upload`/`function_calling`) for all of them via direct SQL — no code was
+wrong, the data was.
+
+### Chat composer — full redesign
+Rebuilt the input bar into a pill-shaped card with a gradient border: model picker (colored per-provider
+icon + name) and live wallet balance up top, input with a decorative sparkle icon in the middle, and a
+bottom row (attach, pin[placeholder], model icon row, settings[placeholder], compare toggle, mic
+[placeholder], send). `AiModel.provider` type union was stale (missing deepseek/perplexity/qwen/
+moonshot) — fixed alongside.
+
+### Compare mode — rebuilt from a stateless side-panel into a real first-class part of the chat
+Previously `/chat/compare` was a separate full-pane view, took no attachments, no history, and
+persisted nothing (a `sessionId` was generated and thrown away per call). All fixed:
+- **Attachments**: images/documents now resolve once and get sent to every vision-capable model in the
+  fan-out; a model that doesn't support vision gets a clear per-model error in its own column instead of
+  the whole request silently sending nothing (confirmed live: every model previously just said "I don't
+  see an image" — nothing had ever been sent).
+- **Context**: now accepts real `session_id` + `history`, threaded into each model's `TextChatAgent`
+  exactly like `/chat/stream` — flipping Compare on mid-conversation no longer starts every model from a
+  blank slate. Verified live: asked 2 models "which of those 3 strategies is fastest" with prior turns
+  as history — both correctly named the specific strategy from earlier in the conversation.
+- **Persistence**: the user's prompt is now saved once, and each model's reply is saved as its own
+  assistant message tagged with a shared `metadata.compare_group_id` (chat_messages.metadata was already
+  a JSONB column, just unused — `ChatInternalController::appendMessage` now accepts it). The frontend
+  groups consecutive assistant messages sharing that id back into one side-by-side card when rendering
+  persisted history. This is what actually fixes "I ran a compare and then couldn't find that
+  conversation again" — the results weren't gone, they'd simply never been saved anywhere.
+- **Real bug found alongside**: `compareTurns` (the live-streaming local state) was never cleared on
+  session switch — since it's a single component instance for the whole `/chat` route, opening a
+  different or brand-new chat kept showing whatever compare results were left over from the previous
+  session. Fixed with a `useEffect` keyed on `activeSessionId`.
+
+### Auto-naming sessions
+New sessions now get a real title instead of staying "New Chat" forever (manual rename already existed;
+this adds automatic). Trigger lives in `chat-service`'s `ChatInternalController::appendMessage` — fires
+once, on a session's first assistant reply (checked against the DB, not just the current transaction, so
+a 4-way compare's first turn only fires it once, from whichever model's reply lands first). Calls a new
+`POST /internal/generate-title` on `ai-gateway-service`, using a new minimal `TitleGeneratorAgent` (no
+`HasMiddleware` — deliberately skips `CostTrackingMiddleware`, since this is our own housekeeping, not
+something that should show up as a wallet charge) against a fixed cheap model (`deepseek-v4-flash`).
+Runs synchronously, not queued — chat-service has no dedicated queue worker (unlike auth/subscription/
+wallet/payment/ai-gateway, see their own `*-queue-worker` containers), and it doesn't need one here: by
+the time this fires the assistant's reply has already fully streamed to the user, so nothing is on the
+critical path they're waiting on. Verified live: "I am building a SaaS product using Laravel and
+Next.js, brainstorm 3 monetization strategies" → auto-titled "3 SaaS Monetization Strategies".
+
+### Real bug — Octane services were minutes away from random OOM kills under real load
+User reported "the request/response flow isn't always smooth, sometimes normal, sometimes abnormal" —
+investigated via `docker stats` rather than guessing: both `ai-gateway-service` and `chat-service`
+(both Octane/Swoole) were sitting at **~95% of their 512m `mem_limit`** within hours of a fresh restart,
+with zero OOM kills yet recorded but clearly heading for one. Octane workers are long-lived and
+accumulate memory across requests (unlike PHP-FPM, which resets per request) — and these two services
+specifically hold image/document base64 payloads and full conversation history in memory per request,
+the heaviest per-request footprint of any service in the stack. Once memory crosses the limit, Docker's
+OOM killer kills and restarts the container, failing whatever request was in flight at that exact moment
+while everything else keeps working fine — which matches the reported symptom exactly. Host has 23GB
+total / 19GB free, so bumped both to `1536m` in `docker-compose.prod.yml`. No code bug, pure
+under-provisioning that hadn't been hit yet at the time the original 512m was set.
+
+### Known gaps — flagged to the user, not yet built
+- **Token-aware history windowing**: the 30-message history cap (both `/chat/stream` and now
+  `/chat/compare`) is a flat count, not sized against the *active* model's real context window.
+- **Rolling summary for very long sessions**: once a conversation outgrows even a large context window,
+  older turns are just dropped, not compressed into a persisted summary.
+- **Persistent cross-session user memory**: no equivalent of ChatGPT/Claude's "remembers what you work
+  on across brand-new chats" — would need a separate `user_memory` table injected into every session's
+  system prompt, distinct from any one conversation's transcript.
+- **`config/app.php` doesn't exist in `ai-gateway-service`** — `APP_DEBUG` has no effect (`config('app.
+  debug')` always reads false regardless of `.env`), and this is very likely why `Log::error()` calls
+  throughout that service produce no visible output anywhere (confirmed: no log file, nothing on
+  `docker logs`, `php artisan about` shows Debug Mode OFF even with `APP_DEBUG=true` in `.env`). Found
+  while root-causing the temperature bug — had to hot-patch a diagnostic directly into the response body
+  to get a real stack trace at all. Worth a proper fix; Sentry (already wired in) covers exceptions that
+  reach the normal render pipeline, but not ones caught and handled inline, which is exactly where the
+  actual bug was.
+- ~~R2 public URL for image previews~~ — **fixed 2026-08-19**, see below.
+
+---
+
+## 2026-08-19 Session — Three real bugs found live (Octane silent-kill, a client crash, OpenAI usage tracking), R2 finally wired, test-data cleanup
+
+### Real bug — Octane's own 30s watchdog was silently killing every AI response over ~30s
+Both `ai-gateway-service` and `chat-service` (`config/octane.php`) were left at the vendor default
+`'max_execution_time' => 30` — a request-execution ceiling separate from PHP's own `max_execution_time`
+ini setting, separate from every nginx/proxy/client timeout already tuned this session. Any response
+running longer got its connection killed outright by Octane itself — not a PHP exception, nothing our
+code could catch, just silence. Confirmed live via a hot-patched diagnostic: a real request completed
+with `HTTP 200` from curl's perspective, but the captured body was cut off mid-sentence with no
+`[DONE]`/finish event, and the assistant's reply was never persisted (`then()` never got a chance to
+fire). This is very likely what was behind the user's "document analysis gives nothing" and "flow isn't
+always smooth" reports — any response needing real thinking time (documents, long/complex asks) was a
+coin-flip depending on whether it finished before the 30s mark. Bumped both to 300s, matching every
+other stream-related timeout already in place. Verified live: the same request that died at 31s
+previously now completes cleanly at 50s with a correct persisted reply.
+
+### Real bug — a genuine client-side crash from a Laravel/JS type mismatch
+Laravel's `decimal:6` cast (`ChatMessage.cost`) serializes to a JSON **string** (`"0.016709"`), not a
+number. The new token/cost display UI called `.toFixed()` directly on it, which throws in JS on a
+string — a real "Application error" crash, and not specific to the one chat it was first seen in; it
+would have hit *any* chat with a real persisted cost the moment it was opened. Fixed by coercing with
+`Number(...)` at every usage site; `ChatMessage.cost`'s type now correctly reflects `string`, not
+`number`, so this can't silently regress.
+
+### Real bug — OpenAI streaming responses can report zero cost despite real usage (not yet fixed)
+Found while reviewing a real 3-model compare turn: Gemini 3.1 Pro and Claude Sonnet 5 both tracked cost
+correctly (Claude hit its 4096-token output cap and stopped there, which is expected/normal); GPT-5.6
+Terra generated **18,025 characters** — more than the other two combined — but persisted with
+`prompt_tokens: 0, completion_tokens: 0, cost: 0.000000`. Root cause, confirmed by reading
+`vendor/laravel/ai/src/Gateway/OpenAi/Concerns/HandlesTextGeneration.php`: usage is only captured on a
+`response.completed` SSE event; a response that gets cut off before a clean finish sends
+`response.incomplete` instead, which the library doesn't handle for usage extraction at all (text still
+streams through fine via a separate event type — only the usage/cost tracking silently comes back
+empty). Net effect: real GPT-5.6 Terra usage that isn't being billed or counted anywhere. **Deferred at
+the user's request** — recommended fix (not yet built) is a defensive fallback in our own `then()`
+callbacks: when a response has real generated text but literally zero usage (a combination that
+shouldn't legitimately happen otherwise), estimate tokens from content length and tag the message's
+`metadata` with `estimated_usage: true` so exact vs. estimated costs stay distinguishable. Avoided
+patching the vendor SDK directly for the same reason this codebase avoids it everywhere else — patches
+under `vendor/` get silently wiped on the next `composer update laravel/ai`.
+
+### R2 public URL — finally wired up
+CEO enabled R2.dev public access and connected a custom domain, `storage.alveta.ai`. Verified it serves
+real objects correctly, set `AWS_URL=https://storage.alveta.ai` in chat-service's real `.env`
+(`config/filesystems.php` already read `env('AWS_URL')`, just never had a value), and backfilled all 11
+existing `file_attachments.storage_url` rows still pointing at the old unusable raw R2 API endpoint.
+Browser-facing image/file previews work correctly now; AI analysis was never affected either way (that
+path always fetched bytes server-side via the authenticated SDK, not this URL).
+
+### Test-data cleanup
+Several sessions from live debugging this session (direct `curl` reproduction of the bugs above) had
+been created under the real user's account rather than a separate test account — a mistake. Identified
+and deleted the 6 unambiguous test sessions, and removed one duplicate diagnostic message that had been
+added into the user's own real session during investigation, preserving their 2 genuine messages there.
+
+---
+
+## 2026-08-19 Session (cont'd) — Private chat + compare-mode reorder/dismiss, plus a critical scheduler bug found live
+
+### Critical bug — wallet/subscription/payment schedulers had zero commands registered in production
+Found while researching the reuse pattern for the new private-chat expiry job.
+`php artisan schedule:list` inside the running `wallet-scheduler`/`subscription-scheduler`/
+`payment-scheduler` containers all showed **"No scheduled tasks have been defined"**, despite each
+container running `schedule:work` continuously and each service's `routes/console.php` containing real
+`Schedule::command(...)` calls. Root cause: none of the four services' `bootstrap/app.php` passed
+`commands: __DIR__.'/../routes/console.php'` into `withRouting()`, so Laravel 12 never actually loaded
+that file — `Application::configure()`'s automatic `withCommands()` only registers
+`app/Console/Commands` for class discovery, it does not execute `routes/console.php`. **In practice this
+means wallet reservation reconciliation, subscription renewal processing, and bKash reconciliation have
+likely never run automatically in production before today.** Fixed by adding the `commands:` param to
+`wallet-service`, `subscription-service`, `payment-service`, and `chat-service`'s `bootstrap/app.php`.
+Verified live post-deploy: all four now list their real commands with correct "Next Due" times.
+
+### Related bug found during the same fix — chat-service had no `config/cache.php` at all
+Surfaced only once the new `chat-scheduler` container tried `schedule:list`: `SQLSTATE[42P01]:
+Undefined table: cache_locks`. chat-service was missing `config/cache.php` entirely (unlike every other
+service), so despite `.env` setting `CACHE_DRIVER=redis`, cache resolution had nothing wiring that env
+var to `cache.default` and fell back to a database-backed lock whose table was never migrated. Fixed by
+adding `config/cache.php` (mirrors wallet-service's) plus a `'cache'` Redis connection (DB index 1, to
+avoid colliding with the existing default-connection keys) in `config/database.php`. Verified live after
+rebuild: `schedule:list` now shows a correct 5-minute "Next Due".
+
+### Private chat (new feature)
+Toggle in the empty-chat composer (default off) with a duration picker (1h/3h/6h/24h, default 1h).
+Privacy is fixed at creation — `PATCH /sessions/{id}` structurally `prohibited`-rejects `is_private`/
+`expires_at`/`private_duration_minutes` (real 422, not a silent no-op) — so nothing can convert an open
+chat to private or vice versa mid-conversation. Private sessions render a distinct neutral-gray
+`.incognito` palette (chat area only — sidebar stays normal theme) and show a persistent clock icon +
+"deletes in…" tooltip in the session list. A new `chat:expire-private-sessions` command (new
+`chat-scheduler` container, `everyFiveMinutes()`) soft-deletes any private session past its `expires_at`
+— reuses the same `SoftDeletes` mechanism `SessionController::destroy()` already had. All of the above
+verified live end-to-end: create → correct `expires_at`, `PATCH` with a privacy field → `422`, manually
+expiring a session in Postgres → the command soft-deletes it and it disappears from `GET /sessions`.
+
+### Compare-mode: drag-to-reorder + "not preferred" dismiss (new feature)
+Compare cards (`@dnd-kit/core`+`sortable`+`utilities`) are now reorderable by mouse or touch via a small
+grip handle — deliberately not the whole card, so the row's horizontal scroll/swipe still works on
+mobile. Each card has a dismiss ("not preferred") button: removes the card from view and drops that
+model from the active comparison going forward (not a permanent ban — re-adding it via the existing "+"
+picker works normally, since `compareModelIds` is derived fresh from state every render). Dismissing the
+*primary* card promotes the next remaining model to primary rather than leaving it stuck; dismissing down
+to one model turns compare mode off automatically. Two previously-duplicated card-grid render paths
+(persisted messages vs. live SSE turns, which key models by two different id spaces — `AiModel.id` UUID
+vs. `AiModel.model_id` provider string) now both go through the same `CompareCard`/`CompareCardGroup`
+components, normalizing to the UUID before touching shared state. One real bug caught in post-deploy code
+review (no browser-automation tool available in this environment to catch it live): the drag-opacity
+effect used a plain `data-[dragging=true]:opacity-50` selector on a child div, but the `data-dragging`
+attribute was only ever set on the parent wrapper — Tailwind's data-attribute variant only reads the
+element's own attributes, not an ancestor's. Fixed with `group`/`group-data-[dragging=true]`.
+
+**Not yet manually verified in a browser** (no browser-automation tool in this environment): actual
+mouse-drag reordering, touch/swipe behavior, and the dismiss/re-select flow. Backend and all wiring were
+verified by direct API testing and code review; a manual pass in the actual UI is still worth doing.
+
+---
+
+## 2026-08-20 Session — Rebrand to Alveta.ai, one-click new chat, welcome popup, landing page
+
+Four bundled requests, planned together via Plan Mode, all shipped this session. Also fixed the
+"Google sign-in gets stuck on Signing in…, a reload lands you in the app" bug reported this session
+(root cause: `useFirebaseAuth.ts`'s `signOut(auth)` — pure Firebase-side cleanup, not needed for our
+own JWT-based auth — was `await`ed *after* the session was already fully persisted to localStorage;
+if that Firebase call hung, which it's known to do under third-party-cookie blocking or certain
+extensions, the button's loading state never cleared and navigation never fired even though the user
+was already logged in — a reload picked up the already-valid session immediately. Fixed by making
+that cleanup call fire-and-forget). Investigated a reported Google-signup failure for one specific
+email — no user row, no social-account row, no logs, no Sentry trace exist for that attempt anywhere
+in the stack, which points to a client-side/popup-blocked failure (e.g. an in-app/embedded browser
+that Google actively blocks for OAuth) that never reached our backend at all; nothing further to fix
+in code without knowing the device/browser involved.
+
+### Rebrand: AI ChatHub → Alveta.ai
+New `Logo` component (`frontend/src/components/Logo.tsx`) built from the supplied `Logo.svg` — the
+wordmark's hardcoded `fill="#262626"` was switched to `currentColor` so it can render on both the
+app's light surfaces and the landing page's dark hero, while the icon mark's gradient stays as-authored
+since it already works on any background. Added `frontend/src/app/icon.svg` (Next.js auto-detects this
+as the favicon) and real `openGraph`/`icons`/`metadataBase` metadata that didn't exist before at all.
+Swapped every user-visible "AI ChatHub" string across the whole stack: sidebar, login/register pages,
+all notification-service email templates and subjects (welcome/receipt/renewal-failed), plus several
+inline-HTML email strings in auth-service (verify/reset/email-change) and payment-service (top-up
+receipts) that a first-pass grep for the Blade templates alone had missed. `MAIL_FROM_NAME` in
+auth-service/notification-service was also fixed to match the `noreply@mg.alveta.ai` sending domain
+that was already live — previously said "AI ChatHub" despite the domain already being `alveta.ai`.
+`APP_NAME`/`composer.json`/`package.json` names updated across all 9 services for consistency.
+Deliberately left untouched: the live Firebase project ID (`aichathub-ca2c2` — renaming means standing
+up a new Firebase project from scratch, all risk for zero user-visible benefit), Docker
+network/container names, and the `aichathub-invoices` S3 bucket name — all internal identifiers only.
+
+### One-click "New chat" + private-chat caret
+"+ New chat" previously navigated to an empty screen that still required picking a model (already
+defaulted, but still an explicit click) and clicking a *second* "New chat" button. `chat/page.tsx` now
+auto-creates the session the instant it sees no active session and models have loaded, reusing the
+exact same `createSession` mutation and the same "first available model" default that already existed
+— no new "default model" concept was invented, none exists on `AiModel` today. Extracted the shared
+"fetch models + pick a default" logic into `frontend/src/hooks/useAvailableModels.ts` so the sidebar and
+the chat page read one React Query cache entry instead of two independent fetches. Private chat (whose
+privacy must be fixed at creation time, confirmed in the prior session's work) needed a deliberate step
+before creation, so it moved to a small caret next to "+ New chat" — a new `Popover` primitive
+(`frontend/src/components/ui/Popover.tsx`, `@radix-ui/react-popover`, following the existing `Dialog.tsx`
+wrapper pattern) opens the same toggle+duration UI that used to gate the plain empty state.
+
+### Welcome popup for new users
+No signal for "is this a new user" existed for the email/password login path at all (only Google
+sign-in returned `is_new_user`), and no persisted "has this user seen it" flag existed anywhere. Added
+a nullable `welcome_seen_at` timestamp to auth-service's `users` table and a new
+`POST /api/v1/auth/welcome-seen` endpoint. No separate "new user" signal was needed: since
+registration doesn't auto-login (stays `pending_verification` until email verification), a genuinely
+new account's *first successful login of any kind* is exactly the moment that field is still null.
+Found and fixed a real, previously-unnoticed bug while wiring this up: `User.php`'s `$fillable` never
+included `last_login_at`/`last_login_ip`, so `LoginController`'s `$user->update(['last_login_at' =>
+..., 'last_login_ip' => ...])` had been silently no-op'ing on every login (Eloquent mass-assignment
+drops non-fillable keys without an exception by default) — last-login tracking had likely never
+actually worked. New `frontend/src/components/onboarding/WelcomeModal.tsx` (built on the existing
+`Dialog` primitive, same pattern as `SettingsModal`) is triggered from `DashboardShell` once per
+account and links to the real Plans tab (`/chat?settings=plans`).
+
+### Landing page (built from two Figma screenshots, not live Figma access — the tool only sees an
+empty JS shell for Figma's app, not the design)
+`/` no longer unconditionally redirects everyone to `/login` — unauthenticated visitors now see a real
+marketing page (`frontend/src/components/landing/*`: `Header`, `Hero`, `FeaturesSection`,
+`PricingSection`, `CtaBanner`, `FaqSection` using a new `@radix-ui/react-accordion`, `Footer`), scoped
+to the app's existing `.dark` violet palette rather than a new one. `PricingSection` fetches real
+`Package` data via `GET /api/v1/packages` — which required a real backend fix, since that route was
+previously wrapped entirely in api-gateway's `auth.jwt.gateway` middleware group despite the downstream
+`PackageController::index()` already being public/user-independent; added an explicit unauthenticated
+`GET /packages` route (registered before the authenticated wildcard, same pattern already used for
+`/auth/login`) so the landing page can show real prices to logged-out visitors. **Real bug caught only
+by checking the actual deployed HTML, not by `tsc`/`build` passing**: the page's initial render was
+gated on `!hasHydrated` (zustand-persist's client-only rehydration flag), which is `false` during
+static generation — the entire static export was shipping with no landing content at all, just the
+`<title>` tag, verified live via `curl` against the real domain (8KB of near-empty HTML). Fixed by
+rendering the landing content optimistically by default and only skipping it once hydration confirms
+the visitor really is authenticated — the rare case of an authenticated visitor briefly seeing the
+marketing page before the redirect fires is far preferable to every anonymous visitor (the whole
+audience this page exists for) seeing a blank page. Re-verified live after the fix: real page size went
+from ~8KB to ~46KB with all real section headings present in the static HTML.
+
+**Not yet manually verified in a browser** (no browser-automation tool in this environment): the
+one-click new-chat flow, the private-chat caret popover, and the welcome popup actually appearing/
+persisting correctly for a real new account. All backend endpoints were verified directly via curl
+(public packages listing, welcome-seen read/write round-trip) and the frontend wiring was verified by
+`tsc --noEmit` + a full `npm run build` plus reading the actual rendered HTML — a manual pass in the
+real UI is still worth doing, same caveat as the previous session's drag-and-drop work.
+
+### Reload-closes-active-chat bug (found and fixed same session)
+Adding the one-click auto-create above introduced a real regression: `activeSessionId` was never
+persisted anywhere (not URL, not localStorage), so a full page reload always reset it to `null` —
+previously that just showed the harmless "pick a model" empty state, but with auto-create in place it
+silently spun up a brand-new session on every reload instead of restoring the one you were on, which
+reads as "my chat closed." Fixed by round-tripping the active session through a `?session=` query param
+on `/chat`: a one-shot restore effect (guarded so it only ever runs once per real page mount, not on
+every later transition to a null `activeSessionId`, which also happens on deliberate "+ New chat"
+clicks) checks the URL param against the real session list on load, and a second effect keeps the URL
+in sync going forward.
+
+### Projects feature — full Phase 1 plan designed, deferred to a future session
+You asked for a Claude/ChatGPT-Projects-style feature (persistent workspaces grouping chats, with
+project-level instructions and files) and supplied a very detailed full spec (also wanting dual memory
+modes, vector-based file retrieval, and auto-extracted "project memory"). Three Explore agents audited
+the existing architecture first, per your own spec's instruction — key finding: **this is genuinely
+greenfield for anything vector/RAG-related**, nothing like that exists anywhere in the codebase today.
+Designed as a phased plan rather than attempting the full spec at once, since real vector infrastructure
+and an LLM-cost-bearing memory-extraction pipeline are decisions that deserve their own explicit buy-in.
+**Phase 1** (fully designed, not yet built) ships real project workspaces using only what already
+exists: `TextChatAgent` already has a dead, unused `?string $systemPrompt` hook that the underlying
+`laravel/ai` package already translates correctly for every provider (confirmed by reading each
+provider's vendor source) — wiring project instructions through it is switching on something that
+already works everywhere, not new per-provider code. Project files reuse the existing, already-working
+PDF/docx text-extraction pipeline. Explicitly deferred to a later Phase 2: real vector-based retrieval,
+auto-extracted memory, and the Default-vs-Project-only memory-mode toggle (which has nothing to
+meaningfully differ on without a cross-project memory system, so building the toggle now would be
+dishonest UI). Full schema/controller/wiring/frontend design is saved at
+`C:\Users\IT News\.claude\plans\velvet-coalescing-rocket.md` — pick this up as the next priority.
+
+### Landing page rebuilt to match the real Figma export (light page, dark hero/CTA cards only)
+The first landing-page pass wrapped the *entire* page in `.dark`, guessing the whole thing was a dark
+theme. A detailed Figma export (exact frame properties: 1392×741 hero, nav bar 1020px/76px/radius-24,
+headline block 780px wide, features section 1200px) showed the real design is a **light page** with
+only the Hero and CTA banner as self-contained dark/colorful inset cards — confirmed against the
+original reference screenshots too (pastel feature cards on white, not dark). Rebuilt: `page.tsx` no
+longer wraps in `.dark`; `Header` moved from a page-wide sticky bar into a rounded, inset pill *inside*
+the Hero card (matches the Figma exactly — no `<DialogTrigger>`-style separate nav); `FeaturesSection`/
+`PricingSection`/`FaqSection`/`Footer` switched from hardcoded `text-white`/`border-white/10` (dark-
+theme assumptions) to light-appropriate neutral colors. The real hero background (`public/Bg.png`,
+provider-logo grid on a violet radial glow) replaced the earlier CSS-approximation gradient.
+
+### Four real bugs found and fixed from live testing (private chat contrast, purchase not updating)
+- **Assistant message bubbles unreadable in private (incognito) chat**: `MessageBubble` (chat/page.tsx)
+  applied `prose-invert` only to the user's own bubble, never the assistant's. Invisible in light mode
+  (where `bg-card` is white, so Tailwind Typography's light-mode default text color is already correct)
+  but broke completely in the incognito palette, where `bg-card` is genuinely dark — the assistant
+  bubble had dark-gray text on a near-black background. Fixed by making every prose text color inherit
+  from the wrapper's own `text-card-foreground`/`text-primary-foreground` instead of a hardcoded
+  `prose-invert` palette, correct in every theme rather than the two combinations that happened to get
+  manually checked before.
+- **Composer text invisible in private chat**: the actual `<input>` had no text-color class at all —
+  silently relying on the browser's default black input text, fine against the normal light composer,
+  invisible against private chat's near-black one. Fixed with an explicit `text-foreground`.
+- **Uploaded images vanish from message history after sending** (confirmed general, not private-chat-
+  specific): the image reaches the model fine (sent as `attachment_ids` and resolved server-side), but
+  nothing persists "this message had this attachment" — `ChatMessage` has no `attachment_ids` field, and
+  `file_attachments.message_id` exists as a column but no code path has ever written it. The composer's
+  preview chip is just local state cleared the moment you hit send. **Not yet fixed** — needs a real
+  backend change (populate `message_id`, expose it in the message API) plus a frontend thumbnail
+  renderer; flagged as a follow-up, not done this session.
+- **Welcome-popup "View plans" opened Settings on the Account tab instead of Plans**: root-caused by
+  reading Radix's actual `useControllableState` source (`@radix-ui/react-use-controllable-state`) —
+  `onOpenChange` only fires for Radix-*internal* interactions (Escape, outside click), never when a
+  parent sets the controlled `open` prop directly, which is the *only* way `SettingsModal` ever opens in
+  this app (no `<DialogTrigger>` anywhere). Its `if (next) setTab(defaultTab)` resync line was dead
+  code — the modal's internal `tab` state got set once at first mount (`'account'`) and never updated
+  again for any later `openSettings(otherTab)` call, unless a user happened to click through tabs
+  manually first (which is why this had gone unnoticed — most entry points land on Account first
+  anyway). This is a real, pre-existing bug, not something the welcome popup introduced — it was just
+  the first entry point to request a non-default tab on the modal's very first-ever open. Fixed with a
+  `useEffect` that resyncs `tab` to `defaultTab` on every transition to `open === true`.
+- **Purchasing a plan left chat unusable until a manual reload**: `PlansView.tsx`'s `subscribe`/
+  `changePlan` mutations and `checkout-callback/page.tsx`'s post-payment verification all invalidated
+  `['subscription']` and `['wallet']` on success but never `['models']` — so `useAvailableModels()` kept
+  serving the pre-purchase model list from React Query's cache, and chat access (which depends on there
+  being at least one available model) didn't reflect the new plan. A reload "fixed" it only because a
+  full page load creates a brand-new query client from scratch, not because anything was actually
+  invalidated. Fixed by adding `['models']` to the invalidation list in all three places.
+
+---
+
+## 2026-08-21 Session — Welcome Screen, Projects (grouping), chat composer redesign, more live bugs found
+
+Large batch built from a very detailed Figma reference (exact frame measurements given) plus a chat-
+interface reference screenshot (placement only — explicitly not colors, not which features exist).
+
+### Real bugs found and fixed before any of the design work
+- **Assistant reply flashed away and reappeared a second later**: `sendSingle`'s `finally` block cleared
+  the streaming placeholder (`setStreamingMessages([])`) *before* the messages-list refetch had actually
+  landed — ai-gateway persists the assistant's reply a beat after the stream ends, not synchronously
+  with it, so there was a real gap where neither the streaming bubble nor the newly-persisted message was
+  on screen. `sendCompareTurn` already awaited this same invalidation for its own local-state clear;
+  `sendSingle` just hadn't been given the same fix. Now both `await` the refetch first.
+  - "The loading is just a `...`" — replaced the literal ellipsis placeholder with an actual three-dot
+    bouncing typing indicator (`MessageBubble` gained an `isLoading` prop).
+- **Hero background image looked cropped, "corners lost behind it"**: `Hero.tsx` used `bg-cover`, which
+  crops an image to fill a box of whatever shape it happens to be — since the box's height is content-
+  driven, not locked to `Bg.png`'s native aspect ratio, `bg-cover` was cutting the provider-icon corner
+  decoration off the edges. Switched to `bg-contain` + a solid backdrop color matching the image's own
+  edge tone, so nothing is ever cropped — any letterboxing gap just shows the matching color instead.
+- Wallet balance chip removed from the chat composer per explicit request (still shown elsewhere —
+  Settings > Wallet, and now the Welcome Screen's own top-right chip, a different surface).
+
+### Welcome Screen — replaces the WelcomeModal popup entirely
+New `frontend/src/app/(dashboard)/welcome/page.tsx`, a distinct route rather than a modal or a branch
+inside `chat/page.tsx` (grafting a picker into `chat/page.tsx`'s auto-create branch would fight that
+effect on every empty-session render, not just first login). `(dashboard)/layout.tsx` now redirects
+there instead of opening a modal (`!user.welcome_seen_at && pathname !== '/welcome'`); `welcome_seen_at`
+gets marked on `/welcome`'s mount (no natural "close" gesture on a full page — matches the modal's own
+original "shown = seen" logic). `WelcomeModal.tsx` deleted, nothing else referenced it.
+
+Sidebar extracted out of `DashboardShell` into `frontend/src/components/layout/Sidebar.tsx` so `/welcome`
+and `/chat` share the exact same sidebar instance — only the main content area to its right changes per
+route. `PrivateChatPopover` and `SessionRow` also extracted (both now render in more than one place —
+sidebar caret + Welcome Screen pill; flat chat list + inside each project — real duplication, not
+speculative abstraction). `PricingSection.tsx`'s card markup split into a shared `PricingCard` since the
+Welcome Screen needs a different CTA (route into Settings, not `/register` — this visitor is already
+authenticated) but everything else about the card is identical.
+
+### Projects — grouping foundation (real, not a mockup; fuller design still queued)
+Scope call: the fully-designed Projects plan from last session (instructions injected into the AI's
+system prompt, project files with text extraction) got split into two increments given how much was
+already in this one pass. **This session shipped the grouping foundation**: `projects` table
+(chat-service, `id/user_id/name/color` + soft-deletes), `project_id` nullable FK on `chat_sessions` (a
+real FK this time, unlike `file_attachments`'s existing precedent — same database, no reason not to
+enforce it), `ProjectController` mirroring `SessionController`'s exact conventions, `SessionController`
+gained `project_id` on create/update (free to move between projects, unlike `is_private` which is locked
+at creation) and an optional `?project_id=` filter on list. Delete semantics matter here too: default
+`orphan` mode detaches a project's chats without deleting them; explicit `mode=delete_sessions` opt-in
+also deletes them — verified live via curl (create → attach a session → confirm ownership rejection on
+a fake project id → orphan-delete → confirm the session survived with `project_id` reset to null).
+Sidebar now has a real collapsible Projects section (create/rename/delete, sessions filtered per
+project) above the existing flat Chats list. **The fuller layer — project instructions wired into
+`TextChatAgent`'s system prompt, project files with text extraction, the internal `project-context`
+endpoint — is still fully designed (see the plan file) and is the next priority, not abandoned.**
+
+### Chat composer redesign
+Matched the *placement pattern* of a reference screenshot, explicitly not its colors or its feature set
+— per direct instruction, this app's real functionality only, nothing faked. Added a small real cost
+indicator next to the model selector (`ModelController::index` on ai-gateway-service didn't serialize
+any pricing fields before — only the admin-only path did; now exposes customer-facing
+`input_rate_per_million`/`output_rate_per_million`/`currency` only, never the `provider_*`/
+`markup_percentage` internal-cost fields). Removed the decorative `Sparkles` input overlay and `Mic`
+button (both did nothing). Restyled Attach as a labeled pill. Folded two separate inert "coming soon"
+placeholders (Pin, a Settings2 "more options" button) into one, since the row was gaining a labeled
+Attach pill and didn't need two dead buttons. **Deliberately did not add "reasoning level" or "search"
+pills from the reference** — confirmed no such concept exists anywhere in this codebase, and a pill that
+visibly does nothing is worse than no pill; the reference was for placement, not for inventing features.
+
+### Not yet manually verified in a browser
+Same standing caveat as every UI feature this session (no browser-automation tool in this environment):
+the Welcome Screen's actual on-screen layout/spacing against the Figma reference, the sidebar's Projects
+section interaction, and the composer's new layout. All backend pieces were verified directly via curl;
+`tsc --noEmit` and a full `npm run build` passed before every deploy.
+
+---
+
+## 2026-08-21 Session (cont'd) — Uploaded images never showing again, private-chat contrast, more real bugs
+
+### Real bug — uploaded images (or any attachment) vanished from message history after sending
+Confirmed general, not private-chat-specific, and not new — this has always been true. The file reaches
+the model fine (sent as `attachment_ids`, resolved server-side into the prompt), but nothing ever
+persisted "this message had this attachment": `file_attachments.message_id` existed as a column since
+the very first migration but no code path anywhere had ever written it, and `ChatMessage` had no way to
+expose an attachment back to the frontend even if it had. Fixed end-to-end, verified live via curl
+(uploaded a real test image, sent it in a message, confirmed it came back correctly linked in
+`GET /sessions/{id}/messages`):
+- `ChatServiceClient::appendMessage()` (ai-gateway-service) now accepts and forwards `attachment_ids`;
+  `ChatController::stream()`/`compare()` both pass them through for the user's turn.
+- `ChatInternalController::appendMessage()` (chat-service) now updates the referenced
+  `file_attachments.message_id` to the newly-created message, inside the same transaction.
+- New `ChatMessage::attachments()` relation, eager-loaded in `MessageController::index()`.
+- `MessageBubble` (frontend) now renders a real thumbnail (or a download chip for non-images) for any
+  message that has attachments, instead of the upload just disappearing the moment you hit send.
+
+### Real bug — private (incognito) chat area was silently transparent to the light theme
+Root-caused precisely: `body { @apply bg-background text-foreground; }` in `globals.css` paints the
+background exactly **once**, at the body level, using whichever `--background` was in scope there (the
+default light value). `.incognito` is applied much further down the tree, on the chat page's own root
+div — a descendant redefining a CSS custom property can never retroactively repaint an ancestor that
+already resolved its background. Since nothing between `.incognito` and the visible content ever
+explicitly applied `bg-background` itself, the whole main content area was always silently showing
+through to the light page background regardless of the private theme — text correctly picked up
+`.incognito`'s light foreground colors (meant for a dark backdrop), so light-on-light text was nearly
+invisible. This had been true the entire time private chat existed, just not very visible until the
+richer empty-state content (below) gave it something substantial to render. Fixed by explicitly applying
+`bg-background text-foreground` on the chat page's own root wrapper, inside the `.incognito` scope, so
+the variable redefinition actually gets painted with instead of just silently sitting unused.
+
+### Chat page empty-state redesign (before your first message only)
+Per a third reference image (the real Alveta color/positioning authority, vs. an earlier reference used
+only for feature *placement*): added a top bar — a "Private Chat" pill (same `PrivateChatPopover` the
+sidebar/Welcome Screen already use) plus the wallet balance chip — shown only in the empty, pre-message
+state, not inside the composer itself (which stays balance-free per the earlier explicit request).
+Replaced the bare "Say hello to get started" placeholder with a "How can I help you?" heading, four
+quick-action pills (pre-fill a starting prompt), and four suggested questions (send immediately on
+click, since they're complete prompts rather than categories). Composer's Attach button reverted from a
+labeled pill back to icon-only, and the "⋯" overflow placeholder dropped — neither matches the Alveta
+reference, which uses a tighter icon-only row.
+
+### More real bugs found and fixed from live screenshots
+- **Response streaming placeholder flashed away and reappeared**: `sendSingle`'s `finally` block cleared
+  the streaming bubble before the persisted message had actually landed (ai-gateway persists a beat after
+  the stream ends, not synchronously) — `sendCompareTurn` already awaited this correctly, `sendSingle`
+  just hadn't gotten the same fix. Replaced the plain `...` loading text with a real three-dot bouncing
+  indicator.
+- **Hero background image looked cropped**: `bg-cover` was cropping `Bg.png` to fill a content-driven box
+  of whatever shape it happened to be, cutting the provider-icon decoration off the edges — switched to
+  `bg-contain` + a solid backdrop color matching the image's own edge tone, so nothing is ever cropped.
+- **CTA banner too small and washed out**: widened to the exact Figma spec (1200px, was 1024px) and the
+  gradient switched from a translucent low-opacity tint to the fully-saturated violet-to-pink the
+  reference actually shows.
+- **Feature-card scroll-stack effect**: the right column's cards were `position: sticky` (stacking
+  correctly on scroll) but the left text column had no sticky positioning at all, so it just scrolled
+  away normally instead of staying pinned for the same scroll-through — now sticky too.
+- **Sidebar never got its own scrollbar**: the outer shell used `min-h-screen` (a floor, not a cap), so a
+  sidebar taller than the viewport (many chats) just grew the *whole page* past 100vh and the page itself
+  scrolled — the "+ New chat" button and the user row at the bottom scrolled away with everything else
+  instead of staying fixed. Changed to `h-screen` (a real cap), so `Sidebar`'s own middle `nav` (already
+  `flex-1 overflow-y-auto`) is what scrolls instead, keeping the header/footer fixed as intended.
+- **Compare-mode toggle nearly invisible when active, in private chat only**: the knob was hardcoded
+  `bg-white`; the active track uses `bg-primary`, which is a saturated violet in the normal theme (white
+  knob = strong contrast) but a deliberately desaturated *light* gray in the incognito palette (white
+  knob on light gray ≈ invisible). Knob now uses `primary-foreground` when active — already correctly
+  defined to contrast against `bg-primary` in both palettes — leaving the inactive-state white knob
+  unchanged (it was already fine against the dark inactive track).
+- **Cost commented out under responses, tokens now color-coded**: per explicit request — the per-message
+  cost line is commented out (not deleted, one-line to restore), and in/out token counts now render in
+  distinct colors (`text-info`/`text-success`) instead of one flat gray string.
+- **Clipboard image paste**: pasting an image (screenshot, copied file) directly into the composer now
+  uploads it the same way the file-picker does — previously only worked via the Attach button, paste was
+  silently ignored.
+
+### Investigated (not built): generating downloadable Excel/PDF files from chat
+Live-tested the user's exact request against real Claude Sonnet 5 through our actual API — it responds
+with a full Python (`openpyxl`/`reportlab`) script for the user to run themselves, not a file, because a
+raw model API call has no code-execution environment behind it (that's what ChatGPT/Claude's own
+consumer *apps* provide, not something `laravel/ai` or the underlying provider chat-completion APIs give
+for free). Confirmed `laravel/ai` does have a real, ready-to-use `Tool`/`HasTools` framework already
+installed as a dependency — `TextChatAgent` just never implements it. Buildable path (structured tool
+call → PHP with PhpSpreadsheet/a PDF library builds the real file → same R2 storage as uploads → real
+download link) is fully designed in the plan file. User said "will do eventually later" — queued, not
+built this session.
 
 ---
 

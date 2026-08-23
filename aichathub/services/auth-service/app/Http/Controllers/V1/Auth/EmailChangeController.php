@@ -77,7 +77,7 @@ class EmailChangeController extends Controller
                     ->subject('Confirm your new email address')
                     ->html("
                         <h2>Confirm your new email address</h2>
-                        <p>Hi {$name}, click below to confirm <strong>{$newEmail}</strong> as your new AI ChatHub sign-in email.</p>
+                        <p>Hi {$name}, click below to confirm <strong>{$newEmail}</strong> as your new Alveta.ai sign-in email.</p>
                         <p>
                             <a href='{$verifyUrl}'
                                style='background:#4F46E5;color:white;padding:12px 24px;

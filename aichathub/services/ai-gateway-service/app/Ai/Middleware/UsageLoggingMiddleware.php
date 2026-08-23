@@ -36,6 +36,10 @@ class UsageLoggingMiddleware
             return;
         }
 
+        $promptTokens     = $response?->usage?->promptTokens ?? 0;
+        $completionTokens = $response?->usage?->completionTokens ?? 0;
+        $cost             = $this->calculateCost($model, $promptTokens, $completionTokens);
+
         DB::table('usage_logs')->insert([
             'id'                 => (string) Str::uuid(),
             'user_id'            => $this->userId,
@@ -43,15 +47,30 @@ class UsageLoggingMiddleware
             'model_id'           => $model->id,
             'operation_type'     => 'chat',
             'status'             => $status,
-            'prompt_tokens'      => $response?->usage?->promptTokens ?? 0,
-            'completion_tokens'  => $response?->usage?->completionTokens ?? 0,
-            'total_tokens'       => ($response?->usage?->promptTokens ?? 0) + ($response?->usage?->completionTokens ?? 0),
-            'estimated_cost'     => 0,
-            'actual_cost'        => 0,
+            'prompt_tokens'      => $promptTokens,
+            'completion_tokens'  => $completionTokens,
+            'total_tokens'       => $promptTokens + $completionTokens,
+            'estimated_cost'     => $cost,
+            'actual_cost'        => $cost,
             'currency'           => 'USD',
             'duration_ms'        => (int) ((microtime(true) - $startedAt) * 1000),
             'error_message'      => $error,
             'created_at'         => now(),
         ]);
+    }
+
+    // Mirrors CostTrackingMiddleware::calculateCost() — this is the same request's
+    // usage being logged for reporting, so it must resolve to the same figure the
+    // wallet was actually debited, not an independent estimate.
+    private function calculateCost(AiModel $model, int $promptTokens, int $completionTokens): float
+    {
+        $pricing = $model->activePricing();
+
+        if (! $pricing || $pricing->pricing_type !== 'token_based') {
+            return 0.0;
+        }
+
+        return ($promptTokens / 1_000_000 * (float) $pricing->input_rate_per_million)
+             + ($completionTokens / 1_000_000 * (float) $pricing->output_rate_per_million);
     }
 }

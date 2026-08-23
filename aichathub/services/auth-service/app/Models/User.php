@@ -24,6 +24,14 @@ class User extends Authenticatable implements JWTSubject
         'preferred_currency',
         'avatar_url',
         'email_verified_at',
+        'welcome_seen_at',
+        // Were missing here despite LoginController/FirebaseAuthController already
+        // calling $user->update(['last_login_at' => ..., 'last_login_ip' => ...]) —
+        // Eloquent mass-assignment silently drops any key not in $fillable (no
+        // exception by default), so those two columns were never actually being
+        // persisted on login.
+        'last_login_at',
+        'last_login_ip',
     ];
 
     protected $hidden = [
@@ -35,6 +43,7 @@ class User extends Authenticatable implements JWTSubject
         return [
             'email_verified_at' => 'datetime',
             'last_login_at'     => 'datetime',
+            'welcome_seen_at'   => 'datetime',
             'deleted_at'        => 'datetime',
             'password'          => 'hashed',
         ];

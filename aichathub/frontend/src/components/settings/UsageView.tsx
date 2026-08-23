@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
-import { cn, formatCurrency, formatDate, formatNumber } from '@/lib/utils'
+import { cn, formatPreciseCurrency, formatDate, formatNumber } from '@/lib/utils'
 import type { UsageLogEntry, UsageSummary } from '@/types'
 
 const PERIODS = [
@@ -70,7 +70,7 @@ export function UsageView() {
             {summaryLoading ? (
               <Skeleton className="h-9 w-32" />
             ) : (
-              <p className="text-3xl font-bold">{formatCurrency(summary?.totals.cost ?? 0)}</p>
+              <p className="text-3xl font-bold">{formatPreciseCurrency(summary?.totals.cost ?? 0)}</p>
             )}
           </CardContent>
         </Card>
@@ -110,7 +110,7 @@ export function UsageView() {
                       <td className="py-2 text-right">{formatNumber(m.prompt_tokens)}</td>
                       <td className="py-2 text-right">{formatNumber(m.completion_tokens)}</td>
                       <td className="py-2 text-right">{formatNumber(m.total_tokens)}</td>
-                      <td className="py-2 text-right">{formatCurrency(m.cost)}</td>
+                      <td className="py-2 text-right">{formatPreciseCurrency(m.cost)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -152,7 +152,7 @@ export function UsageView() {
                       <td className="py-2">{log.model?.name ?? '—'}</td>
                       <td className="py-2 capitalize text-muted-foreground">{log.operation_type.replace('_', ' ')}</td>
                       <td className="py-2 text-right">{formatNumber(log.total_tokens)}</td>
-                      <td className="py-2 text-right">{formatCurrency(log.actual_cost)}</td>
+                      <td className="py-2 text-right">{formatPreciseCurrency(log.actual_cost)}</td>
                     </tr>
                   ))}
                 </tbody>

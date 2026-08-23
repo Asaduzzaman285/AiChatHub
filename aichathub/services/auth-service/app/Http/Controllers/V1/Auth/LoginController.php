@@ -78,6 +78,22 @@ class LoginController extends Controller
             'is_admin'           => (bool) $admin,
             'admin_role'         => $admin?->role,
             'admin_permissions'  => $admin?->permissions ?? [],
+            'welcome_seen_at'    => $user->welcome_seen_at,
         ]);
+    }
+
+    /**
+     * POST /api/v1/auth/welcome-seen — marks the one-time post-login welcome popup as
+     * dismissed so it doesn't reappear. No request body; the authenticated user is
+     * taken from the JWT, same as me().
+     */
+    public function welcomeSeen(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user->welcome_seen_at) {
+            $user->update(['welcome_seen_at' => now()]);
+        }
+
+        return response()->json(['welcome_seen_at' => $user->welcome_seen_at]);
     }
 }

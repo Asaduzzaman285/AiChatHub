@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils'
 import type { ButtonHTMLAttributes } from 'react'
+import { forwardRef } from 'react'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'destructive'
@@ -12,9 +13,14 @@ const variants: Record<NonNullable<ButtonProps['variant']>, string> = {
   destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
 }
 
-export function Button({ variant = 'primary', className, disabled, ...props }: ButtonProps) {
-  return (
+// forwardRef matters beyond convention here — Radix's `asChild` (DropdownMenuTrigger,
+// Tooltip, etc.) clones this element and attaches its own ref to it to manage
+// popup positioning/focus. Without forwardRef, that ref silently has nowhere to
+// go and the trigger just doesn't open (confirmed live: the chat "+" menu).
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ variant = 'primary', className, disabled, ...props }, ref) => (
     <button
+      ref={ref}
       disabled={disabled}
       className={cn(
         'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none',
@@ -24,4 +30,5 @@ export function Button({ variant = 'primary', className, disabled, ...props }: B
       {...props}
     />
   )
-}
+)
+Button.displayName = 'Button'

@@ -53,11 +53,17 @@ export function useFirebaseAuth() {
 
       const data: AuthResult = await response.json()
 
-      // 3. Persist to Zustand store (handles localStorage via persist middleware)
+      // 3. Persist to Zustand store (handles localStorage via persist middleware) —
+      // the user is fully logged in from this point on.
       setAuth(data.user as never, data.access_token, data.refresh_token)
 
-      // 4. Sign out of Firebase — we use our own JWT from here on
-      await signOut(auth)
+      // 4. Sign out of Firebase — we use our own JWT from here on. Best-effort only:
+      // this call is known to hang under third-party-cookie blocking, flaky networks,
+      // or certain browser extensions, and it must never be able to block navigation
+      // for a user who is already fully authenticated per step 3 above (confirmed live:
+      // an awaited hang here left the button stuck on "Signing in…" indefinitely even
+      // though the session was already valid — a reload was the only way out).
+      signOut(auth).catch(() => {})
 
       return data
     } catch (err: unknown) {

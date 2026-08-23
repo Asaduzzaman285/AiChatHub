@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/notification-service",
-    "description": "AI ChatHub — Notification Service",
+    "name": "alveta/notification-service",
+    "description": "Alveta.ai — Notification Service",
     "type": "project",
     "require": {
         "php": "^8.3",

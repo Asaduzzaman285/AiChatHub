@@ -35,9 +35,9 @@ class SendVerificationEmail implements ShouldQueue
         Mail::send([], [], function ($message) use ($user, $verifyUrl) {
             $message->to($user->email, $user->name)
                 ->from(config('mail.from.address'), config('mail.from.name'))
-                ->subject('Verify your AI ChatHub account')
+                ->subject('Verify your Alveta.ai account')
                 ->html("
-                    <h2>Welcome to AI ChatHub, {$user->name}!</h2>
+                    <h2>Welcome to Alveta.ai, {$user->name}!</h2>
                     <p>Please verify your email address to activate your account.</p>
                     <p>
                         <a href='{$verifyUrl}'

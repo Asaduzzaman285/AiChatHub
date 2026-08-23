@@ -50,10 +50,10 @@ class PasswordResetController extends Controller
                 Mail::send([], [], function ($message) use ($user, $resetUrl) {
                     $message->to($user->email, $user->name)
                         ->from(config('mail.from.address'), config('mail.from.name'))
-                        ->subject('Reset your AI ChatHub password')
+                        ->subject('Reset your Alveta.ai password')
                         ->html("
                             <h2>Password reset requested</h2>
-                            <p>Hi {$user->name}, we received a request to reset your AI ChatHub password.</p>
+                            <p>Hi {$user->name}, we received a request to reset your Alveta.ai password.</p>
                             <p>
                                 <a href='{$resetUrl}'
                                    style='background:#4F46E5;color:white;padding:12px 24px;

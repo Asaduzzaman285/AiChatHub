@@ -1,6 +1,6 @@
 {
-    "name": "aichathub/subscription-service",
-    "description": "AI ChatHub — Subscription Service",
+    "name": "alveta/subscription-service",
+    "description": "Alveta.ai — Subscription Service",
     "type": "project",
     "require": {
         "php": "^8.3",

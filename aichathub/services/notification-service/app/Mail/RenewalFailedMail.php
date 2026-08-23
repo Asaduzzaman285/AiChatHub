@@ -19,7 +19,7 @@ class RenewalFailedMail extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'We couldn\'t renew your AI ChatHub subscription');
+        return new Envelope(subject: 'We couldn\'t renew your Alveta.ai subscription');
     }
 
     public function content(): Content

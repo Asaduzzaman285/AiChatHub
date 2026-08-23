@@ -13,19 +13,27 @@ class ChatSession extends Model
     protected $table = 'chat_sessions';
 
     protected $fillable = [
-        'user_id', 'model_id', 'title', 'status',
+        'user_id', 'model_id', 'project_id', 'title', 'status',
         'message_count', 'total_tokens', 'total_cost',
+        'is_private', 'expires_at',
     ];
 
     protected function casts(): array
     {
         return [
             'total_cost' => 'decimal:6',
+            'is_private' => 'boolean',
+            'expires_at' => 'datetime',
         ];
     }
 
     public function messages()
     {
         return $this->hasMany(ChatMessage::class, 'session_id');
+    }
+
+    public function project()
+    {
+        return $this->belongsTo(Project::class);
     }
 }

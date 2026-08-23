@@ -42,6 +42,7 @@ Route::post('/auth/firebase', [FirebaseAuthController::class, 'authenticate']);
 Route::middleware('auth.jwt')->group(function () {
     Route::post('/auth/logout',             [LogoutController::class,       'logout']);
     Route::get('/auth/me',                  [LoginController::class,        'me']);
+    Route::post('/auth/welcome-seen',       [LoginController::class,        'welcomeSeen']);
     Route::get('/auth/social',              [SocialAccountController::class,'index']);
     Route::post('/auth/social/google/link', [SocialAccountController::class,'linkGoogle']);
     Route::delete('/auth/social/google',    [SocialAccountController::class,'unlinkGoogle']);

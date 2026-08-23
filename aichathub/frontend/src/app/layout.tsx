@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Inter, Plus_Jakarta_Sans } from 'next/font/google'
 import { Toaster } from 'sonner'
 import { QueryProvider } from '@/lib/query-provider'
+import 'highlight.js/styles/github.css'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-body' })
@@ -10,8 +11,15 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-body' })
 const jakarta = Plus_Jakarta_Sans({ subsets: ['latin'], weight: ['600', '700', '800'], variable: '--font-display' })
 
 export const metadata: Metadata = {
-  title: 'AI ChatHub — Unified AI Platform',
-  description: 'Access all major AI models through one platform with transparent, pay-as-you-go billing.',
+  metadataBase: new URL('https://app.alveta.ai'),
+  title: 'Alveta.ai — All the Best AI Models, One Place',
+  description: 'Access, compare, and use the world\'s leading AI models all from one powerful workspace. Stop jumping between AI tools.',
+  openGraph: {
+    title: 'Alveta.ai — All the Best AI Models, One Place',
+    description: 'Access, compare, and use the world\'s leading AI models all from one powerful workspace.',
+    siteName: 'Alveta.ai',
+    type: 'website',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

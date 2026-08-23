@@ -45,6 +45,34 @@ return [
             'driver' => 'elevenlabs',
             'key'    => env('ELEVENLABS_API_KEY'),
         ],
+        // Same openai-compatible pattern as Perplexity — Alibaba's DashScope
+        // exposes an OpenAI-compatible path for Qwen. International endpoint,
+        // not the mainland-China one (different base URL, different key format).
+        'qwen' => [
+            'driver' => 'openai-compatible',
+            'key'    => env('QWEN_API_KEY'),
+            'url'    => 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+            'models' => [
+                'text' => [
+                    'default'   => 'qwen-plus',
+                    'cheapest'  => 'qwen-flash',
+                    'smartest'  => 'qwen-max',
+                ],
+            ],
+        ],
+        // Moonshot's Kimi API is also OpenAI-compatible.
+        'moonshot' => [
+            'driver' => 'openai-compatible',
+            'key'    => env('MOONSHOT_API_KEY'),
+            'url'    => 'https://api.moonshot.ai/v1',
+            'models' => [
+                'text' => [
+                    'default'   => 'kimi-k2.6',
+                    'cheapest'  => 'kimi-k2.5',
+                    'smartest'  => 'kimi-k3',
+                ],
+            ],
+        ],
     ],
 
     'caching' => [
