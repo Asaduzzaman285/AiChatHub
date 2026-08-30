@@ -10,7 +10,17 @@ import type { User } from '@/types'
 // (dashboard)/layout.tsx's client-side check and the backend's own JWT verification.
 function setSessionCookie() {
   if (typeof document !== 'undefined') {
-    document.cookie = 'has_session=1; path=/; SameSite=Lax'
+    // Explicit 30-day max-age (matches auth-service's jwt.refresh_ttl default of
+    // 43200 minutes) — without it this was a plain session cookie that died the
+    // instant the browser fully closed, while isAuthenticated in localStorage never
+    // expires. That mismatch produced a real bounce loop: page.tsx redirects an
+    // "authenticated" (per localStorage) visitor from / toward /chat, but
+    // middleware.ts's cookie check then immediately bounces /chat to /login since
+    // the cookie was already gone — the homepage flashes for a moment, then dumps
+    // you on /login, with no obvious cause and no fix short of manually clearing
+    // storage. Keeping the cookie's lifetime in sync with the token's real lifetime
+    // closes that gap.
+    document.cookie = 'has_session=1; path=/; max-age=2592000; SameSite=Lax'
   }
 }
 function clearSessionCookie() {

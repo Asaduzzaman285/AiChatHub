@@ -2,7 +2,7 @@
     "masterProcessId": 9,
     "managerProcessId": 10,
     "state": {
-        "appName": "AI ChatHub Chat Service",
+        "appName": "Alveta.ai Chat Service",
         "host": "0.0.0.0",
         "port": "8000",
         "workers": 2,
@@ -199,7 +199,7 @@
                 ".env"
             ],
             "garbage": 50,
-            "max_execution_time": 30,
+            "max_execution_time": 300,
             "state_file": "\/var\/www\/storage\/logs\/octane-server-state.json"
         }
     }

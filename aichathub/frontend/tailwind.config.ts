@@ -68,6 +68,22 @@ const config: Config = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      keyframes: {
+        // Percentage `top` (not transform), on an absolutely-positioned element inside
+        // a full-height track — resolves correctly against the real container height
+        // regardless of viewport size, unlike a fixed-pixel translateY would.
+        // Opacity fades in/out alongside the position so the loop resets while
+        // invisible instead of an abrupt visible snap from bottom back to top.
+        'travel-line': {
+          '0%':   { top: '-25%', opacity: '0' },
+          '10%':  { opacity: '1' },
+          '85%':  { opacity: '1' },
+          '100%': { top: '100%', opacity: '0' },
+        },
+      },
+      animation: {
+        'travel-line': 'travel-line 4s linear infinite',
+      },
     },
   },
   plugins: [require('@tailwindcss/typography')],

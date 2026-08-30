@@ -311,12 +311,42 @@ services:
 
   # Malware scanning for FileAttachmentController::upload() — internal-only, no
   # published port. Official image ships freshclam auto-updates for the virus DB.
+  # CLAMD_CONF_* env vars are required — confirmed live that this image does NOT
+  # enable a TCP listener by default (only the unix socket, which ClamAvScanner.php
+  # never uses). Without these, clamd starts and freshclam updates fine, but
+  # ClamAvScanner's TCP connection gets "Connection refused" — every upload then
+  # fails closed with "scanning temporarily unavailable". Confirmed broken in
+  # production for 5 days before this fix (container ran "healthy"-looking the whole
+  # time except for the `unhealthy` healthcheck status, which went unnoticed).
   clamav:
     image: clamav/clamav:stable
     container_name: aichathub-clamav
     restart: unless-stopped
     networks: [aichathub]
-    mem_limit: 1024m
+    environment:
+      CLAMD_CONF_TCPSocket: 3310
+      CLAMD_CONF_TCPAddr: 0.0.0.0
+    # 1024m was OOM-killing clamd mid-boot while it loaded the default signature set
+    # into memory (confirmed live via dmesg: cgroup OOM killed clamd's PID while its
+    # anon-rss was still climbing past ~584MB and hadn't finished loading) — clamd's
+    # actual working set with the full default database needs more headroom than that.
+    # Host has ample free RAM; this is a generous bump, not a tight fit.
+    mem_limit: 2048m
+    # The image's own baked-in healthcheck (clamdcheck.sh) runs `nc localhost 3310` —
+    # confirmed live that `localhost` resolves to ::1 first in this container's
+    # /etc/hosts, but TCPAddr above only binds IPv4 (0.0.0.0), so the IPv6 attempt
+    # fails and nc never falls back to 127.0.0.1. Functionally harmless (the real
+    # connection path other services use is the hostname "clamav", which resolves
+    # fine and works), but an always-"unhealthy" container is exactly the kind of
+    # ambiguous status that let the original TCP-listener bug hide for 5 days
+    # unnoticed — overriding with an explicit IPv4 check instead of trusting the
+    # image's default.
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc 127.0.0.1 3310 | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 360s
 
   chat-service:
     build: { context: ., dockerfile: infrastructure/docker/php-octane/Dockerfile, args: { SERVICE_DIR: chat-service } }

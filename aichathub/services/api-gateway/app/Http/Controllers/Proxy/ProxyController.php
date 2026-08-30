@@ -60,8 +60,15 @@ class ProxyController extends Controller
             $headers['X-Auth-User-Email'] = $request->user()->email;
         }
 
-        // Disable SSL verify for local docker networking
-        $http = Http::withHeaders($headers)->withoutVerifying();
+        // Disable SSL verify for local docker networking. withoutRedirecting() matters
+        // here too — Guzzle follows redirects by default, so without this, a real
+        // 3xx from a downstream service (e.g. EmailVerificationController's redirect
+        // into the frontend app) would get silently followed and swallowed by THIS
+        // proxy itself: it would fetch the frontend page server-side and hand back
+        // its raw HTML as the "API response" instead of relaying the redirect for the
+        // browser to actually navigate. A generic proxy should always relay upstream's
+        // real response, not decide to follow redirects on the caller's behalf.
+        $http = Http::withHeaders($headers)->withoutVerifying()->withoutRedirecting();
 
         // Stream SSE responses (chat/stream endpoint) get a long timeout for the
         // whole streamed exchange; other routes still get more than Laravel's 30s

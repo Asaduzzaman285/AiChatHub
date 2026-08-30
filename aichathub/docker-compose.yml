@@ -373,13 +373,27 @@ services:
 
   # ─── CHAT SERVICE ─────────────────────────
 
-  # Malware scanning for FileAttachmentController::upload() — internal-only, no
-  # published port. Official image ships freshclam auto-updates for the virus DB.
-  clamav:
-    image: clamav/clamav:stable
-    container_name: aichathub-clamav
-    restart: unless-stopped
-    networks: [aichathub]
+  # No `clamav` service here on purpose — CLAMAV_ENABLED=false in chat-service/.env
+  # for local dev (clamd's resident ~800MB virus DB is heavy on a memory-constrained
+  # dev machine). Production (docker-compose.prod.yml) still runs it with scanning on.
+  # Uncomment below if you need to test scanning locally (also flip CLAMAV_ENABLED=true).
+  # CLAMD_CONF_* vars are required — confirmed live that this image doesn't enable a
+  # TCP listener by default (ClamAvScanner.php connects via TCP, not the unix socket).
+  # mem_limit matters here too — confirmed live in prod that 1024m OOM-kills clamd
+  # mid-boot while it loads the default signature set (needs closer to 2GB headroom).
+  # The image's own healthcheck (`nc localhost 3310`) also false-negatives in-container
+  # since "localhost" resolves ::1 first while TCPAddr only binds IPv4 — see prod
+  # compose's explicit 127.0.0.1 healthcheck override if you want an accurate status
+  # locally too.
+  # clamav:
+  #   image: clamav/clamav:stable
+  #   container_name: aichathub-clamav
+  #   restart: unless-stopped
+  #   networks: [aichathub]
+  #   environment:
+  #     CLAMD_CONF_TCPSocket: 3310
+  #     CLAMD_CONF_TCPAddr: 0.0.0.0
+  #   mem_limit: 2048m
 
   # Octane (Swoole) — same reasoning as ai-gateway-service above; chat-service also has
   # the streaming SSE endpoint (see FileAttachmentController/message streaming) that
@@ -396,7 +410,7 @@ services:
       - ./services/chat-service:/var/www
     env_file:
       - ./services/chat-service/.env
-    depends_on: [postgres, redis, clamav]
+    depends_on: [postgres, redis]
 
   chat-nginx:
     image: nginx:1.25-alpine

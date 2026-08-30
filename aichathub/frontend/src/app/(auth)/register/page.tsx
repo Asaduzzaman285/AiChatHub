@@ -6,6 +6,9 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import { toast } from 'sonner'
+import { Apple, Eye, EyeOff, UserRound } from 'lucide-react'
+import { AuthShell } from '@/components/auth/AuthShell'
 import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
@@ -34,6 +37,8 @@ export default function RegisterPage() {
   const [serverError, setServerError] = useState<string | null>(null)
   const [ambiguous, setAmbiguous] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showPasswordConfirmation, setShowPasswordConfirmation] = useState(false)
 
   useEffect(() => {
     if (isAuthenticated) router.replace(postLoginPath(user))
@@ -60,108 +65,170 @@ export default function RegisterPage() {
 
   if (success) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="text-center space-y-3 max-w-sm">
+      <AuthShell>
+        <div className="relative max-w-sm space-y-3 text-center">
           <div className="text-4xl">📬</div>
-          <h2 className="text-xl font-semibold">Check your email</h2>
+          <h2 className="text-xl font-semibold text-foreground">Check your email</h2>
           <p className="text-sm text-muted-foreground">
             We&apos;ve sent a verification link to your email address. Click it to activate your account.
           </p>
           <Link href="/login" className="text-sm text-primary hover:underline">Back to sign in</Link>
         </div>
-      </div>
+      </AuthShell>
     )
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md space-y-6">
-
-        <div className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight">Create account</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Get started with Alveta.ai</p>
+    <AuthShell>
+      <div className="relative w-full max-w-[420px]">
+        <div className="flex flex-col items-center text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+            <UserRound className="h-5 w-5 text-primary" />
+          </div>
+          <h1 className="mt-2 text-xl font-semibold text-foreground">Create a new account</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Start your journey with us</p>
         </div>
 
-        <GoogleSignInButton label="Sign up with Google" mode="signup" />
+        <div className="mt-3.5 grid grid-cols-2 gap-3">
+          <GoogleSignInButton label="Google" mode="signup" />
+          {/* Same honest placeholder as the login page — no real Apple auth backend,
+              and no real Apple brand-logo asset (lucide's "Apple" is the fruit glyph). */}
+          <button
+            type="button"
+            onClick={() => toast('Apple sign-in isn’t available yet.')}
+            className="flex w-full items-center justify-center gap-2.5 rounded-full border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            <Apple className="h-4 w-4" />
+            Apple
+          </button>
+        </div>
 
-        <div className="relative">
+        <div className="relative my-3.5">
           <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t" />
+            <span className="w-full border-t border-border" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
             <span className="bg-background px-2 text-muted-foreground">or register with email</span>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {serverError && ambiguous && (
-            <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800 space-y-1">
-              <p>{serverError}</p>
-              <p>
-                Check your email for a verification link, or{' '}
-                <Link href="/login" className="font-medium underline">try logging in</Link>{' '}
-                before submitting again — resubmitting with the same email may show &quot;already exists&quot;
-                if it did go through.
-              </p>
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-2.5">
+            {serverError && ambiguous && (
+              <div className="space-y-1 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p>{serverError}</p>
+                <p>
+                  Check your email for a verification link, or{' '}
+                  <Link href="/login" className="font-medium underline">try logging in</Link>{' '}
+                  before submitting again — resubmitting with the same email may show &quot;already exists&quot;
+                  if it did go through.
+                </p>
+              </div>
+            )}
+            {serverError && !ambiguous && (
+              <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{serverError}</div>
+            )}
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">Full Name</label>
+              <input
+                type="text"
+                placeholder="e.g., Jack Smith"
+                {...register('name')}
+                className="w-full rounded-xl border border-input bg-background px-3.5 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
             </div>
-          )}
-          {serverError && !ambiguous && (
-            <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{serverError}</div>
-          )}
 
-          {/* Name */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Full name</label>
-            <input type="text" placeholder="John Doe" {...register('name')}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
-          </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">Email</label>
+              <input
+                type="email"
+                placeholder="e.g., jack@gmail.com"
+                {...register('email')}
+                className="w-full rounded-xl border border-input bg-background px-3.5 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
+            </div>
 
-          {/* Email */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Email</label>
-            <input type="email" placeholder="you@example.com" {...register('email')}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
-          </div>
+            {/* Real field, required by the backend — not in the Figma mockup (which
+                only shows Name/Email/Password), but the account can't be created
+                without it, so it stays, styled to match. */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">Currency</label>
+              <select
+                {...register('currency')}
+                className="w-full rounded-xl border border-input bg-background px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="USD">USD — US Dollar</option>
+                <option value="BDT">BDT — Bangladeshi Taka</option>
+              </select>
+            </div>
 
-          {/* Currency */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Currency</label>
-            <select {...register('currency')}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-              <option value="USD">USD — US Dollar</option>
-              <option value="BDT">BDT — Bangladeshi Taka</option>
-            </select>
-          </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="e.g., sij@ck2025"
+                  {...register('password')}
+                  className="w-full rounded-xl border border-input bg-background px-3.5 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">8+ characters, 1 uppercase, 1 number</p>
+              {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
+            </div>
 
-          {/* Password */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Password</label>
-            <input type="password" placeholder="Min 8 chars, 1 uppercase, 1 number" {...register('password')}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
-          </div>
+            {/* Real field, required by the backend (password confirmation match) — not
+                in the Figma mockup, kept for the same reason Currency is. */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">Confirm password</label>
+              <div className="relative">
+                <input
+                  type={showPasswordConfirmation ? 'text' : 'password'}
+                  placeholder="••••••••"
+                  {...register('password_confirmation')}
+                  className="w-full rounded-xl border border-input bg-background px-3.5 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordConfirmation((v) => !v)}
+                  aria-label={showPasswordConfirmation ? 'Hide password' : 'Show password'}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {showPasswordConfirmation ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              {errors.password_confirmation && (
+                <p className="text-xs text-destructive">{errors.password_confirmation.message}</p>
+              )}
+            </div>
 
-          {/* Confirm Password */}
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Confirm password</label>
-            <input type="password" placeholder="••••••••" {...register('password_confirmation')}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-            {errors.password_confirmation && <p className="text-xs text-destructive">{errors.password_confirmation.message}</p>}
-          </div>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            >
+              {isSubmitting ? 'Signing Up...' : 'Sign Up'}
+            </button>
+          </form>
+        </div>
 
-          <button type="submit" disabled={isSubmitting}
-            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
-            {isSubmitting ? 'Creating account...' : 'Create account'}
-          </button>
-        </form>
-
-        <p className="text-center text-sm text-muted-foreground">
+        <p className="mt-3.5 text-center text-sm text-muted-foreground">
           Already have an account?{' '}
-          <Link href="/login" className="text-primary hover:underline font-medium">Sign in</Link>
+          <Link href="/login" className="font-medium text-primary hover:underline">
+            Sign In
+          </Link>
         </p>
       </div>
-    </div>
+    </AuthShell>
   )
 }

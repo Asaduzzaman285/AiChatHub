@@ -73,14 +73,24 @@ class FileAttachmentController extends Controller
         // let an infected file be read/previewed before the result was known. clamd is
         // a warm daemon (virus DB stays resident), so this stays fast. Fails closed: a
         // scanner error rejects the upload rather than silently skipping the check.
-        $scanResult = $this->scanner->scan($bytes);
-        if ($scanResult !== 'clean') {
-            return response()->json([
-                'message' => $scanResult === 'infected'
-                    ? 'This file was flagged by malware scanning and cannot be uploaded.'
-                    : 'File scanning is temporarily unavailable. Please try again shortly.',
-                'error' => $scanResult === 'infected' ? 'malware_detected' : 'scan_unavailable',
-            ], 422);
+        //
+        // CLAMAV_ENABLED (config('services.clamav_enabled')) — off by default for local
+        // dev: clamd alone needs ~800MB resident for its virus DB, which doesn't fit
+        // alongside the rest of this stack on a memory-constrained dev machine. Real
+        // enforcement stays on for production (.env.production.example sets it true) —
+        // this is a local-resource accommodation, not a security downgrade in prod.
+        $virusScanStatus = 'not_scanned';
+        if (config('services.clamav_enabled')) {
+            $scanResult = $this->scanner->scan($bytes);
+            if ($scanResult !== 'clean') {
+                return response()->json([
+                    'message' => $scanResult === 'infected'
+                        ? 'This file was flagged by malware scanning and cannot be uploaded.'
+                        : 'File scanning is temporarily unavailable. Please try again shortly.',
+                    'error' => $scanResult === 'infected' ? 'malware_detected' : 'scan_unavailable',
+                ], 422);
+            }
+            $virusScanStatus = 'clean';
         }
 
         $userId = $this->authUserId($request);
@@ -102,8 +112,8 @@ class FileAttachmentController extends Controller
             'storage_disk'      => 's3',
             'storage_path'      => $path,
             'storage_url'       => Storage::disk('s3')->url($path),
-            'virus_scan_status' => 'clean',
-            'virus_scan_at'     => now(),
+            'virus_scan_status' => $virusScanStatus,
+            'virus_scan_at'     => $virusScanStatus === 'clean' ? now() : null,
         ]);
 
         return response()->json(['attachment' => $attachment], 201);

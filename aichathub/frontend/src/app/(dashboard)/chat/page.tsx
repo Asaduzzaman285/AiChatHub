@@ -10,7 +10,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import {
   AlertTriangle, ArrowUp, Bot, ChevronDown, Code2, Compass, Download, FileText, FolderClock,
-  GraduationCap, Loader2, Lock, Plus, Sparkles, Upload, User, Wand2, X,
+  Globe, GraduationCap, Loader2, Lock, Plus, Sparkles, Telescope, Upload, User, Wand2, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog'
@@ -53,6 +53,9 @@ const SUGGESTED_QUESTIONS = [
   'Explain a complex topic simply',
 ]
 
+// Matches the backend's own cap (ChatController validates attachment_ids as max:4).
+const MAX_ATTACHMENTS = 4
+
 export default function ChatPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -67,16 +70,25 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingMessages, setStreamingMessages] = useState<StreamingMessage[]>([])
-  const [pendingAttachment, setPendingAttachment] = useState<FileAttachment | null>(null)
+  // Array, not a single object — matches the backend's own cap (ChatController
+  // validates attachment_ids as max:4 in both stream() and compare()).
+  const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Compare mode — a toggle on the same composer rather than a separate view. Off:
-  // activeModelId alone answers. On: activeModelId plus whatever's in
-  // compareExtraModelIds (up to 3 more, 4 total) all answer the same message,
-  // fanned out via /chat/compare (stateless — no session_id, nothing persisted to
-  // chat-service, same as before). Results render inline as their own turn.
-  const [compareMode, setCompareMode] = useState(false)
+  // Deep Think (Anthropic-only extended reasoning) / Web Search — single-model chat
+  // only for now (not sendCompareTurn), gated to only render when the active model's
+  // capabilities say true. Real enforcement is server-side (ChatController::stream()
+  // re-derives both from the model's actual capabilities); this is just UI state.
+  const [deepThink, setDeepThink] = useState(false)
+  const [webSearch, setWebSearch] = useState(false)
+
+  // No separate on/off toggle — compare mode is derived purely from selection count
+  // (see `compareModelIds` below): activeModelId alone answers by default; adding a
+  // 2nd model via the "+" icon means the next send fans out to all selected models
+  // via /chat/compare (stateless — no session_id, nothing persisted to chat-service),
+  // removing back down to 1 reverts to a normal single-model send. Up to 3 extra
+  // models (4 total). Results render inline as their own turn.
   const [compareExtraModelIds, setCompareExtraModelIds] = useState<string[]>([])
   const [isComparing, setIsComparing] = useState(false)
   interface CompareTurn {
@@ -190,6 +202,20 @@ export default function ChatPage() {
       }
     }
 
+    // Reuse an existing empty session instead of creating another one — a session's
+    // title only ever changes away from "New Chat" once a real assistant reply lands
+    // (see ChatInternalController), so without this check, every cold load or
+    // "+ New chat" click on an already-empty session just piled up more permanently
+    // indistinguishable "New Chat" rows in the sidebar (confirmed live). Picks the
+    // most recently updated match if more than one already exists from before this fix.
+    const reusableEmptySession = sessions
+      .filter((s) => s.title === 'New Chat' && s.message_count === 0 && !s.project_id)
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0]
+    if (reusableEmptySession) {
+      setActiveSessionId(reusableEmptySession.id)
+      return
+    }
+
     if (availableModels.length === 0) return
     autoCreatingRef.current = true
     createSession.mutate({ modelId: availableModels[0].id })
@@ -222,16 +248,27 @@ export default function ChatPage() {
   // Was never cleared on session switch — compareTurns is local component state, not
   // keyed by session, so switching chats (or starting a new one) kept showing whatever
   // compare results were left over from whichever session you were just in. Same class
-  // of bug for streamingMessages/pendingAttachment if a switch happens mid-send.
+  // of bug for streamingMessages/pendingAttachments if a switch happens mid-send.
   useEffect(() => {
     setCompareTurns([])
     setStreamingMessages([])
-    setPendingAttachment(null)
+    setPendingAttachments([])
     setDismissedCardKeys(new Set())
   }, [activeSessionId])
 
+  // A toggle enabled for one model shouldn't silently carry over to a model that
+  // doesn't support it — resets on every model switch (covers both the dropdown and
+  // the session-switch effect above, since that also changes activeModelId).
+  useEffect(() => {
+    setDeepThink(false)
+    setWebSearch(false)
+  }, [activeModelId])
+
   const selectedModel = models?.find((m) => m.id === activeModelId) ?? null
 
+  // Appends to the pending list rather than replacing — callers are responsible for
+  // capping how many files they pass in (see handleFileSelect/handlePaste) since the
+  // cap depends on how many slots are already used at call time.
   const uploadAttachment = async (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
@@ -242,7 +279,7 @@ export default function ChatPage() {
       const res = await apiClient.post<{ attachment: FileAttachment }>('/api/v1/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      setPendingAttachment(res.data.attachment)
+      setPendingAttachments((prev) => [...prev, res.data.attachment])
       queryClient.invalidateQueries({ queryKey: ['uploads', 'recent'] })
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -252,11 +289,21 @@ export default function ChatPage() {
 
   const [uploading, setUploading] = useState(false)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = '' // allow selecting the same file again later
-    if (!file) return
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = '' // allow selecting the same file(s) again later
+    if (files.length === 0) return
+
+    const remainingSlots = MAX_ATTACHMENTS - pendingAttachments.length
+    if (remainingSlots <= 0) {
+      toast.error(`You can attach up to ${MAX_ATTACHMENTS} files per message.`)
+      return
+    }
+    if (files.length > remainingSlots) {
+      toast.error(`Only ${remainingSlots} more file${remainingSlots === 1 ? '' : 's'} can be attached (max ${MAX_ATTACHMENTS}).`)
+    }
+
     setUploading(true)
-    await uploadAttachment(file)
+    await Promise.all(files.slice(0, remainingSlots).map(uploadAttachment))
     setUploading(false)
   }
 
@@ -271,6 +318,10 @@ export default function ChatPage() {
     e.preventDefault()
     const file = imageItem.getAsFile()
     if (!file) return
+    if (pendingAttachments.length >= MAX_ATTACHMENTS) {
+      toast.error(`You can attach up to ${MAX_ATTACHMENTS} files per message.`)
+      return
+    }
     setUploading(true)
     await uploadAttachment(file)
     setUploading(false)
@@ -288,7 +339,7 @@ export default function ChatPage() {
   // currently selected model — a fair, apples-to-apples comparison, not each model
   // independently truncated to a different length.
   const contextCeiling = useMemo(() => {
-    if (compareMode && compareModelIds.length >= 2) {
+    if (compareModelIds.length >= 2) {
       const selectedModels = compareModelIds
         .map((id) => availableModels.find((m) => m.id === id))
         .filter((m): m is AiModel => !!m)
@@ -296,7 +347,7 @@ export default function ChatPage() {
       return Math.min(...selectedModels.map((m) => m.context_window ?? DEFAULT_CONTEXT_WINDOW))
     }
     return selectedModel ? selectedModel.context_window ?? DEFAULT_CONTEXT_WINDOW : null
-  }, [compareMode, compareModelIds, availableModels, selectedModel])
+  }, [compareModelIds, availableModels, selectedModel])
 
   const estimatedTokensUsed = useMemo(
     () => (messages ?? []).reduce((sum, m) => sum + estimateTokens(m.content), 0) + estimateTokens(input),
@@ -325,11 +376,11 @@ export default function ChatPage() {
         setActiveModelId(remaining[0])
         setCompareExtraModelIds(remaining.slice(1))
       } else if (remaining.length === 1) {
-        // Only one model would be left — compare mode itself stops making sense.
-        // Fall back to a normal single-model chat with that model as the active one.
+        // Only one model would be left — falls back to a normal single-model chat
+        // with that model as the active one (compareModelIds.length < 2 now, so
+        // compare mode ends on its own, no separate flag to clear).
         setActiveModelId(remaining[0])
         setCompareExtraModelIds([])
-        setCompareMode(false)
       }
     } else {
       setCompareExtraModelIds((prev) => prev.filter((id) => id !== modelId))
@@ -337,7 +388,7 @@ export default function ChatPage() {
   }
 
   const send = async () => {
-    if (compareMode && compareModelIds.length >= 2) {
+    if (compareModelIds.length >= 2) {
       await sendCompareTurn()
     } else {
       await sendSingle()
@@ -351,7 +402,7 @@ export default function ChatPage() {
     const text = (textOverride ?? input).trim()
     if (!text || !activeSession || !selectedModel || isStreaming || uploading) return
 
-    const attachmentIds = pendingAttachment ? [pendingAttachment.id] : undefined
+    const attachmentIds = pendingAttachments.length > 0 ? pendingAttachments.map((a) => a.id) : undefined
     // Real per-model budget (see buildBoundedHistory) — replaces a blind last-30-messages
     // cap with one sized to selectedModel's actual context_window, reserving room for its
     // max_output_tokens and this new message itself.
@@ -360,7 +411,7 @@ export default function ChatPage() {
     const history = buildBoundedHistory(messages ?? [], ceiling, reserve)
 
     setInput('')
-    setPendingAttachment(null)
+    setPendingAttachments([])
     setIsStreaming(true)
     setStreamingMessages([{ role: 'user', content: text }, { role: 'assistant', content: '' }])
 
@@ -384,6 +435,8 @@ export default function ChatPage() {
           session_id: activeSession.id,
           attachment_ids: attachmentIds,
           history,
+          web_search: webSearch,
+          deep_think: deepThink,
         }),
         signal: controller.signal,
       })
@@ -456,7 +509,7 @@ export default function ChatPage() {
     // Was never sent to /chat/compare at all before this — the attachment sat in
     // state looking "attached" (✓ shown) while every model in the fan-out got no
     // image and correctly reported not seeing one.
-    const attachmentIds = pendingAttachment ? [pendingAttachment.id] : undefined
+    const attachmentIds = pendingAttachments.length > 0 ? pendingAttachments.map((a) => a.id) : undefined
     // Same real-budget history-building as sendSingle, but the ceiling is the MINIMUM
     // context window across every model in the fan-out (fair comparison, not each model
     // independently truncated) and the reserve uses the largest max_output_tokens among
@@ -467,7 +520,7 @@ export default function ChatPage() {
 
     const turnId = crypto.randomUUID()
     setInput('')
-    setPendingAttachment(null)
+    setPendingAttachments([])
     setIsComparing(true)
     setCompareTurns((prev) => [
       ...prev,
@@ -853,29 +906,37 @@ export default function ChatPage() {
                 Uploading…
               </div>
             )}
-            {pendingAttachment && !uploading && (
-              <div className="mb-2 inline-flex items-center gap-2 rounded-md border border-border bg-accent/50 px-2 py-1 text-xs">
-                {pendingAttachment.mime_type.startsWith('image/') ? (
-                  <img src={pendingAttachment.storage_url} alt="" className="h-6 w-6 rounded object-cover" />
-                ) : (
-                  <FileText className="h-6 w-6 rounded bg-background p-1 text-muted-foreground" />
-                )}
-                <span className="max-w-[160px] truncate">{pendingAttachment.original_name}</span>
-                <span className="text-green-600">✓</span>
-                <button
-                  type="button"
-                  onClick={() => setPendingAttachment(null)}
-                  className="text-muted-foreground hover:text-foreground"
-                  aria-label="Remove attachment"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+            {pendingAttachments.length > 0 && !uploading && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {pendingAttachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className="inline-flex items-center gap-2 rounded-md border border-border bg-accent/50 px-2 py-1 text-xs"
+                  >
+                    {attachment.mime_type.startsWith('image/') ? (
+                      <img src={attachment.storage_url} alt="" className="h-6 w-6 rounded object-cover" />
+                    ) : (
+                      <FileText className="h-6 w-6 rounded bg-background p-1 text-muted-foreground" />
+                    )}
+                    <span className="max-w-[160px] truncate">{attachment.original_name}</span>
+                    <span className="text-green-600">✓</span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label="Remove attachment"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.txt,.md,.csv,.json,.docx"
               onChange={handleFileSelect}
               className="hidden"
@@ -978,7 +1039,14 @@ export default function ChatPage() {
                             {recentFiles.map((file) => (
                               <DropdownMenuItem
                                 key={file.id}
-                                onSelect={() => setPendingAttachment(file)}
+                                onSelect={() => {
+                                  if (pendingAttachments.some((a) => a.id === file.id)) return
+                                  if (pendingAttachments.length >= MAX_ATTACHMENTS) {
+                                    toast.error(`You can attach up to ${MAX_ATTACHMENTS} files per message.`)
+                                    return
+                                  }
+                                  setPendingAttachments((prev) => [...prev, file])
+                                }}
                               >
                                 {file.mime_type.startsWith('image/') ? (
                                   <img src={file.storage_url} alt="" className="h-6 w-6 shrink-0 rounded object-cover" />
@@ -999,11 +1067,55 @@ export default function ChatPage() {
                     </DropdownMenuContent>
                   </DropdownMenu>
 
+                  {/* Deep Think / Web Search — rendered only when the active model's real
+                      capabilities say true (not merely disabled), matching the established
+                      pattern of not showing UI for features a model doesn't back. Real
+                      enforcement is server-side (ChatController::stream() re-derives both
+                      from the model's actual capabilities); this toggle is just intent. */}
+                  {selectedModel?.capabilities.reasoning && (
+                    <button
+                      type="button"
+                      onClick={() => setDeepThink((v) => !v)}
+                      disabled={isStreaming || isComparing}
+                      aria-pressed={deepThink}
+                      aria-label="Deep Think"
+                      title="Deep Think — extended reasoning"
+                      className={cn(
+                        'flex h-8 w-8 shrink-0 items-center justify-center rounded-full disabled:opacity-50',
+                        deepThink ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      )}
+                    >
+                      <Telescope className="h-4 w-4" />
+                    </button>
+                  )}
+                  {selectedModel?.capabilities.web_search && (
+                    <button
+                      type="button"
+                      onClick={() => setWebSearch((v) => !v)}
+                      disabled={isStreaming || isComparing}
+                      aria-pressed={webSearch}
+                      aria-label="Web Search"
+                      title="Web Search"
+                      className={cn(
+                        'flex h-8 w-8 shrink-0 items-center justify-center rounded-full disabled:opacity-50',
+                        webSearch ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      )}
+                    >
+                      <Globe className="h-4 w-4" />
+                    </button>
+                  )}
+
                   {/* Model icon row — always shows the primary (top-left dropdown's pick)
-                      first. Compare mode adds a "+" to bring in up to 3 more; clicking a
-                      non-primary icon removes it. */}
-                  <div className="flex items-center gap-1">
-                    {compareModelIds.map((id) => {
+                      first. The "+" (always available, no separate toggle) brings in up
+                      to 3 more; selecting a 2nd model starts comparing on the next send,
+                      clicking a non-primary icon removes it and reverts to single-model
+                      once only one remains.
+                      Overlapping avatar-stack styling (matches the Hero mockup's visual
+                      quality) — ring-card, not a hardcoded white ring, so the separation
+                      ring correctly resolves to each theme's own card color (incognito
+                      included) instead of reintroducing the old white-on-dark bug. */}
+                  <div className="flex items-center">
+                    {compareModelIds.map((id, i) => {
                       const m = availableModels.find((mo) => mo.id === id)
                       if (!m) return null
                       const isPrimary = id === activeModelId
@@ -1013,7 +1125,7 @@ export default function ChatPage() {
                           type="button"
                           title={m.name}
                           onClick={() => { if (!isPrimary) toggleCompareExtraModel(id) }}
-                          className={cn('relative', !isPrimary && 'group')}
+                          className={cn('relative', i > 0 && '-ml-2', !isPrimary && 'group')}
                         >
                           <ModelIcon provider={m.provider} className="h-6 w-6 ring-2 ring-card" />
                           {!isPrimary && (
@@ -1024,13 +1136,16 @@ export default function ChatPage() {
                         </button>
                       )
                     })}
-                    {compareMode && compareModelIds.length < 4 && (
+                    {compareModelIds.length < 4 && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
                             aria-label="Add a model to compare"
-                            className="flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary"
+                            className={cn(
+                              'flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary',
+                              compareModelIds.length > 0 && '-ml-2'
+                            )}
                           >
                             <Plus className="h-3.5 w-3.5" />
                           </button>
@@ -1045,52 +1160,16 @@ export default function ChatPage() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
-                    {compareMode && (
+                    {compareModelIds.length >= 2 && (
                       <span className="ml-0.5 text-[11px] text-muted-foreground">{compareModelIds.length}/4</span>
                     )}
                   </div>
 
                   <div className="flex-1" />
 
-                  {/* Compare mode toggle — off: activeModelId alone answers. On: reveals
-                      the "+" above to add up to 3 more models; sending fans out to all of
-                      them via /chat/compare, each response priced independently. */}
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={compareMode}
-                    aria-label="Compare multiple models"
-                    title="Compare multiple models"
-                    onClick={() => setCompareMode((v) => { const next = !v; if (!next) setCompareExtraModelIds([]); return next })}
-                    className={cn(
-                      'relative h-5 w-9 shrink-0 rounded-full transition-colors',
-                      compareMode ? 'bg-primary' : 'bg-muted'
-                    )}
-                  >
-                    {/* Knob color depends on which track it's sitting on, not just a
-                        constant white — bg-primary (the ON track) is a saturated violet
-                        in the normal theme (white knob = good contrast) but a
-                        deliberately desaturated *light* gray in the incognito palette
-                        (white knob on light gray = barely visible, confirmed live).
-                        primary-foreground is already defined to contrast correctly
-                        against bg-primary in both themes, so it's the right token here
-                        — bg-muted (the OFF track) is dark in both light and incognito's
-                        actual problem cases, so white stays correct there unchanged. */}
-                    <span
-                      className={cn(
-                        'absolute top-0.5 h-4 w-4 rounded-full shadow transition-transform',
-                        compareMode ? 'translate-x-4 bg-primary-foreground' : 'translate-x-0.5 bg-white'
-                      )}
-                    />
-                  </button>
-
                   <Button
                     type="submit"
-                    disabled={
-                      compareMode
-                        ? isComparing || !input.trim() || compareModelIds.length < 2
-                        : isStreaming || uploading || !input.trim()
-                    }
+                    disabled={(isStreaming || isComparing) || uploading || !input.trim()}
                     aria-label="Send"
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0"
                   >
@@ -1163,7 +1242,7 @@ function MessageBubble({
         {!isUser && modelName && <p className="text-[11px] text-muted-foreground px-1">{modelName}</p>}
         {/* Was silently lost after send before — the image reached the model fine but
             file_attachments.message_id was never populated by anything, so there was no
-            way to show it again once the composer's local pendingAttachment cleared. */}
+            way to show it again once the composer's local pendingAttachments cleared. */}
         {attachments && attachments.length > 0 && (
           <div className={cn('flex flex-wrap gap-1.5', isUser && 'justify-end')}>
             {attachments.map((a) =>

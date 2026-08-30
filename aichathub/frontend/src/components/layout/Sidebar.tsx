@@ -3,16 +3,18 @@
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import {
-  ChevronDown, ChevronRight, Folder, FolderPlus, LogOut, MessageSquare, Plus,
-  Settings as SettingsIcon, Trash2,
+  ChevronDown, ChevronLeft, ChevronRight, Folder, FolderPlus, LogOut, MessageSquare, Plus,
+  Settings as SettingsIcon, Sparkles, Trash2,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { Logo } from '@/components/Logo'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
 import { SkeletonListItem } from '@/components/ui/Skeleton'
 import { SessionRow } from '@/components/chat/SessionRow'
 import { PrivateChatPopover } from '@/components/chat/PrivateChatPopover'
+import { ModelsPopup } from '@/components/models/ModelsPopup'
 import { useChatSession } from '@/contexts/ChatSessionContext'
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
+import { cn } from '@/lib/utils'
 import type { SettingsTab } from '@/components/settings/SettingsModal'
 
 /** Extracted out of (dashboard)/layout.tsx's DashboardShell so /welcome (a distinct page,
@@ -29,6 +31,7 @@ export function Sidebar({ openSettings, onLogout }: {
     sessions, sessionsLoading, activeSessionId, setActiveSessionId, renameSession, deleteSession,
     projects, projectsLoading, createProject, renameProject, deleteProject,
   } = useChatSession()
+  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapsed()
 
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -103,10 +106,82 @@ export function Sidebar({ openSettings, onLogout }: {
 
   const ungroupedSessions = sessions?.filter((s) => !s.project_id) ?? []
 
+  // Collapsed: an icon-only rail (logo mark, New chat, Models, Settings, avatar) —
+  // the session/project list has no sensible icon-only form (it's text-titled), so it
+  // just hides entirely, same pattern as Slack/Notion's collapsed sidebars.
+  if (collapsed) {
+    return (
+      <aside className="hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-4 sm:flex">
+        <Logo iconOnly className="mb-3 h-6 w-6 text-foreground" />
+
+        <button
+          onClick={() => { setActiveSessionId(null); router.push('/chat') }}
+          aria-label="New chat"
+          title="New chat"
+          className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+
+        <ModelsPopup
+          trigger={
+            <button
+              aria-label="Models"
+              title="Models"
+              className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Sparkles className="h-4 w-4" />
+            </button>
+          }
+        />
+
+        <button
+          onClick={() => openSettings('account')}
+          aria-label="Settings"
+          title="Settings"
+          className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <SettingsIcon className="h-4 w-4" />
+        </button>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={toggleCollapsed}
+          aria-label="Expand sidebar"
+          title="Expand sidebar"
+          className="mb-3 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+          {user?.email?.[0]?.toUpperCase() ?? '?'}
+        </div>
+        <button
+          onClick={onLogout}
+          aria-label="Sign out"
+          title="Sign out"
+          className="mt-1 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+        </button>
+      </aside>
+    )
+  }
+
   return (
-    <aside className="hidden w-64 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
-      <div className="flex items-center gap-2 p-4">
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card sm:flex">
+      <div className="flex items-center justify-between gap-2 p-4">
         <Logo className="h-6 w-auto text-foreground" />
+        <button
+          onClick={toggleCollapsed}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
       </div>
 
       <div className="flex items-center gap-1 px-3 pb-2">
@@ -129,6 +204,31 @@ export function Sidebar({ openSettings, onLogout }: {
             </button>
           }
         />
+      </div>
+
+      {/* Models: hover to preview, not click — the trigger itself is inert (no
+          onClick/href), matching "should not be clickable, appears on hover." */}
+      <div className="px-3 pb-1">
+        <ModelsPopup
+          trigger={
+            <div className="flex cursor-default items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+              <Sparkles className="h-4 w-4" />
+              Models
+            </div>
+          }
+        />
+      </div>
+
+      {/* Settings — its own row now, not buried in the username dropdown (a new
+          user had no reason to expect it there). */}
+      <div className="px-3 pb-2">
+        <button
+          onClick={() => openSettings('account')}
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <SettingsIcon className="h-4 w-4" />
+          Settings
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3">
@@ -267,28 +367,23 @@ export function Sidebar({ openSettings, onLogout }: {
         )}
       </nav>
 
-      <div className="border-t border-border p-3">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                {user?.email?.[0]?.toUpperCase() ?? '?'}
-              </div>
-              <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">{user?.email}</span>
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuItem onClick={() => openSettings('account')}>
-              <SettingsIcon className="h-4 w-4" />
-              Settings
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onLogout}>
-              <LogOut className="h-4 w-4" />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+      {/* Settings now has its own row above — this is just identity + the one
+          remaining action, so a direct button replaces the old single-purpose
+          dropdown (Radix's useControllableState only fires onOpenChange from real
+          user interaction anyway; a dropdown for one item was never buying anything). */}
+      <div className="flex items-center gap-2 border-t border-border p-3">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+          {user?.email?.[0]?.toUpperCase() ?? '?'}
+        </div>
+        <span className="min-w-0 flex-1 truncate text-left text-sm text-muted-foreground">{user?.email}</span>
+        <button
+          onClick={onLogout}
+          aria-label="Sign out"
+          title="Sign out"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
       </div>
     </aside>
   )

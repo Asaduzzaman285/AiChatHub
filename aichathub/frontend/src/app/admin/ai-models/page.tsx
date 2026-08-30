@@ -18,6 +18,19 @@ import type { AdminAiModel } from '@/types'
 const TYPES = ['text', 'image_generation', 'audio_tts', 'audio_stt', 'embedding']
 const PRICING_TYPES = ['token_based', 'flat_per_image', 'character_based', 'per_minute']
 
+// capabilities is a free-form jsonb column server-side (no fixed schema) — these are
+// just the keys the rest of the app actually reads today (ChatController's server-side
+// re-derivation for web_search/reasoning, the customer Models popup for flagship).
+const CAPABILITY_KEYS = [
+  { key: 'vision', label: 'Vision (image input)' },
+  { key: 'file_upload', label: 'File upload / document context' },
+  { key: 'function_calling', label: 'Function calling' },
+  { key: 'streaming', label: 'Streaming responses' },
+  { key: 'web_search', label: 'Web search' },
+  { key: 'reasoning', label: 'Deep Think (Anthropic extended reasoning only — see ChatController)' },
+  { key: 'flagship', label: 'Flagship (shown in the customer "Models" popup\'s top section)' },
+] as const
+
 interface ModelFormState {
   provider: string
   name: string
@@ -26,6 +39,7 @@ interface ModelFormState {
   description: string
   context_window: string
   max_output_tokens: string
+  capabilities: Record<string, boolean>
   pricing_type: string
   provider_input_rate_per_million: string
   provider_output_rate_per_million: string
@@ -37,6 +51,7 @@ function emptyForm(): ModelFormState {
   return {
     provider: '', name: '', model_id: '', type: 'text', description: '',
     context_window: '', max_output_tokens: '',
+    capabilities: { streaming: true },
     pricing_type: 'token_based', provider_input_rate_per_million: '', provider_output_rate_per_million: '',
     provider_flat_rate_per_unit: '', markup_percentage: '30',
   }
@@ -46,6 +61,7 @@ function formFromModel(m: AdminAiModel): ModelFormState {
   return {
     provider: m.provider, name: m.name, model_id: m.model_id, type: m.type, description: m.description ?? '',
     context_window: m.context_window?.toString() ?? '', max_output_tokens: m.max_output_tokens?.toString() ?? '',
+    capabilities: m.capabilities ?? {},
     pricing_type: m.pricing?.pricing_type ?? 'token_based',
     provider_input_rate_per_million: m.pricing?.provider_input_rate_per_million ?? '',
     provider_output_rate_per_million: m.pricing?.provider_output_rate_per_million ?? '',
@@ -76,6 +92,7 @@ function ModelFormDialog({ model, trigger }: { model?: AdminAiModel; trigger: Re
         description: form.description || null,
         context_window: form.context_window ? parseInt(form.context_window, 10) : null,
         max_output_tokens: form.max_output_tokens ? parseInt(form.max_output_tokens, 10) : null,
+        capabilities: form.capabilities,
       }
       if (!model) {
         body.provider = form.provider
@@ -173,6 +190,23 @@ function ModelFormDialog({ model, trigger }: { model?: AdminAiModel; trigger: Re
             <div className="space-y-1.5">
               <Label htmlFor="model-max-output">Max output tokens</Label>
               <Input id="model-max-output" type="number" min="1" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: e.target.value })} />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Capabilities</Label>
+            <div className="space-y-2 rounded-md border border-border p-3">
+              {CAPABILITY_KEYS.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-input accent-primary"
+                    checked={form.capabilities[key] ?? false}
+                    onChange={(e) => setForm({ ...form, capabilities: { ...form.capabilities, [key]: e.target.checked } })}
+                  />
+                  {label}
+                </label>
+              ))}
             </div>
           </div>
 

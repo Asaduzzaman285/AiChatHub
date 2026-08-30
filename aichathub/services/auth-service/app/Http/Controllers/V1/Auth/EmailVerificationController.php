@@ -8,6 +8,7 @@ use App\Models\EmailVerification;
 use App\Models\User;
 use App\Services\NotificationClient;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 
 class EmailVerificationController extends Controller
@@ -17,26 +18,32 @@ class EmailVerificationController extends Controller
     /**
      * GET /api/v1/auth/verify/{token}
      * Verify email address using the token sent by email.
+     *
+     * This link is clicked directly from a real email — the whole point is landing
+     * the user back in the app, not showing them a bare JSON response from the API
+     * domain (confirmed live: that's exactly what was happening before this fix,
+     * since this is a plain API endpoint with no view of its own). Redirects into
+     * frontend_url for the original-registration success/failure paths below; the
+     * email-CHANGE confirmation branch further down is a different flow (the user is
+     * typically already an active, logged-in session mid-account-settings, not
+     * arriving fresh) and is left as JSON, unchanged, since redirecting it to /login
+     * wouldn't make sense.
      */
-    public function verify(string $token): JsonResponse
+    public function verify(string $token): RedirectResponse|JsonResponse
     {
+        $frontendUrl = rtrim(config('services.frontend_url'), '/');
+
         $verification = EmailVerification::where('token', $token)
             ->where('used', false)
             ->with('user')
             ->first();
 
         if (! $verification) {
-            return response()->json([
-                'message' => 'Invalid or expired verification link.',
-                'error'   => 'invalid_token',
-            ], 422);
+            return redirect("{$frontendUrl}/login?verified=0&reason=invalid_token");
         }
 
         if ($verification->isExpired()) {
-            return response()->json([
-                'message' => 'Verification link has expired. Please request a new one.',
-                'error'   => 'token_expired',
-            ], 422);
+            return redirect("{$frontendUrl}/login?verified=0&reason=token_expired");
         }
 
         // An email-change confirmation (see EmailChangeController) — distinct from the
@@ -75,9 +82,7 @@ class EmailVerificationController extends Controller
             $this->notificationClient->send('welcome', $userId, $email, ['name' => $name], "welcome:{$userId}");
         })->afterResponse();
 
-        return response()->json([
-            'message' => 'Email verified successfully. You can now sign in.',
-        ]);
+        return redirect("{$frontendUrl}/login?verified=1");
     }
 
     /**

@@ -208,6 +208,16 @@ export interface AiModel {
     function_calling: boolean
     vision: boolean
     file_upload: boolean
+    // Both optional — most models have neither. Composer toggles (Deep Think, Web
+    // Search) only render when the active model's capabilities say true; see
+    // ChatController::stream()'s own re-derivation of these server-side, which is the
+    // real enforcement boundary, not this flag alone.
+    web_search?: boolean
+    reasoning?: boolean
+    // Admin-controlled grouping for the Models popup ("Flagship Models" vs "More
+    // Models") — a real, settable field (admin/ai-models form), not a hardcoded
+    // frontend list. Everything renders under "More Models" until an admin sets this.
+    flagship?: boolean
   }
   available: boolean  // Based on the caller's current subscription package
   pricing: {

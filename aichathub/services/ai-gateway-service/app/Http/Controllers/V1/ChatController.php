@@ -40,6 +40,8 @@ class ChatController extends Controller
             'history.*.content' => 'required_with:history|string',
             'attachment_ids'   => 'nullable|array|max:4',
             'attachment_ids.*' => 'uuid',
+            'web_search'       => 'nullable|boolean',
+            'deep_think'       => 'nullable|boolean',
         ]);
 
         $userId    = $this->authUserId($request);
@@ -95,10 +97,21 @@ class ChatController extends Controller
             }
         }
 
+        // Re-derived from the model's real capabilities, never trusted straight from the
+        // client — some providers throw (not silently ignore) an unsupported WebSearch
+        // tool, and the Deep Think provider-option is only verified safe for Anthropic.
+        // See TextChatAgent's own constructor comment / this session's plan file.
+        $webSearchEnabled = (bool) ($data['web_search'] ?? false) && (bool) ($model->capabilities['web_search'] ?? false);
+        $deepThinkEnabled = (bool) ($data['deep_think'] ?? false)
+            && $model->provider === 'anthropic'
+            && (bool) ($model->capabilities['reasoning'] ?? false);
+
         $agent = new TextChatAgent(
-            userId:    $userId,
-            sessionId: $sessionId,
-            history:   $data['history'] ?? [],
+            userId:            $userId,
+            sessionId:         $sessionId,
+            history:           $data['history'] ?? [],
+            webSearchEnabled:  $webSearchEnabled,
+            deepThinkEnabled:  $deepThinkEnabled,
         );
 
         if ($persistToChatService) {

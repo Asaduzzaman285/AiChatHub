@@ -7,6 +7,8 @@ import { AxiosError } from 'axios'
 import {
   BrainCircuit,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   CreditCard,
   LayoutDashboard,
@@ -26,6 +28,8 @@ import apiClient from '@/lib/api-client'
 import { hasPermission } from '@/lib/permissions'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
 import { AdminSearch } from '@/components/admin/AdminSearch'
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
+import { cn } from '@/lib/utils'
 import type { User } from '@/types'
 
 const NAV_ITEMS = [
@@ -55,6 +59,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const { user, accessToken, isAuthenticated, hasHydrated, setUser, clearAuth } = useAuthStore()
   const [checking, setChecking] = useState(true)
   const [retryTick, setRetryTick] = useState(0)
+  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapsed()
 
   useEffect(() => {
     if (!hasHydrated) return
@@ -125,15 +130,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-60 shrink-0 border-r border-border bg-card sm:flex sm:flex-col">
-        <div className="flex items-center gap-2.5 p-6">
+      <aside className={cn('hidden shrink-0 border-r border-border bg-card sm:flex sm:flex-col', collapsed ? 'w-16' : 'w-60')}>
+        <div className={cn('flex items-center gap-2.5 p-6', collapsed && 'justify-center p-4')}>
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60">
             <Sparkles className="h-4 w-4 text-primary-foreground" />
           </div>
-          <div>
-            <span className="block text-base font-bold leading-tight tracking-tight">Admin</span>
-            <span className="block text-xs capitalize text-muted-foreground">{user.admin_role?.replace('_', ' ')}</span>
-          </div>
+          {!collapsed && (
+            <div>
+              <span className="block text-base font-bold leading-tight tracking-tight">Admin</span>
+              <span className="block text-xs capitalize text-muted-foreground">{user.admin_role?.replace('_', ' ')}</span>
+            </div>
+          )}
         </div>
         <nav className="space-y-0.5 px-3">
           {visibleItems.map((item, i) => {
@@ -145,19 +152,37 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 {showDivider && <div className="my-2 h-px bg-border" />}
                 <Link
                   href={item.href}
-                  className={`flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-medium transition-colors ${
+                  title={collapsed ? item.label : undefined}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-full text-sm font-medium transition-colors',
+                    collapsed ? 'justify-center px-0 py-2' : 'px-3.5 py-2',
                     active
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                  }`}
+                  )}
                 >
-                  <Icon className={`h-4 w-4 ${active ? 'opacity-100' : 'opacity-75'}`} />
-                  {item.label}
+                  <Icon className={`h-4 w-4 shrink-0 ${active ? 'opacity-100' : 'opacity-75'}`} />
+                  {!collapsed && item.label}
                 </Link>
               </div>
             )
           })}
         </nav>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={cn(
+            'mb-3 flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground',
+            collapsed ? 'justify-center px-0' : 'px-6'
+          )}
+        >
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          {!collapsed && <span className="text-xs">Collapse</span>}
+        </button>
       </aside>
 
       <div className="flex-1">

@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { IntNetworkSignals } from './IntNetworkSignals'
 
 export function CtaBanner() {
   return (
@@ -29,9 +30,15 @@ export function CtaBanner() {
             </div>
           </div>
 
-          {/* eslint-disable-next-line @next/next/no-img-element -- decorative, fixed
-              local asset; not worth Next/Image's runtime overhead here. */}
-          <img src="/Int.svg" alt="" className="mx-auto w-full max-w-xs" />
+          {/* relative wrapper sized to the image (not the grid cell) so the signals
+              overlay's absolute inset-0 lines up exactly with the rendered artwork,
+              not the wider column it sits in. */}
+          <div className="relative mx-auto w-full max-w-xs">
+            {/* eslint-disable-next-line @next/next/no-img-element -- decorative, fixed
+                local asset; not worth Next/Image's runtime overhead here. */}
+            <img src="/Int.svg" alt="" className="w-full" />
+            <IntNetworkSignals />
+          </div>
         </div>
       </div>
     </section>

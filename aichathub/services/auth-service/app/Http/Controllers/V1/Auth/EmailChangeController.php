@@ -74,20 +74,12 @@ class EmailChangeController extends Controller
             Mail::send([], [], function ($message) use ($newEmail, $name, $verifyUrl) {
                 $message->to($newEmail, $name)
                     ->from(config('mail.from.address'), config('mail.from.name'))
-                    ->subject('Confirm your new email address')
-                    ->html("
-                        <h2>Confirm your new email address</h2>
-                        <p>Hi {$name}, click below to confirm <strong>{$newEmail}</strong> as your new Alveta.ai sign-in email.</p>
-                        <p>
-                            <a href='{$verifyUrl}'
-                               style='background:#4F46E5;color:white;padding:12px 24px;
-                                      text-decoration:none;border-radius:6px;display:inline-block;'>
-                                Confirm New Email
-                            </a>
-                        </p>
-                        <p>Or copy this link: <br><code>{$verifyUrl}</code></p>
-                        <p>This link expires in 24 hours. If you didn't request this change, you can safely ignore this email — your sign-in email will not change.</p>
-                    ");
+                    ->subject('Confirm your new Alveta.ai email address')
+                    ->html(view('emails.confirm-new-email', [
+                        'name'      => $name,
+                        'newEmail'  => $newEmail,
+                        'verifyUrl' => $verifyUrl,
+                    ])->render());
             });
         } catch (\Throwable $e) {
             // \Throwable, not \Exception — mirrors RegisterController's wallet-create

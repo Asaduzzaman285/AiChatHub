@@ -36,19 +36,10 @@ class SendVerificationEmail implements ShouldQueue
             $message->to($user->email, $user->name)
                 ->from(config('mail.from.address'), config('mail.from.name'))
                 ->subject('Verify your Alveta.ai account')
-                ->html("
-                    <h2>Welcome to Alveta.ai, {$user->name}!</h2>
-                    <p>Please verify your email address to activate your account.</p>
-                    <p>
-                        <a href='{$verifyUrl}'
-                           style='background:#4F46E5;color:white;padding:12px 24px;
-                                  text-decoration:none;border-radius:6px;display:inline-block;'>
-                            Verify Email Address
-                        </a>
-                    </p>
-                    <p>Or copy this link: <br><code>{$verifyUrl}</code></p>
-                    <p>This link expires in 24 hours.</p>
-                ");
+                ->html(view('emails.verify-account', [
+                    'name'      => $user->name,
+                    'verifyUrl' => $verifyUrl,
+                ])->render());
         });
 
         // ── 2. Wallet creation is handled by RegisterController via afterResponse ──
