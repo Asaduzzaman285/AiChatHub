@@ -18,7 +18,10 @@ return [
     // config files alphabetically, so 'cors.php' is loaded before 'services.php' exists
     // in the container; cross-referencing it here silently resolved to null (confirmed
     // live: Access-Control-Allow-Origin came back present but empty for every origin).
-    'allowed_origins' => [env('FRONTEND_URL', 'http://localhost:3000')],
+    // staging.alveta.ai hardcoded alongside it — same backend, second frontend entry
+    // point for live-Stripe testing (see infrastructure/docker/Caddyfile's matching
+    // staging block). Remove once staging is retired.
+    'allowed_origins' => [env('FRONTEND_URL', 'http://localhost:3000'), 'https://staging.alveta.ai'],
 
     'allowed_origins_patterns' => [],
 

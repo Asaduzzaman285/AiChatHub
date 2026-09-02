@@ -108,9 +108,13 @@ export function WalletView() {
               <Button type="submit" className="w-full" disabled={topup.isPending} onClick={handleTopup('stripe')}>
                 {topup.isPending ? 'Processing…' : 'Pay with Card (Stripe)'}
               </Button>
+              {/* bKash temporarily disabled — commented out, not removed; uncomment to
+                  re-enable (same pair in PlansView.tsx's subscribe/upgrade branches). */}
+              {/*
               <Button type="submit" variant="outline" className="w-full" disabled={topup.isPending} onClick={handleTopup('bkash')}>
                 {topup.isPending ? 'Processing…' : 'Pay with bKash'}
               </Button>
+              */}
             </form>
           </CardContent>
         </Card>
@@ -138,24 +142,24 @@ export function WalletView() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="pb-2 font-medium">Date</th>
-                    <th className="pb-2 font-medium">Type</th>
-                    <th className="pb-2 font-medium">Description</th>
-                    <th className="pb-2 font-medium text-right">Amount</th>
-                    <th className="pb-2 font-medium text-right">Balance after</th>
+                    <th className="py-2 pr-4 font-medium">Date</th>
+                    <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium">Description</th>
+                    <th className="px-4 py-2 font-medium text-right">Amount</th>
+                    <th className="py-2 pl-4 font-medium text-right">Balance after</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ledger.map((entry) => (
                     <tr key={entry.id} className="border-b border-border last:border-0">
-                      <td className="py-2">{formatDate(entry.created_at)}</td>
-                      <td className="py-2 capitalize">{entry.type}</td>
-                      <td className="py-2 text-muted-foreground">{entry.description}</td>
-                      <td className={`py-2 text-right ${entry.type === 'credit' || entry.type === 'refund' ? 'text-green-600' : 'text-destructive'}`}>
+                      <td className="py-2.5 pr-4">{formatDate(entry.created_at)}</td>
+                      <td className="px-4 py-2.5 capitalize">{entry.type}</td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{entry.description}</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums ${entry.type === 'credit' || entry.type === 'refund' ? 'text-green-600' : 'text-destructive'}`}>
                         {entry.type === 'credit' || entry.type === 'refund' ? '+' : '−'}
                         {formatPreciseCurrency(entry.amount, entry.currency)}
                       </td>
-                      <td className="py-2 text-right">{formatPreciseCurrency(entry.balance_after, entry.currency)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(entry.balance_after, entry.currency)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -203,6 +203,10 @@ export function PlansView() {
                         >
                           {isPending ? 'Subscribing…' : 'Pay with Card (Stripe)'}
                         </Button>
+                        {/* bKash temporarily disabled — commented out, not removed; uncomment
+                            to re-enable (see WalletView.tsx and PlansView.tsx's upgrade branch
+                            below for the matching pair, and payment-service's config/BkashGateway
+                            if a fuller rollback is ever needed).
                         <Button
                           className="w-full"
                           variant="outline"
@@ -211,6 +215,7 @@ export function PlansView() {
                         >
                           {isPending ? 'Subscribing…' : 'Pay with bKash'}
                         </Button>
+                        */}
                         <button
                           type="button"
                           className="w-full text-xs text-muted-foreground hover:text-foreground"
@@ -235,6 +240,8 @@ export function PlansView() {
                         >
                           {isPending ? 'Upgrading…' : 'Pay with Card (Stripe)'}
                         </Button>
+                        {/* bKash temporarily disabled — see the matching comment above. */}
+                        {/*
                         <Button
                           className="w-full"
                           variant="outline"
@@ -243,6 +250,7 @@ export function PlansView() {
                         >
                           {isPending ? 'Upgrading…' : 'Pay with bKash'}
                         </Button>
+                        */}
                         <button
                           type="button"
                           className="w-full text-xs text-muted-foreground hover:text-foreground"

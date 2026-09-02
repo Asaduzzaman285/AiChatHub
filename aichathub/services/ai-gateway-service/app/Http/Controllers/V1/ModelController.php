@@ -55,4 +55,35 @@ class ModelController extends Controller
             'has_subscription' => $access !== null,
         ]);
     }
+
+    /** GET /models/public — unauthenticated. No `available`/package_slug (those only
+     * mean something relative to a real user's plan) — just the active text models'
+     * real, admin-set capabilities and public pricing, for the landing page's navbar
+     * popup to show honestly to a visitor who hasn't signed up yet. */
+    public function public(): JsonResponse
+    {
+        $models = AiModel::where('is_active', true)
+            ->where('type', 'text')
+            ->orderBy('provider')
+            ->orderBy('name')
+            ->get()
+            ->map(function (AiModel $model) {
+                $pricing = $model->activePricing();
+
+                return [
+                    'id'           => $model->id,
+                    'model_id'     => $model->model_id,
+                    'provider'     => $model->provider,
+                    'name'         => $model->name,
+                    'capabilities' => $model->capabilities,
+                    'pricing'      => $pricing ? [
+                        'input_rate_per_million'  => $pricing->input_rate_per_million,
+                        'output_rate_per_million' => $pricing->output_rate_per_million,
+                        'currency'                => $pricing->currency,
+                    ] : null,
+                ];
+            });
+
+        return response()->json(['models' => $models]);
+    }
 }

@@ -38,12 +38,17 @@ export function formatNumber(n: number | string): string {
  * formatPreciseCurrency, same as every other cost display in the app (Wallet/Usage/
  * Profile views), instead of a one-off .toFixed() that doesn't handle the string case. */
 export function formatUsage(promptTokens?: number | null, completionTokens?: number | null, cost?: string | number | null): string | null {
-  const parts: string[] = []
-  if (promptTokens != null && completionTokens != null) {
-    parts.push(`${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`)
-  }
-  if (cost != null) {
-    parts.push(formatPreciseCurrency(cost))
-  }
-  return parts.length ? parts.join(' · ') : null
+  // Token counts commented out (not removed) at explicit request — the same
+  // cost-only treatment already applied to single-chat messages, now extended here
+  // too (this function's only remaining callers are compare cards and their
+  // aggregate total line).
+  // const parts: string[] = []
+  // if (promptTokens != null && completionTokens != null) {
+  //   parts.push(`${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`)
+  // }
+  // if (cost != null) {
+  //   parts.push(formatPreciseCurrency(cost))
+  // }
+  // return parts.length ? parts.join(' · ') : null
+  return cost != null ? formatPreciseCurrency(cost) : null
 }

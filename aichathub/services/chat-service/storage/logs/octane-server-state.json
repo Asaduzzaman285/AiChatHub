@@ -1,6 +1,6 @@
 {
-    "masterProcessId": 9,
-    "managerProcessId": 10,
+    "masterProcessId": 17,
+    "managerProcessId": 18,
     "state": {
         "appName": "Alveta.ai Chat Service",
         "host": "0.0.0.0",

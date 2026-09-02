@@ -22,6 +22,7 @@ Route::middleware('auth.jwt')->group(function () {
 
     Route::get('/sessions/{sessionId}/messages',      [MessageController::class, 'index']);
     Route::post('/sessions/{sessionId}/messages',     [MessageController::class, 'store']);
+    Route::patch('/sessions/{sessionId}/messages/{messageId}/choose', [MessageController::class, 'choose']);
 
     Route::get('/upload/recent', [FileAttachmentController::class, 'recent']);
     Route::post('/upload',   [FileAttachmentController::class, 'upload']);

@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SettingsModal, type SettingsTab } from '@/components/settings/SettingsModal'
-import { ChatSessionProvider } from '@/contexts/ChatSessionContext'
+import { ChatSessionProvider, useChatSession } from '@/contexts/ChatSessionContext'
 import type { User } from '@/types'
 
 /**
@@ -24,8 +24,14 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { user, clearAuth } = useAuthStore()
+  const { sessions, activeSessionId } = useChatSession()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('account')
+
+  // Sidebar goes dark alongside the chat panel's own incognito palette when the active
+  // session is private — previously only chat/page.tsx's content area re-themed, so
+  // the sidebar stayed light right next to a dark private chat.
+  const isActiveSessionPrivate = sessions?.find((s) => s.id === activeSessionId)?.is_private ?? false
 
   // A brand-new account's very first login lands on /welcome instead of showing a
   // popup — welcome_seen_at is null exactly once (Google or password login both hit
@@ -70,7 +76,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     // staying put. h-screen caps this container so Sidebar's own `nav` (already
     // flex-1 overflow-y-auto) is what scrolls instead, keeping its header/footer fixed.
     <div className="flex h-screen">
-      <Sidebar openSettings={openSettings} onLogout={handleLogout} />
+      <Sidebar openSettings={openSettings} onLogout={handleLogout} isPrivate={isActiveSessionPrivate} />
 
       <div className="flex-1 overflow-hidden">{children}</div>
 

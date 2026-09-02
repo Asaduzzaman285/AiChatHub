@@ -16,6 +16,12 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', fn () => response()->json(['status' => 'ok', 'service' => 'ai-gateway']));
 Route::get('/ready',  [HealthController::class, 'ready']);
 
+// Public model catalog — the landing page's navbar "Models" popup needs real model
+// data before a visitor has ever logged in, so there's no user/JWT to check package
+// access against. Deliberately a separate, smaller shape than index() below (no
+// `available`/package_slug — those only mean something relative to a real user's plan).
+Route::get('/models/public', [ModelController::class, 'public']);
+
 // Authenticated
 Route::middleware('auth.jwt')->group(function () {
     Route::get('/models',           [ModelController::class,       'index']);

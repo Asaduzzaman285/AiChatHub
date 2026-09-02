@@ -2,26 +2,28 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { formatDistanceToNow } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import {
-  AlertTriangle, ArrowUp, Bot, ChevronDown, Code2, Compass, Download, FileText, FolderClock,
-  Globe, GraduationCap, Loader2, Lock, Plus, Sparkles, Telescope, Upload, User, Wand2, X,
+  AlertTriangle, ArrowUp, Bot, Check, ChevronDown, Code2, Compass, Copy, Download, FileText,
+  FolderClock, Globe, GraduationCap, Loader2, Lock, Paperclip, Plus, Sparkles, Telescope, Upload,
+  User, Wand2, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
+import { Logo } from '@/components/Logo'
 import { ModelIcon } from '@/components/chat/ModelIcon'
 import { CompareCardGroup, type CompareCardData } from '@/components/chat/CompareCardGroup'
 import { PrivateChatPopover } from '@/components/chat/PrivateChatPopover'
 import { WalletBalanceChip } from '@/components/wallet/WalletBalanceChip'
 import apiClient from '@/lib/api-client'
-import { cn, formatUsage } from '@/lib/utils'
-import { estimateTokens, buildBoundedHistory, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from '@/lib/tokenEstimate'
+import { cn, formatPreciseCurrency, formatUsage } from '@/lib/utils'
+import { estimateTokens, buildBoundedHistory, collapseCompareGroups, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from '@/lib/tokenEstimate'
 import { useAuthStore } from '@/stores/auth-store'
 import { useChatSession } from '@/contexts/ChatSessionContext'
 import { useAvailableModels } from '@/hooks/useAvailableModels'
@@ -83,12 +85,17 @@ export default function ChatPage() {
   const [deepThink, setDeepThink] = useState(false)
   const [webSearch, setWebSearch] = useState(false)
 
-  // No separate on/off toggle — compare mode is derived purely from selection count
-  // (see `compareModelIds` below): activeModelId alone answers by default; adding a
-  // 2nd model via the "+" icon means the next send fans out to all selected models
-  // via /chat/compare (stateless — no session_id, nothing persisted to chat-service),
-  // removing back down to 1 reverts to a normal single-model send. Up to 3 extra
-  // models (4 total). Results render inline as their own turn.
+  // Toggle is back, at explicit request — the "+" to add extra models only shows once
+  // this is on. Turning it off clears any extras (compareModelIds collapses back to
+  // just activeModelId) rather than leaving them selected-but-hidden, which would be a
+  // confusing state (a real 2nd model still fanning out on send with no visible sign
+  // of it in the composer).
+  const [compareMode, setCompareMode] = useState(false)
+  // activeModelId alone answers "which model" by default; adding a 2nd model via the
+  // "+" icon means the next send fans out to all selected models via /chat/compare
+  // (stateless — no session_id, nothing persisted to chat-service), removing back down
+  // to 1 reverts to a normal single-model send. Up to 3 extra models (4 total).
+  // Results render inline as their own turn.
   const [compareExtraModelIds, setCompareExtraModelIds] = useState<string[]>([])
   const [isComparing, setIsComparing] = useState(false)
   interface CompareTurn {
@@ -138,7 +145,7 @@ export default function ChatPage() {
   // Groups consecutive persisted assistant messages that share a metadata.
   // compare_group_id back into one side-by-side card — the persisted counterpart to
   // the locally-rendered `compareTurns` while a comparison is still streaming.
-  type CompareEntry = { key: string; modelId: string | null; content: string; cost: string; promptTokens: number; completionTokens: number }
+  type CompareEntry = { key: string; modelId: string | null; content: string; cost: string; promptTokens: number; completionTokens: number; isChosen: boolean; error?: string }
   type RenderItem =
     | { kind: 'message'; message: ChatMessage }
     | { kind: 'compare'; groupId: string; entries: CompareEntry[] }
@@ -146,7 +153,15 @@ export default function ChatPage() {
     const items: RenderItem[] = []
     for (const m of messages ?? []) {
       const groupId = m.role === 'assistant' ? m.metadata?.compare_group_id : undefined
-      const entry: CompareEntry = { key: m.id, modelId: m.model_id, content: m.content, cost: m.cost, promptTokens: m.prompt_tokens, completionTokens: m.completion_tokens }
+      const entry: CompareEntry = {
+        key: m.id, modelId: m.model_id, content: m.content, cost: m.cost,
+        promptTokens: m.prompt_tokens, completionTokens: m.completion_tokens,
+        isChosen: m.metadata?.is_chosen ?? false,
+        // A model that failed mid-compare (e.g. a provider 503) now persists as a
+        // placeholder message with metadata.error set instead of just vanishing once
+        // the page refetches — see ChatController::compare()'s catch block.
+        error: m.metadata?.error,
+      }
       const last = items[items.length - 1]
       if (groupId && last?.kind === 'compare' && last.groupId === groupId) {
         last.entries.push(entry)
@@ -254,6 +269,8 @@ export default function ChatPage() {
     setStreamingMessages([])
     setPendingAttachments([])
     setDismissedCardKeys(new Set())
+    setCompareMode(false)
+    setCompareExtraModelIds([])
   }, [activeSessionId])
 
   // A toggle enabled for one model shouldn't silently carry over to a model that
@@ -330,9 +347,18 @@ export default function ChatPage() {
   // Always includes the primary (activeModelId) model — the icon row's first slot —
   // plus whatever's been added via its "+" while compare mode is on.
   const compareModelIds = useMemo(
-    () => Array.from(new Set([activeModelId, ...compareExtraModelIds].filter(Boolean))),
-    [activeModelId, compareExtraModelIds]
+    () => compareMode
+      ? Array.from(new Set([activeModelId, ...compareExtraModelIds].filter(Boolean)))
+      : [activeModelId].filter(Boolean),
+    [compareMode, activeModelId, compareExtraModelIds]
   )
+
+  const toggleCompareMode = () => {
+    setCompareMode((v) => {
+      if (v) setCompareExtraModelIds([])
+      return !v
+    })
+  }
 
   // Real per-model ceiling, replacing the old blind message-count cap (see
   // buildBoundedHistory). Compare mode uses the MINIMUM context window across every
@@ -387,6 +413,37 @@ export default function ChatPage() {
     }
   }
 
+  // "Choose the best" — only wired for persisted cards (card.messageId set); the
+  // button itself is disabled while a comparison is still live-streaming (see the
+  // compareTurns render block, which always passes messageId: null), so this should
+  // never actually fire with one missing, but bailing out is still cheap insurance.
+  // Sets activeModelId so the NEXT message goes to the chosen model, matching "pick
+  // gemini, gemini becomes the default" — collapseCompareGroups() (tokenEstimate.ts)
+  // is what makes future history actually reflect this pick, once messages refetches.
+  const chooseBest = useMutation({
+    mutationFn: (card: CompareCardData) =>
+      apiClient.patch(`/api/v1/sessions/${activeSessionId}/messages/${card.messageId}/choose`),
+    onSuccess: async (_data, card) => {
+      if (card.modelId) setActiveModelId(card.modelId)
+      // Awaited (not fire-and-forget) so isPending — and therefore the button's
+      // loading state below — stays true until the refetched messages actually
+      // reflect the new is_chosen flag, not just until the PATCH itself resolves.
+      // Without this the spinner could disappear a beat before the card visually
+      // flips to "Best response," which read as "did that even do anything?" — the
+      // exact complaint this loading state exists to fix.
+      await queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeSessionId] })
+    },
+    onError: () => toast.error("Couldn't save that choice — please try again."),
+  })
+  // isChosen guard here too, not just disabling the button in CompareCard — re-firing
+  // the same choice is a harmless no-op server-side, but there's no reason to make the
+  // request at all once a card already reads "Best response".
+  const handleChooseBest = (card: CompareCardData) => {
+    if (!card.messageId || card.isChosen) return
+    chooseBest.mutate(card)
+  }
+  const pendingChooseCardKey = chooseBest.isPending ? chooseBest.variables?.cardKey : undefined
+
   const send = async () => {
     if (compareModelIds.length >= 2) {
       await sendCompareTurn()
@@ -408,7 +465,7 @@ export default function ChatPage() {
     // max_output_tokens and this new message itself.
     const ceiling = selectedModel.context_window ?? DEFAULT_CONTEXT_WINDOW
     const reserve = (selectedModel.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS) + estimateTokens(text)
-    const history = buildBoundedHistory(messages ?? [], ceiling, reserve)
+    const history = buildBoundedHistory(collapseCompareGroups(messages ?? []), ceiling, reserve)
 
     setInput('')
     setPendingAttachments([])
@@ -516,7 +573,7 @@ export default function ChatPage() {
     // them (conservative — leaves enough room for whichever model outputs the most).
     const ceiling = Math.min(...models.map((m) => m.context_window ?? DEFAULT_CONTEXT_WINDOW))
     const reserve = Math.max(...models.map((m) => m.max_output_tokens ?? DEFAULT_MAX_OUTPUT_TOKENS)) + estimateTokens(text)
-    const history = buildBoundedHistory(messages ?? [], ceiling, reserve)
+    const history = buildBoundedHistory(collapseCompareGroups(messages ?? []), ceiling, reserve)
 
     const turnId = crypto.randomUUID()
     setInput('')
@@ -524,7 +581,12 @@ export default function ChatPage() {
     setIsComparing(true)
     setCompareTurns((prev) => [
       ...prev,
-      { id: turnId, prompt: text, modelIds: models.map((m) => m.model_id), results: Object.fromEntries(models.map((m) => [m.model_id, { text: '' }])) },
+      {
+        id: turnId,
+        prompt: text,
+        modelIds: models.map((m) => m.model_id),
+        results: Object.fromEntries(models.map((m) => [m.model_id, { text: '' }])),
+      },
     ])
 
     const controller = new AbortController()
@@ -717,16 +779,24 @@ export default function ChatPage() {
     // invisible. Confirmed live.
     <div className={cn('flex h-screen flex-col bg-background text-foreground', activeSession?.is_private && 'incognito')}>
       {!activeSession ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           {availableModels.length === 0 ? (
             <>
-              <Sparkles className="h-8 w-8 text-muted-foreground/40" />
-              <p>Your plan doesn&apos;t include any chat models yet — check Plans in Settings.</p>
+              {/* Real brand mark, not a generic Sparkles placeholder — and the "check
+                  Plans in Settings" instruction is now an actual button instead of
+                  just being mentioned in text, matching the low-visibility feedback
+                  (the old muted-foreground/40 icon+text combo read as barely there
+                  on a light background). */}
+              <Logo iconOnly className="h-10 w-10" />
+              <p className="max-w-xs text-sm font-medium text-foreground">
+                Your plan doesn&apos;t include any chat models yet.
+              </p>
+              <Button onClick={() => router.push('/chat?settings=plans')}>View Plans</Button>
             </>
           ) : createSession.isError ? (
             <>
-              <Sparkles className="h-8 w-8 text-muted-foreground/40" />
-              <p>Couldn&apos;t start a new chat.</p>
+              <Logo iconOnly className="h-10 w-10" />
+              <p className="text-sm font-medium text-foreground">Couldn&apos;t start a new chat.</p>
               <Button
                 onClick={() => {
                   autoCreatingRef.current = false
@@ -743,15 +813,63 @@ export default function ChatPage() {
       ) : (
         <>
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
-            <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium truncate">
-              {activeSession!.is_private && <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-              {activeSession!.title}
-              {activeSession!.is_private && activeSession!.expires_at && (
-                <span className="text-[11px] font-normal text-muted-foreground">
-                  · deletes {formatDistanceToNow(new Date(activeSession!.expires_at), { addSuffix: true })}
-                </span>
+            {/* Model dropdown moved here from the composer, per explicit request — the
+                session title now sits after it instead of on its own. Price is no
+                longer shown on the trigger (commented out below, not removed) since a
+                per-1M rate reads as clutter next to a session title. */}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={isStreaming || isComparing}
+                    className="flex min-w-0 shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-sm font-medium hover:bg-accent disabled:opacity-50"
+                  >
+                    {selectedModel && <ModelIcon provider={selectedModel.provider} className="h-5 w-5 shrink-0" />}
+                    <span className="truncate">{selectedModel?.name ?? 'Select a model'}</span>
+                    {/* Price intentionally not shown here — code kept (not deleted) so
+                        it's a one-line re-enable later, same convention as the cost/
+                        token swap below.
+                    {selectedModel?.pricing && (
+                      <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                        ${selectedModel.pricing.output_rate_per_million}/1M
+                      </span>
+                    )}
+                    */}
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="max-h-80 w-64 overflow-y-auto">
+                  {availableModels.map((m) => (
+                    <DropdownMenuItem key={m.id} onSelect={() => setActiveModelId(m.id)}>
+                      <ModelIcon provider={m.provider} className="h-5 w-5 shrink-0" />
+                      <span className="truncate">{m.name}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Hidden on a brand-new, unsent session — the title is just the literal
+                  default "New Chat" at that point, which duplicates the sidebar's own
+                  row for it and reads as clutter above an otherwise-empty conversation.
+                  Still shown once there's a real title (after the first reply) or for a
+                  private session (the lock/expiry note matters even before sending). */}
+              {(!isEmptyConversation || activeSession!.is_private) && (
+                <>
+                  <span className="shrink-0 text-muted-foreground/40">·</span>
+
+                  <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-muted-foreground">
+                    {activeSession!.is_private && <Lock className="h-3.5 w-3.5 shrink-0" />}
+                    {activeSession!.title}
+                    {activeSession!.is_private && activeSession!.expires_at && (
+                      <span className="text-[11px] font-normal">
+                        · deletes {formatDistanceToNow(new Date(activeSession!.expires_at), { addSuffix: true })}
+                      </span>
+                    )}
+                  </p>
+                </>
               )}
-            </p>
+            </div>
             {/* Only before the first message — once a conversation is underway this
                 would just be clutter above the message list. */}
             {isEmptyConversation && (
@@ -825,17 +943,22 @@ export default function ChatPage() {
                       const model = models?.find((mo) => mo.id === entry.modelId)
                       return {
                         cardKey: entry.key,
+                        messageId: entry.key,
                         modelId: entry.modelId,
                         modelName: model?.name ?? 'Unknown model',
                         provider: model?.provider ?? null,
                         content: entry.content,
-                        usageText: formatUsage(entry.promptTokens, entry.completionTokens, entry.cost),
+                        error: entry.error,
+                        usageText: entry.error ? null : formatUsage(entry.promptTokens, entry.completionTokens, entry.cost),
                         promptTokens: entry.promptTokens,
                         completionTokens: entry.completionTokens,
                         cost: entry.cost,
+                        isChosen: entry.isChosen,
                       }
                     })}
                   onDismiss={handleNotPreferred}
+                  onChoose={handleChooseBest}
+                  pendingChooseCardKey={pendingChooseCardKey}
                 />
               )
             )}
@@ -854,6 +977,15 @@ export default function ChatPage() {
             {compareTurns.map((turn) => (
               <div key={turn.id} className="space-y-2">
                 <MessageBubble role="user" content={turn.prompt} />
+                {/* Always the real card grid now, never a differently-shaped loading
+                    card swapped in first — confirmed real user feedback (via a video
+                    review): swapping a small centered loading card for a full-width
+                    N-column grid the instant the first token arrived was the actual
+                    cause of the "jarring jump" complaint, not general slowness. Each
+                    CompareCard now owns its own loading state internally instead
+                    (see its own `isLoading` handling), so the grid's shape — column
+                    count, card width — is established once, immediately, and stays
+                    put for the rest of the turn. */}
                 <CompareCardGroup
                   cards={turn.modelIds
                     .filter((modelId) => !dismissedCardKeys.has(`${turn.id}:${modelId}`))
@@ -862,6 +994,12 @@ export default function ChatPage() {
                       const result = turn.results[modelId]
                       return {
                         cardKey: `${turn.id}:${modelId}`,
+                        // Not choosable yet — no persisted message id exists until this
+                        // turn finishes and `messages` is refetched (see the finally block
+                        // in sendCompareTurn). CompareCard disables "Choose the best"
+                        // whenever messageId is null, precisely for this window.
+                        messageId: null,
+                        isChosen: false,
                         // Normalized to the AiModel.id UUID here — turn.modelIds itself is the
                         // provider model_id string (what /chat/compare's SSE events key by),
                         // a different id space from activeModelId/compareExtraModelIds.
@@ -879,6 +1017,7 @@ export default function ChatPage() {
                       }
                     })}
                   onDismiss={handleNotPreferred}
+                  onChoose={handleChooseBest}
                 />
               </div>
             ))}
@@ -942,58 +1081,32 @@ export default function ChatPage() {
               className="hidden"
             />
 
-            {/* Gradient-bordered pill composer — the outer div supplies the border via
-                its own background, the inner one is the actual opaque surface. */}
+            {/* Flat, bordered composer — T3/AI Fiesta-style: a thin neutral border that
+                only picks up a subtle purple accent on focus-within, replacing the old
+                rounded-3xl gradient-border pill (that read as a mobile input bubble, not
+                a desktop AI workspace). The form owns the surface directly now — no
+                separate gradient-wrapper + inner-card pair to fake a border with. */}
             <form
               onSubmit={(e) => { e.preventDefault(); send() }}
               className={cn(
-                'rounded-3xl p-[1.5px] shadow-sm',
+                'rounded-xl border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.04)] transition-colors',
                 // Not CSS-variable-driven on purpose — the incognito palette is deliberately
-                // muted/neutral, so the composer border shouldn't still carry the public-chat
-                // brand gradient just because it sits inside an `.incognito`-scoped wrapper.
+                // muted/neutral, so the composer's focus accent shouldn't still carry the
+                // public-chat brand purple just because it sits inside an
+                // `.incognito`-scoped wrapper.
                 activeSession?.is_private
-                  ? 'bg-neutral-800'
-                  : 'bg-gradient-to-r from-violet-500 via-fuchsia-500 to-blue-500'
+                  ? 'border-border focus-within:border-neutral-500'
+                  : 'border-border focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/10'
               )}
             >
-              <div className="rounded-3xl bg-card">
-                <div className="flex items-center gap-2 px-3 pt-2.5">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        disabled={isStreaming || isComparing}
-                        className="flex min-w-0 items-center gap-1.5 rounded-full py-1 pl-1 pr-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-                      >
-                        {selectedModel && <ModelIcon provider={selectedModel.provider} className="h-5 w-5 shrink-0" />}
-                        <span className="truncate">{selectedModel?.name ?? 'Select a model'}</span>
-                        {selectedModel?.pricing && (
-                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-                            ${selectedModel.pricing.output_rate_per_million}/1M
-                          </span>
-                        )}
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="max-h-80 w-64 overflow-y-auto">
-                      {availableModels.map((m) => (
-                        <DropdownMenuItem key={m.id} onSelect={() => setActiveModelId(m.id)}>
-                          <ModelIcon provider={m.provider} className="h-5 w-5 shrink-0" />
-                          <span className="truncate">{m.name}</span>
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-
-                <div className="px-3 pt-1">
+                <div className="px-3 pt-3">
                   <input
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onPaste={handlePaste}
                     disabled={isStreaming || isComparing}
                     placeholder="Ask me anything"
-                    className="w-full bg-transparent py-1.5 text-sm text-foreground focus:outline-none disabled:opacity-50"
+                    className="w-full bg-transparent py-2 text-sm text-foreground focus:outline-none disabled:opacity-50"
                   />
                 </div>
 
@@ -1011,7 +1124,11 @@ export default function ChatPage() {
                         title="Attach file"
                         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
                       >
-                        {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                        {/* Paperclip, not a generic "+" — a plain plus read as
+                            ambiguous next to the model-comparison "+" elsewhere in
+                            this same composer, and doesn't read as "attach" on its
+                            own the way a paperclip conventionally does. */}
+                        {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-72">
@@ -1114,69 +1231,107 @@ export default function ChatPage() {
                       quality) — ring-card, not a hardcoded white ring, so the separation
                       ring correctly resolves to each theme's own card color (incognito
                       included) instead of reintroducing the old white-on-dark bug. */}
-                  <div className="flex items-center">
-                    {compareModelIds.map((id, i) => {
-                      const m = availableModels.find((mo) => mo.id === id)
-                      if (!m) return null
-                      const isPrimary = id === activeModelId
-                      return (
-                        <button
-                          key={id}
-                          type="button"
-                          title={m.name}
-                          onClick={() => { if (!isPrimary) toggleCompareExtraModel(id) }}
-                          className={cn('relative', i > 0 && '-ml-2', !isPrimary && 'group')}
-                        >
-                          <ModelIcon provider={m.provider} className="h-6 w-6 ring-2 ring-card" />
-                          {!isPrimary && (
-                            <span className="absolute -right-1 -top-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-destructive-foreground group-hover:flex">
-                              <X className="h-2 w-2" />
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                    {compareModelIds.length < 4 && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
+                  {/* Whole stack only renders in Compare mode — with the toggle off
+                      there's nothing to compare, and the active model already shows
+                      in the top bar's dropdown, so an extra single icon here would
+                      just be redundant clutter. Slightly wider icons and a lighter
+                      overlap than before (-ml-1.5, not -ml-2) so the stack reads as
+                      distinct avatars instead of cramming together. */}
+                  {compareMode && (
+                    <div className="flex items-center gap-0.5 pl-1">
+                      {compareModelIds.map((id, i) => {
+                        const m = availableModels.find((mo) => mo.id === id)
+                        if (!m) return null
+                        const isPrimary = id === activeModelId
+                        return (
                           <button
+                            key={id}
                             type="button"
-                            aria-label="Add a model to compare"
-                            className={cn(
-                              'flex h-6 w-6 items-center justify-center rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary',
-                              compareModelIds.length > 0 && '-ml-2'
-                            )}
+                            title={m.name}
+                            onClick={() => { if (!isPrimary) toggleCompareExtraModel(id) }}
+                            className={cn('relative', i > 0 && '-ml-1.5', !isPrimary && 'group')}
                           >
-                            <Plus className="h-3.5 w-3.5" />
+                            <ModelIcon provider={m.provider} className="h-7 w-7 ring-2 ring-card" />
+                            {!isPrimary && (
+                              <span className="absolute -right-1 -top-1 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-destructive-foreground group-hover:flex">
+                                <X className="h-2 w-2" />
+                              </span>
+                            )}
                           </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-y-auto">
-                          {availableModels.filter((m) => !compareModelIds.includes(m.id)).map((m) => (
-                            <DropdownMenuItem key={m.id} onSelect={() => toggleCompareExtraModel(m.id)}>
-                              <ModelIcon provider={m.provider} className="h-5 w-5 shrink-0" />
-                              <span className="truncate">{m.name}</span>
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                    {compareModelIds.length >= 2 && (
-                      <span className="ml-0.5 text-[11px] text-muted-foreground">{compareModelIds.length}/4</span>
-                    )}
-                  </div>
+                        )
+                      })}
+                      {compareModelIds.length < 4 && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label="Add a model to compare"
+                              className={cn(
+                                'flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary',
+                                compareModelIds.length > 0 && 'ml-1'
+                              )}
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start" className="max-h-72 w-64 overflow-y-auto">
+                            {availableModels.filter((m) => !compareModelIds.includes(m.id)).map((m) => (
+                              <DropdownMenuItem key={m.id} onSelect={() => toggleCompareExtraModel(m.id)}>
+                                <ModelIcon provider={m.provider} className="h-5 w-5 shrink-0" />
+                                <span className="truncate">{m.name}</span>
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {compareModelIds.length >= 2 && (
+                        <span className="ml-1 text-[11px] text-muted-foreground">{compareModelIds.length}/4</span>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex-1" />
+
+                  {/* Moved here from its own row above the input, at explicit
+                      request — sits immediately before Send now instead of on a
+                      separate line. Same toggle, same behavior (toggleCompareMode
+                      clears any extras when switching off). */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={compareMode}
+                    aria-label="Compare multiple models"
+                    onClick={toggleCompareMode}
+                    disabled={isStreaming || isComparing}
+                    className="flex shrink-0 items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <span className={cn('text-xs font-medium', compareMode ? 'text-foreground' : 'text-muted-foreground')}>
+                      Compare
+                    </span>
+                    <span
+                      className={cn(
+                        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors',
+                        compareMode ? 'bg-primary' : 'bg-muted'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform',
+                          compareMode ? 'translate-x-[18px]' : 'translate-x-1'
+                        )}
+                      />
+                    </span>
+                  </button>
 
                   <Button
                     type="submit"
                     disabled={(isStreaming || isComparing) || uploading || !input.trim()}
                     aria-label="Send"
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full p-0"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-0"
                   >
                     {isStreaming || isComparing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
                   </Button>
                 </div>
-              </div>
             </form>
           </div>
 
@@ -1230,7 +1385,13 @@ function MessageBubble({
   attachments?: FileAttachment[]
 }) {
   const isUser = role === 'user'
-  const hasTokenCounts = !isUser && promptTokens != null && completionTokens != null
+  // const hasTokenCounts = !isUser && promptTokens != null && completionTokens != null
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => {
+    navigator.clipboard.writeText(content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
   return (
     <div className={cn('flex items-start gap-2', isUser ? 'justify-end' : 'justify-start')}>
       {!isUser && (
@@ -1296,15 +1457,31 @@ function MessageBubble({
             </ReactMarkdown>
           )}
         </div>
-        {/* Cost intentionally not shown right now, per explicit request — code kept
-            (not deleted) so it's a one-line re-enable later:
-            {cost != null && <span className="px-1 text-[10px] tabular-nums text-muted-foreground">{formatPreciseCurrency(cost)}</span>} */}
+        {/* Reversed at explicit request — cost now shown, input/output token counts
+            commented out (not deleted) so it's a one-line re-enable later.
         {hasTokenCounts && (
           <p className="px-1 text-[10px] tabular-nums">
             <span className="text-info">{promptTokens!.toLocaleString()} in</span>
             {' · '}
             <span className="text-success">{completionTokens!.toLocaleString()} out</span>
           </p>
+        )}
+        */}
+        {!isUser && !isLoading && (
+          <div className="flex items-center gap-1.5 px-1">
+            {cost != null && (
+              <span className="text-[10px] tabular-nums text-muted-foreground">{formatPreciseCurrency(cost)}</span>
+            )}
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy response"
+              title="Copy"
+              className="text-muted-foreground/70 hover:text-foreground"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            </button>
+          </div>
         )}
       </div>
       {isUser && (

@@ -94,13 +94,12 @@ export function Hero() {
               actual desktop size, not a floor to scale from. tracking-tight was reversed
               from what Figma wants (that's negative spacing; 1% is positive). */}
           <h1 className="mx-auto max-w-[588px] text-balance text-[36px] font-medium leading-none tracking-[0.01em] text-white sm:text-[52px]">
-            All the Best AI Models,
+            Bringing the Power of AI,
             <br />
-            One Place
+            All Together in One Platform
           </h1>
           <p className="mx-auto mt-4 max-w-[500px] text-balance text-sm leading-relaxed text-white/70 sm:text-base">
-            Access, compare, and use the world&apos;s leading AI models all from one powerful
-            workspace. Stop jumping between AI tools.
+            Access all the leading AI models from one dashboard. Create, compare, and get more done without switching between multiple AI tools
           </p>
 
           {/* Static composer mockup — not a real input, just previews what the product

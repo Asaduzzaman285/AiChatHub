@@ -23,7 +23,9 @@ class SubscriptionClientService
     {
         try {
             $response = Http::timeout(15)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->get("{$this->baseUrl}/api/internal/subscriptions/{$userId}/current");
 
             // SubscriptionCheckController::current() returns {"subscription": null} when
@@ -50,7 +52,9 @@ class SubscriptionClientService
     {
         try {
             $response = Http::timeout(15)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->get("{$this->baseUrl}/api/internal/subscriptions/{$userId}/can-access/{$modelId}");
 
             if (! $response->successful()) {

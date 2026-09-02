@@ -27,7 +27,7 @@ const CAPABILITY_KEYS = [
   { key: 'function_calling', label: 'Function calling' },
   { key: 'streaming', label: 'Streaming responses' },
   { key: 'web_search', label: 'Web search' },
-  { key: 'reasoning', label: 'Deep Think (Anthropic extended reasoning only — see ChatController)' },
+  { key: 'reasoning', label: 'Deep Think (extended reasoning — Anthropic, OpenAI, Gemini, xAI, OpenRouter only)' },
   { key: 'flagship', label: 'Flagship (shown in the customer "Models" popup\'s top section)' },
 ] as const
 

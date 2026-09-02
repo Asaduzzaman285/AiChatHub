@@ -42,6 +42,15 @@ Route::any('/webhooks/{path?}', [ProxyController::class, 'proxyPayment'])
 // listing, and everything else under /packages/* still requires auth via the wildcard.
 Route::get('/packages', [ProxyController::class, 'proxySubscription'])->middleware('throttle:api');
 
+// Public model catalog — same carve-out pattern as /packages above, for the landing
+// page's navbar Models popup (no JWT exists pre-login). Downstream
+// ModelController::public() is unauthenticated. defaults('path', 'public') because
+// there's no {path} wildcard segment here to capture it from — mirrors how the
+// explicit /auth/login-style routes above supply their literal path.
+Route::get('/models/public', [ProxyController::class, 'proxyAiGateway'])
+    ->defaults('path', 'public')
+    ->middleware('throttle:api');
+
 // Protected routes — JWT validated at gateway before proxying
 Route::middleware(['auth.jwt.gateway', 'throttle:api'])->group(function () {
     Route::any('/packages/{path?}',       [ProxyController::class, 'proxySubscription'])->where('path', '.*');

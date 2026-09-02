@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, horizontalListSortingStrategy } from '@dnd-kit/sortable'
-import { formatUsage } from '@/lib/utils'
+import { cn, formatUsage } from '@/lib/utils'
 import { CompareCard, type CompareCardData } from './CompareCard'
 
 export type { CompareCardData }
@@ -11,9 +11,18 @@ export type { CompareCardData }
 export function CompareCardGroup({
   cards,
   onDismiss,
+  onChoose,
+  pendingChooseCardKey,
 }: {
   cards: CompareCardData[]
   onDismiss: (modelId: string, cardKey: string) => void
+  onChoose: (card: CompareCardData) => void
+  // Which card (if any) has a "Choose the best" request currently in flight — shows a
+  // spinner on that one card instead of the button just silently doing nothing while
+  // the PATCH is pending (confirmed live: no loading state at all read as "did that
+  // even do anything?"). Undefined outside the persisted-cards path, where choosing
+  // isn't even possible yet (no messageId until the turn finishes).
+  pendingChooseCardKey?: string
 }) {
   // Explicit key order — empty until the user actually drags something, so cards
   // start in whatever order the caller provided them. Local/display-only: reset in
@@ -61,6 +70,14 @@ export function CompareCardGroup({
     return formatUsage(promptTotal, completionTotal, costTotal)
   }, [cards])
 
+  // 2-3 models: each card stretches to fill an equal share of the panel's width
+  // (vw/2, vw/3 against the chat panel, not the literal browser viewport — the
+  // sidebar/composer chrome still take their own space). 4 models: equal quarters
+  // would be too narrow to read comfortably, so cards keep a fixed, readable width
+  // and the row scrolls horizontally instead — same as dnd-kit's drag-to-reorder
+  // already assumed for the overflow case.
+  const fillWidth = cards.length <= 3
+
   return (
     <div className="space-y-1.5">
       {aggregateText && (
@@ -70,9 +87,16 @@ export function CompareCardGroup({
       )}
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         <SortableContext items={orderedCards.map((c) => c.cardKey)} strategy={horizontalListSortingStrategy}>
-          <div className="flex gap-3 overflow-x-auto pb-1">
+          <div className={cn('flex gap-3 pb-1', fillWidth ? 'w-full' : 'overflow-x-auto')}>
             {orderedCards.map((card) => (
-              <CompareCard key={card.cardKey} card={card} onDismiss={onDismiss} />
+              <CompareCard
+                key={card.cardKey}
+                card={card}
+                fillWidth={fillWidth}
+                onChoose={onChoose}
+                onDismiss={onDismiss}
+                isChoosing={card.cardKey === pendingChooseCardKey}
+              />
             ))}
           </div>
         </SortableContext>

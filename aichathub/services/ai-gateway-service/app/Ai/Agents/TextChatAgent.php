@@ -66,19 +66,54 @@ class TextChatAgent implements Agent, Conversational, HasMiddleware, HasTools, H
         return $this->webSearchEnabled ? [new WebSearch()] : [];
     }
 
-    // Anthropic-specific extended-thinking payload — laravel/ai has no first-class
-    // "reasoning" attribute; this generic escape hatch is the only verified mechanism
-    // (Gateway/Anthropic/Concerns/BuildsTextRequests.php reads a raw `thinking` key).
-    // budget_tokens is a reasonable starting value, not independently tuned yet.
-    // Re-checks $provider itself (not just the caller's already-gated flag) — belt and
-    // suspenders, since this payload is only verified meaningful for Anthropic and this
-    // method has no other reason to ever fire for a different provider.
+    // laravel/ai v0.10.2 has no first-class "reasoning" contract (no SupportsReasoning
+    // interface, no Reasoning attribute) — confirmed by reading every provider's
+    // BuildsTextRequests trait: providerOptions() is merged verbatim, untranslated,
+    // into the outgoing request body (or generationConfig for Gemini). So unlike
+    // WebSearch (a real package-level tool), "Deep Think" here means WE know each of
+    // these providers' own real API parameter for extended reasoning and pass it
+    // through this generic escape hatch ourselves — the package doesn't validate any
+    // of these shapes for us. Anthropic's `thinking` key, OpenAI's `reasoning.effort`
+    // (Responses API), Gemini's `thinkingConfig.thinkingBudget`, xAI's
+    // `reasoning_effort`, and OpenRouter's unified `reasoning.effort` are each that
+    // provider's own documented parameter, not a laravel/ai feature.
+    private const DEEP_THINK_PROVIDERS = [
+        Lab::Anthropic->value,
+        Lab::OpenAI->value,
+        Lab::Gemini->value,
+        Lab::xAI->value,
+        Lab::OpenRouter->value,
+    ];
+
+    // Shared with ChatController::stream()'s server-side re-derivation, so the two
+    // places that decide "can this provider actually do something with Deep Think"
+    // can't drift apart — a model flagged capabilities.reasoning=true for a provider
+    // not in this list (DeepSeek's reasoner is model-baked with no request-side
+    // toggle; Moonshot/Kimi has no first-class laravel/ai driver at all) still
+    // shouldn't get the toggle honored.
+    public static function supportsDeepThink(string $provider): bool
+    {
+        return in_array($provider, self::DEEP_THINK_PROVIDERS, true);
+    }
+
     public function providerOptions(Lab|string $provider): array
     {
-        $isAnthropic = ($provider instanceof Lab ? $provider->value : $provider) === Lab::Anthropic->value;
+        $lab = $provider instanceof Lab ? $provider->value : $provider;
 
-        return $this->deepThinkEnabled && $isAnthropic
-            ? ['thinking' => ['type' => 'enabled', 'budget_tokens' => 10000]]
-            : [];
+        if (! $this->deepThinkEnabled || ! self::supportsDeepThink($lab)) {
+            return [];
+        }
+
+        // budget_tokens/thinkingBudget are reasonable starting values, not
+        // independently tuned yet; 'high' mirrors that same "err generous" intent for
+        // the providers that use an effort enum instead of a token budget.
+        return match ($lab) {
+            Lab::Anthropic->value  => ['thinking' => ['type' => 'enabled', 'budget_tokens' => 10000]],
+            Lab::OpenAI->value     => ['reasoning' => ['effort' => 'high']],
+            Lab::Gemini->value     => ['thinkingConfig' => ['thinkingBudget' => 10000]],
+            Lab::xAI->value        => ['reasoning_effort' => 'high'],
+            Lab::OpenRouter->value => ['reasoning' => ['effort' => 'high']],
+            default => [],
+        };
     }
 }

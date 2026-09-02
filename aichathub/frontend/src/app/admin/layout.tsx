@@ -17,7 +17,6 @@ import {
   Package,
   Receipt,
   ShieldCheck,
-  Sparkles,
   UserCog,
   UserRound,
   Users,
@@ -26,6 +25,7 @@ import {
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
 import { hasPermission } from '@/lib/permissions'
+import { Logo } from '@/components/Logo'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
 import { AdminSearch } from '@/components/admin/AdminSearch'
 import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
@@ -132,9 +132,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <div className="flex min-h-screen">
       <aside className={cn('hidden shrink-0 border-r border-border bg-card sm:flex sm:flex-col', collapsed ? 'w-16' : 'w-60')}>
         <div className={cn('flex items-center gap-2.5 p-6', collapsed && 'justify-center p-4')}>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60">
-            <Sparkles className="h-4 w-4 text-primary-foreground" />
-          </div>
+          {/* Real brand mark instead of a generic Sparkles-in-a-gradient-box — matches
+              the customer sidebar's own logo mark for consistency across portals. */}
+          <Logo iconOnly className="h-8 w-8 shrink-0" />
           {!collapsed && (
             <div>
               <span className="block text-base font-bold leading-tight tracking-tight">Admin</span>

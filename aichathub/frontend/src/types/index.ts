@@ -227,6 +227,22 @@ export interface AiModel {
   } | null
 }
 
+// GET /models/public's shape — deliberately smaller than AiModel above: no
+// `available`/package data (meaningless without a logged-in user's plan), used only
+// by the landing page's unauthenticated navbar Models popup.
+export interface PublicAiModel {
+  id: string
+  model_id: string
+  provider: AiModel['provider']
+  name: string
+  capabilities: AiModel['capabilities']
+  pricing: {
+    input_rate_per_million: string
+    output_rate_per_million: string
+    currency: string
+  } | null
+}
+
 // ─── Chat ──────────────────────────────────────────────────────────────────
 
 export interface ChatSession {
@@ -271,7 +287,15 @@ export interface ChatMessage {
   // any arithmetic or formatting.
   cost: string
   created_at: string
-  metadata: { compare_group_id?: string; type?: 'compaction_summary' } | null
+  // is_chosen — set via "Choose the best" (PATCH /sessions/{id}/messages/{id}/choose)
+  // on exactly one message within a compare_group_id group; see
+  // lib/tokenEstimate.ts's collapseCompareGroups() for how this is used to decide
+  // what a compare turn contributes to future context.
+  // error — set when a compare turn's model failed (see ChatController::compare()'s
+  // catch block); content is a placeholder single space in that case, never real
+  // text — always check this field first, never render content directly for a
+  // compare-group message without checking it.
+  metadata: { compare_group_id?: string; type?: 'compaction_summary'; is_chosen?: boolean; error?: string } | null
   // Populated server-side once a message with attachment_ids is persisted — previously
   // always empty/absent since nothing wrote file_attachments.message_id at all, so an
   // uploaded image reached the model fine but never showed up again in the history.

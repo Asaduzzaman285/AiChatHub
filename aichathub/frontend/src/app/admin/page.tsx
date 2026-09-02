@@ -113,7 +113,7 @@ export default function AdminDashboardPage() {
       {/* Row 2 — breakdown detail cards */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm">Subscriptions by tier</CardTitle>
             <span className="text-xs text-muted-foreground">{subStats?.active_subscriptions ?? '…'} active</span>
           </CardHeader>
@@ -129,7 +129,7 @@ export default function AdminDashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm">Transaction status</CardTitle>
             <span className="text-xs text-muted-foreground">
               {payStats ? payStats.completed_count + payStats.failed_count + payStats.pending_count : '…'} total
@@ -149,7 +149,7 @@ export default function AdminDashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm">Payment gateway</CardTitle>
             <span className="text-xs text-muted-foreground">{payStats?.completed_count ?? '…'} completed</span>
           </CardHeader>
@@ -168,7 +168,7 @@ export default function AdminDashboardPage() {
       {/* Row 3 — AI usage + provider health */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-sm">AI usage (7d)</CardTitle>
             <span className="text-xs text-muted-foreground">{aiStats?.total_tokens_7d.toLocaleString() ?? '…'} tokens</span>
           </CardHeader>

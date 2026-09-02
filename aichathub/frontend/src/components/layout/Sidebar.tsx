@@ -4,14 +4,13 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   ChevronDown, ChevronLeft, ChevronRight, Folder, FolderPlus, LogOut, MessageSquare, Plus,
-  Settings as SettingsIcon, Sparkles, Trash2,
+  Settings as SettingsIcon, Trash2,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { Logo } from '@/components/Logo'
 import { SkeletonListItem } from '@/components/ui/Skeleton'
 import { SessionRow } from '@/components/chat/SessionRow'
 import { PrivateChatPopover } from '@/components/chat/PrivateChatPopover'
-import { ModelsPopup } from '@/components/models/ModelsPopup'
 import { useChatSession } from '@/contexts/ChatSessionContext'
 import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
 import { cn } from '@/lib/utils'
@@ -20,9 +19,15 @@ import type { SettingsTab } from '@/components/settings/SettingsModal'
 /** Extracted out of (dashboard)/layout.tsx's DashboardShell so /welcome (a distinct page,
  * not a modal) can render inside the same persistent shell — same sidebar instance either
  * way, only the main content area to its right ever changes. */
-export function Sidebar({ openSettings, onLogout }: {
+export function Sidebar({ openSettings, onLogout, isPrivate }: {
   openSettings: (tab: SettingsTab) => void
   onLogout: () => void
+  // Re-themes the sidebar alongside chat/page.tsx's own incognito palette when the
+  // active session is private — applied directly on this component's own root
+  // (bg-card is already explicit here, not just inherited), same reasoning as the
+  // chat panel's own incognito comment: a CSS-variable redefinition further up the
+  // tree can't repaint an ancestor's already-resolved background on its own.
+  isPrivate?: boolean
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -106,12 +111,14 @@ export function Sidebar({ openSettings, onLogout }: {
 
   const ungroupedSessions = sessions?.filter((s) => !s.project_id) ?? []
 
-  // Collapsed: an icon-only rail (logo mark, New chat, Models, Settings, avatar) —
-  // the session/project list has no sensible icon-only form (it's text-titled), so it
-  // just hides entirely, same pattern as Slack/Notion's collapsed sidebars.
+  // Collapsed: an icon-only rail (logo mark, New chat, Settings, avatar) — the
+  // session/project list has no sensible icon-only form (it's text-titled), so it
+  // just hides entirely, same pattern as Slack/Notion's collapsed sidebars. Settings
+  // sits directly above the avatar/sign-out block, not up near New chat — it's about
+  // the account shown right below it, not the chat actions above.
   if (collapsed) {
     return (
-      <aside className="hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-4 sm:flex">
+      <aside className={cn('hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-4 sm:flex', isPrivate && 'incognito')}>
         <Logo iconOnly className="mb-3 h-6 w-6 text-foreground" />
 
         <button
@@ -123,27 +130,6 @@ export function Sidebar({ openSettings, onLogout }: {
           <Plus className="h-4 w-4" />
         </button>
 
-        <ModelsPopup
-          trigger={
-            <button
-              aria-label="Models"
-              title="Models"
-              className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Sparkles className="h-4 w-4" />
-            </button>
-          }
-        />
-
-        <button
-          onClick={() => openSettings('account')}
-          aria-label="Settings"
-          title="Settings"
-          className="mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <SettingsIcon className="h-4 w-4" />
-        </button>
-
         <div className="flex-1" />
 
         <button
@@ -153,6 +139,15 @@ export function Sidebar({ openSettings, onLogout }: {
           className="mb-3 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronRight className="h-4 w-4" />
+        </button>
+
+        <button
+          onClick={() => openSettings('account')}
+          aria-label="Settings"
+          title="Settings"
+          className="mb-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <SettingsIcon className="h-4 w-4" />
         </button>
 
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
@@ -171,7 +166,7 @@ export function Sidebar({ openSettings, onLogout }: {
   }
 
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-card sm:flex">
+    <aside className={cn('hidden w-64 shrink-0 flex-col border-r border-border bg-card sm:flex', isPrivate && 'incognito')}>
       <div className="flex items-center justify-between gap-2 p-4">
         <Logo className="h-6 w-auto text-foreground" />
         <button
@@ -204,31 +199,6 @@ export function Sidebar({ openSettings, onLogout }: {
             </button>
           }
         />
-      </div>
-
-      {/* Models: hover to preview, not click — the trigger itself is inert (no
-          onClick/href), matching "should not be clickable, appears on hover." */}
-      <div className="px-3 pb-1">
-        <ModelsPopup
-          trigger={
-            <div className="flex cursor-default items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-              <Sparkles className="h-4 w-4" />
-              Models
-            </div>
-          }
-        />
-      </div>
-
-      {/* Settings — its own row now, not buried in the username dropdown (a new
-          user had no reason to expect it there). */}
-      <div className="px-3 pb-2">
-        <button
-          onClick={() => openSettings('account')}
-          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <SettingsIcon className="h-4 w-4" />
-          Settings
-        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3">
@@ -367,10 +337,23 @@ export function Sidebar({ openSettings, onLogout }: {
         )}
       </nav>
 
-      {/* Settings now has its own row above — this is just identity + the one
-          remaining action, so a direct button replaces the old single-purpose
-          dropdown (Radix's useControllableState only fires onOpenChange from real
-          user interaction anyway; a dropdown for one item was never buying anything). */}
+      {/* Settings — its own row now, not buried in the username dropdown (a new user
+          had no reason to expect it there), and sits directly above the account row
+          it's about, not up near the chat actions at the top. */}
+      <div className="px-3 pt-2">
+        <button
+          onClick={() => openSettings('account')}
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <SettingsIcon className="h-4 w-4" />
+          Settings
+        </button>
+      </div>
+
+      {/* This is just identity + the one remaining action, so a direct button
+          replaces the old single-purpose dropdown (Radix's useControllableState only
+          fires onOpenChange from real user interaction anyway; a dropdown for one
+          item was never buying anything). */}
       <div className="flex items-center gap-2 border-t border-border p-3">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
           {user?.email?.[0]?.toUpperCase() ?? '?'}

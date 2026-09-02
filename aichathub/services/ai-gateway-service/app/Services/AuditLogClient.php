@@ -21,7 +21,9 @@ class AuditLogClient
     {
         try {
             Http::timeout(10)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/audit-logs", [
                     'admin_user_id' => $adminUserId,
                     'action'        => $action,

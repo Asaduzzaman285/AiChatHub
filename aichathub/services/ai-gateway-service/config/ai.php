@@ -29,10 +29,24 @@ return [
         // OpenAI-compatible — the package's generic 'openai-compatible' driver
         // (Laravel\Ai\Providers\OpenAiCompatibleProvider) just needs a base 'url'
         // plus a default model, no custom driver code required.
+        //
+        // stream_options.include_usage on every openai-compatible provider below —
+        // confirmed live (a real Kimi response reporting prompt_tokens=0,
+        // completion_tokens=0, cost=0 despite generating real content) and confirmed
+        // in the vendor source: OpenAiCompatibleGateway::streamOptions() reads
+        // provider->additionalConfiguration()['stream_options'], which is just this
+        // config array — it does NOT fall back to requesting usage by default (a
+        // same-named trait method in PerformsChatCompletionSteps.php does default to
+        // include_usage:true, but the concrete class's own method of the same name
+        // silently shadows it, since a class method always wins over a trait's).
+        // Without this key, the provider's Chat-Completions-style stream has no signal
+        // to ever emit a final usage chunk, so every openai-compatible provider —
+        // not just Moonshot — was silently reporting zero usage/cost.
         'perplexity' => [
             'driver' => 'openai-compatible',
             'key'    => env('PERPLEXITY_API_KEY'),
             'url'    => 'https://api.perplexity.ai',
+            'stream_options' => ['include_usage' => true],
             'models' => [
                 'text' => [
                     'default'   => 'sonar',
@@ -52,6 +66,7 @@ return [
             'driver' => 'openai-compatible',
             'key'    => env('QWEN_API_KEY'),
             'url'    => 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+            'stream_options' => ['include_usage' => true],
             'models' => [
                 'text' => [
                     'default'   => 'qwen-plus',
@@ -65,6 +80,7 @@ return [
             'driver' => 'openai-compatible',
             'key'    => env('MOONSHOT_API_KEY'),
             'url'    => 'https://api.moonshot.ai/v1',
+            'stream_options' => ['include_usage' => true],
             'models' => [
                 'text' => [
                     'default'   => 'kimi-k2.6',

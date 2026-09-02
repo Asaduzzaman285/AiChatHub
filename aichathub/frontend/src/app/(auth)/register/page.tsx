@@ -6,8 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { toast } from 'sonner'
-import { Apple, Eye, EyeOff, UserRound } from 'lucide-react'
+import { Eye, EyeOff, UserRound } from 'lucide-react'
 import { AuthShell } from '@/components/auth/AuthShell'
 import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import { useAuthStore } from '@/stores/auth-store'
@@ -89,10 +88,13 @@ export default function RegisterPage() {
           <p className="mt-1 text-sm text-muted-foreground">Start your journey with us</p>
         </div>
 
-        <div className="mt-3.5 grid grid-cols-2 gap-3">
+        <div className="mt-3.5">
           <GoogleSignInButton label="Google" mode="signup" />
-          {/* Same honest placeholder as the login page — no real Apple auth backend,
-              and no real Apple brand-logo asset (lucide's "Apple" is the fruit glyph). */}
+          {/* Apple sign-in removed for now — commented out, not deleted; no real Apple
+              auth backend exists yet anyway (see JwtService/GoogleOAuthController —
+              Google is the only real OAuth provider), and no real Apple brand-logo
+              asset (lucide's "Apple" is the fruit glyph, not the logomark). Uncomment
+              alongside restoring the grid-cols-2 wrapper above if this comes back.
           <button
             type="button"
             onClick={() => toast('Apple sign-in isn’t available yet.')}
@@ -101,6 +103,7 @@ export default function RegisterPage() {
             <Apple className="h-4 w-4" />
             Apple
           </button>
+          */}
         </div>
 
         <div className="relative my-3.5">
@@ -170,7 +173,7 @@ export default function RegisterPage() {
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="e.g., sij@ck2025"
+                  placeholder="e.g., Sij@ck2025"
                   {...register('password')}
                   className="w-full rounded-xl border border-input bg-background px-3.5 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />

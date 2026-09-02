@@ -55,6 +55,41 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Swoole Server Options
+    |--------------------------------------------------------------------------
+    |
+    | enable_coroutine + hook_flags together are what make ChatController::
+    | compare()'s per-model fan-out genuinely concurrent instead of sequential
+    | (confirmed live: a 3-model compare took 77s before this — the SUM of
+    | every model's response time, not the time of the slowest one).
+    | enable_coroutine wraps each request in its own coroutine (required for
+    | Swoole\Coroutine::create() to be callable at all inside compare()'s
+    | streamed response); hook_flags makes normally-blocking I/O — including
+    | the Guzzle stream reads laravel/ai's provider gateways use — yield to
+    | other coroutines instead of blocking the whole worker while waiting on
+    | one model's response. Confirmed via direct research of this exact
+    | Octane v2.18/Swoole 6.2 stack (not assumed): this app has no coroutine-
+    | aware PDO driver, so ordinary Eloquent/DB-facade calls elsewhere in the
+    | app are unaffected by hooking — they keep running synchronously to
+    | completion inside whichever coroutine makes them, they just don't gain
+    | (or need) concurrency themselves.
+    |
+    */
+
+    'swoole' => [
+        'options' => [
+            // Guarded: this config file is also loaded by ai-gateway-queue-worker,
+            // which runs on a plain php-fpm image with no Swoole extension — referencing
+            // the SWOOLE_HOOK_ALL constant unconditionally fatals every artisan command
+            // there ("Undefined constant"). Only apply these options where Swoole itself
+            // is actually loaded (the Octane HTTP server container).
+            'enable_coroutine' => extension_loaded('swoole'),
+            'hook_flags'       => defined('SWOOLE_HOOK_ALL') ? SWOOLE_HOOK_ALL : 0,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Octane Listeners
     |--------------------------------------------------------------------------
     |

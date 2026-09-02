@@ -20,7 +20,7 @@ class ChatServiceClient
     {
         try {
             Http::timeout(15)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/sessions/{$sessionId}/messages", array_merge([
                     'user_id' => $userId,
                     'role'    => $role,
@@ -45,8 +45,20 @@ class ChatServiceClient
         }
 
         try {
+            // Accept-Encoding: identity — same-host docker traffic gains nothing from
+            // compression, and forcing it off sidesteps a real bug confirmed live: under
+            // this service's Swoole coroutine hooks (config/octane.php's hook_flags,
+            // needed for ChatController::compare()'s concurrent fan-out), Guzzle's
+            // automatic Brotli decompression silently fails on a hooked connection —
+            // chat-service's response comes back Content-Encoding: br (large enough
+            // payloads like extracted_text cross its compression threshold), the client
+            // reports success with the marker header renamed but never actually inflates
+            // the body, and the caller sees an empty/garbled result with no exception and
+            // no error logged. Confirmed via a raw `curl --compressed` against the same
+            // endpoint: it decodes br cleanly, so this is specific to the hooked client,
+            // not the response itself.
             $response = Http::timeout(20)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/attachments/resolve", ['ids' => $ids]);
 
             return $response->successful() ? ($response->json('attachments') ?? []) : [];

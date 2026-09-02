@@ -28,13 +28,16 @@ export function WelcomePricingSection() {
         DeepSeek, Grok, Mistral, LLaMA, and more.
       </p>
 
+      {/* Pro renders separately below as a horizontal banner — see PricingSection.tsx's
+          matching comment for why (4 real packages now, a plain 3-column grid left it
+          wrapping onto its own row as a single narrow vertical card). */}
       <div className="mt-8 grid gap-4 sm:grid-cols-3">
         {isLoading ? (
           Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="h-80 animate-pulse rounded-2xl border border-border bg-card" />
           ))
         ) : (
-          packages?.map((pkg) => (
+          packages?.filter((pkg) => pkg.slug !== 'pro').map((pkg) => (
             <PricingCard
               key={pkg.id}
               pkg={pkg}
@@ -48,6 +51,21 @@ export function WelcomePricingSection() {
           ))
         )}
       </div>
+
+      {!isLoading && packages?.find((pkg) => pkg.slug === 'pro') && (
+        <div className="mt-4">
+          <PricingCard
+            pkg={packages.find((pkg) => pkg.slug === 'pro')!}
+            featured
+            layout="horizontal"
+            cta={
+              <Button className="w-full rounded-full" onClick={() => router.push('/chat?settings=plans')}>
+                Get Started
+              </Button>
+            }
+          />
+        </div>
+      )}
     </div>
   )
 }

@@ -94,23 +94,23 @@ export function UsageView() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="pb-2 font-medium">Model</th>
-                    <th className="pb-2 font-medium">Provider</th>
-                    <th className="pb-2 font-medium text-right">Prompt tokens</th>
-                    <th className="pb-2 font-medium text-right">Completion tokens</th>
-                    <th className="pb-2 font-medium text-right">Total tokens</th>
-                    <th className="pb-2 font-medium text-right">Cost</th>
+                    <th className="py-2 pr-4 font-medium">Model</th>
+                    <th className="px-4 py-2 font-medium">Provider</th>
+                    <th className="px-4 py-2 font-medium text-right">Prompt tokens</th>
+                    <th className="px-4 py-2 font-medium text-right">Completion tokens</th>
+                    <th className="px-4 py-2 font-medium text-right">Total tokens</th>
+                    <th className="py-2 pl-4 font-medium text-right">Cost</th>
                   </tr>
                 </thead>
                 <tbody>
                   {summary.models.map((m) => (
                     <tr key={m.model_id} className="border-b border-border last:border-0">
-                      <td className="py-2 font-medium">{m.name}</td>
-                      <td className="py-2 capitalize text-muted-foreground">{m.provider}</td>
-                      <td className="py-2 text-right">{formatNumber(m.prompt_tokens)}</td>
-                      <td className="py-2 text-right">{formatNumber(m.completion_tokens)}</td>
-                      <td className="py-2 text-right">{formatNumber(m.total_tokens)}</td>
-                      <td className="py-2 text-right">{formatPreciseCurrency(m.cost)}</td>
+                      <td className="py-2.5 pr-4 font-medium">{m.name}</td>
+                      <td className="px-4 py-2.5 capitalize text-muted-foreground">{m.provider}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.prompt_tokens)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.completion_tokens)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.total_tokens)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(m.cost)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -138,21 +138,21 @@ export function UsageView() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-muted-foreground">
-                    <th className="pb-2 font-medium">Date</th>
-                    <th className="pb-2 font-medium">Model</th>
-                    <th className="pb-2 font-medium">Type</th>
-                    <th className="pb-2 font-medium text-right">Tokens</th>
-                    <th className="pb-2 font-medium text-right">Cost</th>
+                    <th className="py-2 pr-4 font-medium">Date</th>
+                    <th className="px-4 py-2 font-medium">Model</th>
+                    <th className="px-4 py-2 font-medium">Type</th>
+                    <th className="px-4 py-2 font-medium text-right">Tokens</th>
+                    <th className="py-2 pl-4 font-medium text-right">Cost</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recent.map((log) => (
                     <tr key={log.id} className="border-b border-border last:border-0">
-                      <td className="py-2">{formatDate(log.created_at)}</td>
-                      <td className="py-2">{log.model?.name ?? '—'}</td>
-                      <td className="py-2 capitalize text-muted-foreground">{log.operation_type.replace('_', ' ')}</td>
-                      <td className="py-2 text-right">{formatNumber(log.total_tokens)}</td>
-                      <td className="py-2 text-right">{formatPreciseCurrency(log.actual_cost)}</td>
+                      <td className="py-2.5 pr-4">{formatDate(log.created_at)}</td>
+                      <td className="px-4 py-2.5">{log.model?.name ?? '—'}</td>
+                      <td className="px-4 py-2.5 capitalize text-muted-foreground">{log.operation_type.replace('_', ' ')}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(log.total_tokens)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(log.actual_cost)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { BarChart3, CreditCard, Receipt, Sparkles, User as UserIcon, Wallet as WalletIcon } from 'lucide-react'
+import { BarChart3, CreditCard, Receipt, User as UserIcon, Wallet as WalletIcon } from 'lucide-react'
 import { Dialog, DialogContent } from '@/components/ui/Dialog'
+import { Logo } from '@/components/Logo'
 import { ProfileView } from '@/components/profile/ProfileView'
 import { BillingView } from '@/components/settings/BillingView'
 import { WalletView } from '@/components/settings/WalletView'
@@ -54,7 +55,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab = 'account' }: {
       <DialogContent className="grid max-w-4xl grid-cols-[180px_1fr] gap-0 overflow-hidden p-0 sm:h-[80vh]">
         <div className="flex flex-col gap-1 border-r border-border bg-muted/30 p-3">
           <div className="flex items-center gap-2 px-2 py-2">
-            <Sparkles className="h-4 w-4 text-primary" />
+            <Logo iconOnly className="h-4 w-4" />
             <span className="font-display text-sm font-bold">Settings</span>
           </div>
           {TABS.map((t) => {

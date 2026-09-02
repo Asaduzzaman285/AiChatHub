@@ -16,6 +16,9 @@ use Illuminate\Support\Facades\Log;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Streaming\Events\TextDelta;
+use Swoole\Coroutine;
+use Swoole\Coroutine\Channel;
+use Swoole\Coroutine\WaitGroup;
 
 class ChatController extends Controller
 {
@@ -99,11 +102,11 @@ class ChatController extends Controller
 
         // Re-derived from the model's real capabilities, never trusted straight from the
         // client — some providers throw (not silently ignore) an unsupported WebSearch
-        // tool, and the Deep Think provider-option is only verified safe for Anthropic.
-        // See TextChatAgent's own constructor comment / this session's plan file.
+        // tool, and Deep Think is only meaningful for providers TextChatAgent actually
+        // knows a real reasoning-request shape for (see its supportsDeepThink()).
         $webSearchEnabled = (bool) ($data['web_search'] ?? false) && (bool) ($model->capabilities['web_search'] ?? false);
         $deepThinkEnabled = (bool) ($data['deep_think'] ?? false)
-            && $model->provider === 'anthropic'
+            && TextChatAgent::supportsDeepThink($model->provider)
             && (bool) ($model->capabilities['reasoning'] ?? false);
 
         $agent = new TextChatAgent(
@@ -290,17 +293,39 @@ class ChatController extends Controller
             $this->chatClient->appendMessage($sessionId, $userId, 'user', $data['message'], [], $data['attachment_ids'] ?? []);
         }
 
-        // Fan-out — return streaming results per model
-        // Each agent handles its own reserve/deduct independently
+        // Fan-out — genuinely concurrent now (see config/octane.php's swoole.options:
+        // enable_coroutine + hook_flags), not a sequential foreach that made every
+        // model wait for the previous one to fully finish (confirmed live: 77 seconds
+        // for a 3-model compare — roughly the SUM of each model's response time, not
+        // the time of the slowest one).
+        //
+        // Each model runs in its own Swoole coroutine and pushes its SSE events onto a
+        // shared Channel instead of echoing directly — confirmed via direct research of
+        // this Octane/Swoole version that a child coroutine can't safely echo into the
+        // same HTTP response another coroutine owns (Swoole scopes output buffering per
+        // coroutine), so this closure's own coroutine (the one Octane actually attached
+        // to the response) is the ONLY one that ever echoes/flushes, draining whichever
+        // model's event is ready next. A separate "closer" coroutine watches a WaitGroup
+        // and closes the channel once every model coroutine has finished, which is what
+        // ends the main read loop below.
+        //
+        // Also confirmed safe to keep CostTrackingMiddleware/UsageLoggingMiddleware's
+        // direct DB calls unchanged inside each coroutine: this stack has no coroutine-
+        // aware PDO driver, so those calls still run to completion synchronously inside
+        // whichever coroutine makes them (serialized in practice, not corrupted) —
+        // they just don't yield mid-query, which is fine given how small they are next
+        // to the multi-second provider HTTP calls that are the actual point here.
         return response()->stream(function () use (
             $data, $userId, $models, $imageAttachments, $promptMessage,
             $sessionId, $persistToChatService, $compareGroupId, $history
         ) {
+            $channel   = new Channel(64);
+            $waitGroup = new WaitGroup();
+
             foreach ($data['model_ids'] as $modelId) {
                 $model = $models->get($modelId);
                 if (! $model) {
-                    echo "data: " . json_encode(['model' => $modelId, 'error' => 'Unknown model']) . "\n\n";
-                    flush();
+                    $channel->push(['model' => $modelId, 'error' => 'Unknown model']);
                     continue;
                 }
 
@@ -310,67 +335,133 @@ class ChatController extends Controller
                 // the attachment (confirmed live: every model previously just said
                 // "I don't see an image" because nothing was ever sent at all).
                 if ($imageAttachments && ! ($model->capabilities['vision'] ?? false)) {
-                    echo "data: " . json_encode(['model' => $modelId, 'error' => "{$model->name} doesn't support image input."]) . "\n\n";
-                    flush();
+                    $channel->push(['model' => $modelId, 'error' => "{$model->name} doesn't support image input."]);
                     continue;
                 }
 
-                $images = array_map(
-                    fn (array $a) => Image::fromBase64($a['base64'], $a['mime_type']),
-                    $imageAttachments
-                );
+                $waitGroup->add();
+                Coroutine::create(function () use (
+                    $channel, $waitGroup, $modelId, $model, $imageAttachments, $promptMessage,
+                    $userId, $sessionId, $persistToChatService, $compareGroupId, $history
+                ) {
+                    try {
+                        $images = array_map(
+                            fn (array $a) => Image::fromBase64($a['base64'], $a['mime_type']),
+                            $imageAttachments
+                        );
 
-                // Real session_id reused across every model in the fan-out (not a fresh
-                // uuid per model like before) — CostTrackingMiddleware/UsageLoggingMiddleware
-                // only use it for logging context, so sharing it here is safe, and it's what
-                // lets prior turns from this same conversation feed in as history below.
-                $agent = new TextChatAgent(userId: $userId, sessionId: $sessionId ?? (string) \Str::uuid(), history: $history);
-                try {
-                    $response = $agent->stream($promptMessage, $images, provider: $model->provider, model: $model->model_id);
+                        // Real session_id reused across every model in the fan-out (not
+                        // a fresh uuid per model) — CostTrackingMiddleware/
+                        // UsageLoggingMiddleware only use it for logging context, and
+                        // it's what lets prior turns from this same conversation feed
+                        // in as history.
+                        $agent = new TextChatAgent(userId: $userId, sessionId: $sessionId ?? (string) \Str::uuid(), history: $history);
+                        $response = $agent->stream($promptMessage, $images, provider: $model->provider, model: $model->model_id);
 
-                    // Fires once the underlying stream fully resolves — same AgentResponse
-                    // ->then() mechanism the single-model /chat/stream path uses to get
-                    // real token counts after the fact, not an estimate.
-                    $cost             = null;
-                    $promptTokens     = null;
-                    $completionTokens = null;
-                    $response->then(function (AgentResponse $r) use (&$cost, &$promptTokens, &$completionTokens, $model, $sessionId, $userId, $persistToChatService, $compareGroupId) {
-                        $promptTokens     = $r->usage?->promptTokens ?? 0;
-                        $completionTokens = $r->usage?->completionTokens ?? 0;
-                        $cost             = $this->calculateCost($model, $promptTokens, $completionTokens);
+                        // Fires once the underlying stream fully resolves — same
+                        // AgentResponse ->then() mechanism the single-model /chat/stream
+                        // path uses to get real token counts after the fact, not an
+                        // estimate.
+                        $cost             = null;
+                        $promptTokens     = null;
+                        $completionTokens = null;
+                        $response->then(function (AgentResponse $r) use (&$cost, &$promptTokens, &$completionTokens, $model, $sessionId, $userId, $persistToChatService, $compareGroupId) {
+                            $promptTokens     = $r->usage?->promptTokens ?? 0;
+                            $completionTokens = $r->usage?->completionTokens ?? 0;
+                            $cost             = $this->calculateCost($model, $promptTokens, $completionTokens);
 
+                            if ($persistToChatService) {
+                                $this->chatClient->appendMessage($sessionId, $userId, 'assistant', $r->text ?? '', [
+                                    'model_id'          => $model->id,
+                                    'prompt_tokens'     => $promptTokens,
+                                    'completion_tokens' => $completionTokens,
+                                    'cost'              => $cost,
+                                    'is_streaming'      => true,
+                                    'metadata'          => ['compare_group_id' => $compareGroupId],
+                                ]);
+                            }
+                        });
+
+                        foreach ($response as $event) {
+                            if (! $event instanceof TextDelta) {
+                                continue;
+                            }
+                            $channel->push(['model' => $modelId, 'chunk' => $event->delta]);
+                        }
+
+                        $channel->push([
+                            'model'             => $modelId,
+                            'done'              => true,
+                            'cost'              => $cost,
+                            'prompt_tokens'     => $promptTokens,
+                            'completion_tokens' => $completionTokens,
+                        ]);
+                    } catch (\Exception $e) {
+                        // Previously silent server-side — the client got this exact
+                        // message as an SSE error event, but nothing was ever written to
+                        // the log, so a real provider failure (e.g. a Gemini 503 "model
+                        // overloaded") reported live was impossible to confirm after the
+                        // fact. Same reasoning as the wallet-reservation/wallet-create
+                        // \Throwable catches elsewhere — a failure a user can see
+                        // deserves a trail.
+                        Log::error('Compare turn failed for one model', [
+                            'model'   => $modelId,
+                            'error'   => $e->getMessage(),
+                            'session' => $sessionId,
+                            'user'    => $userId,
+                        ]);
+
+                        // Confirmed live: a model that throws here (e.g. a provider 503)
+                        // never reaches the $response->then() callback above, which is
+                        // the ONLY place a compare-turn message gets persisted — so this
+                        // model's card was visible only transiently and vanished the
+                        // instant the page refetched persisted messages. Persisting an
+                        // error-flagged row here keeps it around exactly like a real
+                        // answer would be, just empty with the reason recorded — the
+                        // frontend renders metadata.error the same way it already
+                        // renders a live-streaming error (see CompareCard's `error`
+                        // prop / collapseCompareGroups(), which also knows to never
+                        // treat an errored message as a valid "chosen" candidate).
                         if ($persistToChatService) {
-                            $this->chatClient->appendMessage($sessionId, $userId, 'assistant', $r->text ?? '', [
-                                'model_id'          => $model->id,
-                                'prompt_tokens'     => $promptTokens,
-                                'completion_tokens' => $completionTokens,
-                                'cost'              => $cost,
-                                'is_streaming'      => true,
-                                'metadata'          => ['compare_group_id' => $compareGroupId],
+                            // A single space, not '' — chat-service validates content as
+                            // required|string, and Laravel's required rule rejects an
+                            // empty string outright. The frontend never actually renders
+                            // this text; it checks metadata.error first.
+                            $this->chatClient->appendMessage($sessionId, $userId, 'assistant', ' ', [
+                                'model_id' => $model->id,
+                                'metadata' => ['compare_group_id' => $compareGroupId, 'error' => $e->getMessage()],
                             ]);
                         }
-                    });
 
-                    foreach ($response as $event) {
-                        if (! $event instanceof TextDelta) {
-                            continue;
-                        }
-                        echo "data: " . json_encode(['model' => $modelId, 'chunk' => $event->delta]) . "\n\n";
-                        flush();
+                        $channel->push(['model' => $modelId, 'error' => $e->getMessage()]);
+                    } finally {
+                        $waitGroup->done();
                     }
+                });
+            }
 
-                    echo "data: " . json_encode([
-                        'model'             => $modelId,
-                        'done'              => true,
-                        'cost'              => $cost,
-                        'prompt_tokens'     => $promptTokens,
-                        'completion_tokens' => $completionTokens,
-                    ]) . "\n\n";
-                    flush();
-                } catch (\Exception $e) {
-                    echo "data: " . json_encode(['model' => $modelId, 'error' => $e->getMessage()]) . "\n\n";
-                    flush();
+            // Runs in its own coroutine so it doesn't block the main read loop below
+            // from draining events as they arrive in the meantime — just waits for
+            // every model coroutine's done() and then closes the channel, which is
+            // what ends that loop.
+            Coroutine::create(function () use ($waitGroup, $channel) {
+                $waitGroup->wait();
+                $channel->close();
+            });
+
+            // The only coroutine that ever echoes/flushes — pops whichever model's
+            // event is ready next, so a fast model's tokens interleave with a slow
+            // model's instead of queuing up behind it. pop() blocks cooperatively
+            // (yields to the model coroutines) until something arrives or the channel
+            // closes; false unambiguously means "closed and drained" since every
+            // pushed value here is always an array, never a bare false.
+            while (true) {
+                $event = $channel->pop();
+                if ($event === false) {
+                    break;
                 }
+                echo "data: " . json_encode($event) . "\n\n";
+                flush();
             }
         }, 200, ['Content-Type' => 'text/event-stream', 'Cache-Control' => 'no-cache']);
     }

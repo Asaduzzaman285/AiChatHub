@@ -15,6 +15,19 @@
 	}
 }
 
+staging.alveta.ai {
+	# Same frontend container as {$APP_DOMAIN} and the same backend behind it —
+	# this is a second entry point for live-Stripe testing, not an isolated
+	# environment. Any purchase made here writes to the real production database.
+	reverse_proxy frontend:3000
+	encode gzip
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}
+
 {$API_DOMAIN} {
 	# No response buffering — required for the chat SSE stream (/api/v1/chat/*).
 	# api-gateway-nginx already disables its own buffering for that path

@@ -200,7 +200,13 @@
             ],
             "garbage": 50,
             "max_execution_time": 300,
-            "state_file": "\/var\/www\/storage\/logs\/octane-server-state.json"
+            "state_file": "\/var\/www\/storage\/logs\/octane-server-state.json",
+            "swoole": {
+                "options": {
+                    "enable_coroutine": true,
+                    "hook_flags": 2143285247
+                }
+            }
         }
     }
 }

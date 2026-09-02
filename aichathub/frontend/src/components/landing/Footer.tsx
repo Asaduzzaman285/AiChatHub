@@ -4,9 +4,8 @@ import Link from 'next/link'
 import { Facebook, Instagram, Linkedin, Twitter, Youtube } from 'lucide-react'
 import { Logo } from '@/components/Logo'
 
-// Legal pages don't exist yet (no /privacy, /terms, /refund-policy, /cookie-preferences
-// route anywhere in the app) — these hrefs are real, sensible paths for when those pages
-// get built, but will 404 until then. Flagged, not silently shipped as if they worked.
+// Privacy/Terms/Refund Policy are now real basic pages (src/app/privacy,terms,refund-policy).
+// Cookie Preferences still has no route anywhere in the app and will 404 until built.
 const LEGAL_LINKS = [
   { label: 'Privacy & Policy', href: '/privacy' },
   { label: 'Terms & Policy', href: '/terms' },

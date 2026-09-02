@@ -131,7 +131,13 @@ export default function CheckoutCallbackPage() {
             <p className="text-sm font-medium">
               {type === 'subscription' ? 'Your plan is now active.' : 'Your wallet has been credited.'}
             </p>
-            <Button onClick={() => router.push(continueHref)}>{continueLabel}</Button>
+            {/* "Back to Pricing" made no sense right after paying — you're not going
+                back to shop, you're done. Sends into the chat app instead; the wallet
+                top-up path still goes to /wallet since checking the new balance is a
+                sensible next step there. */}
+            <Button onClick={() => router.push(type === 'subscription' ? '/chat' : continueHref)}>
+              {type === 'subscription' ? 'Start exploring' : continueLabel}
+            </Button>
           </>
         )}
 

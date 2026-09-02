@@ -33,7 +33,9 @@ class WalletClientService
             // background job, so latency here is directly user-felt.
             $response = Http::timeout(15)
                 ->retry(2, 500)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/wallet/reserve", [
                     'user_id'      => $userId,
                     'amount'       => $amount,
@@ -57,7 +59,9 @@ class WalletClientService
     {
         try {
             Http::timeout(15)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/wallet/deduct", [
                     'user_id'         => $userId,
                     'amount'          => $actual,
@@ -78,7 +82,9 @@ class WalletClientService
     {
         try {
             Http::timeout(15)
-                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey])
+                // Accept-Encoding: identity — see ChatServiceClient::resolveAttachments for why
+                // (Brotli auto-decode silently fails on this service's hooked coroutine client).
+                ->withHeaders(['X-Internal-Service-Key' => $this->internalKey, 'Accept-Encoding' => 'identity'])
                 ->post("{$this->baseUrl}/api/internal/wallet/refund", [
                     'user_id'         => $userId,
                     'amount'          => $amount,
