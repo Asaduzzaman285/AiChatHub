@@ -41,6 +41,17 @@ function useCreateSession(onCreated: (id: string) => void) {
         private_duration_minutes: privateDurationMinutes,
       })).data.session,
     onSuccess: (session) => {
+      // Written into the cache directly, synchronously — not just invalidateQueries(),
+      // which only schedules a background refetch and doesn't update `sessions` right
+      // away. chat/page.tsx's auto-create effect dedups against a brand-new empty
+      // session by checking this same list; if "+ New chat" gets clicked again before
+      // that refetch actually resolves, the dedup check was running against a stale
+      // list that didn't contain the session that was just created yet, found nothing
+      // to reuse, and created a second one (confirmed live — that's the exact
+      // "click New chat, click it again, a second New Chat appears" bug). Prepending
+      // here closes that race regardless of network timing; invalidateQueries() still
+      // runs right after for eventual full consistency (server-computed fields, etc.).
+      queryClient.setQueryData<ChatSession[]>(['chat', 'sessions'], (old) => old ? [session, ...old] : [session])
       queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] })
       onCreated(session.id)
     },

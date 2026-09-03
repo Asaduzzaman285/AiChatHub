@@ -90,16 +90,26 @@ class ChatInternalController extends Controller
                 $session->update(['model_id' => $data['model_id']]);
             }
 
-            // Auto-title trigger: the first assistant reply a session ever gets, and
-            // only while it's still sitting on the default title. Checked against the
-            // DB (not just this transaction) so a 4-way /chat/compare turn — which
-            // appends several assistant messages back-to-back for the same prompt —
-            // only fires once, from whichever model's reply lands first; the rest see
-            // an existing prior assistant message and skip it.
+            // Auto-title trigger: the first assistant reply to the CURRENT user turn,
+            // while the session is still sitting on the default title. Scoped to "since
+            // the last user message" (not "ever," as this used to be) so a session whose
+            // very first title-generation call failed — a transient network/ai-gateway
+            // hiccup, logged as a warning below and previously left permanently untitled
+            // with no retry — gets another attempt on its next reply instead of being
+            // stuck forever. Still only fires once per turn: a 4-way /chat/compare turn
+            // appends several assistant messages back-to-back for the same prompt, and
+            // this only counts messages created at/after the latest user message, so the
+            // rest of that same batch still see a sibling reply and skip it.
             if ($data['role'] === 'assistant' && $session->title === 'New Chat') {
-                $isFirstAssistantReply = ! ChatMessage::where('session_id', $session->id)
+                $lastUserMessageAt = ChatMessage::where('session_id', $session->id)
+                    ->where('role', 'user')
+                    ->orderByDesc('created_at')
+                    ->value('created_at');
+
+                $isFirstAssistantReply = $lastUserMessageAt && ! ChatMessage::where('session_id', $session->id)
                     ->where('role', 'assistant')
                     ->where('id', '!=', $message->id)
+                    ->where('created_at', '>=', $lastUserMessageAt)
                     ->exists();
             }
 

@@ -9,7 +9,7 @@ import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import { PaymentMethodsView } from '@/components/settings/PaymentMethodsView'
 import { AutoDebitView } from '@/components/settings/AutoDebitView'
 import apiClient from '@/lib/api-client'
-import { formatCurrency, formatPreciseCurrency, formatDate } from '@/lib/utils'
+import { formatPreciseCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import type { LedgerEntry, WalletBalance } from '@/types'
 
@@ -72,14 +72,20 @@ export function WalletView() {
               </div>
             ) : wallet ? (
               <div className="space-y-1">
-                <p className="text-3xl font-bold">{formatPreciseCurrency(wallet.balance, wallet.currency)}</p>
+                {/* Always USD, ignoring wallet.currency — every dollar that moves through
+                    this wallet is a raw USD-equivalent number with no conversion anywhere
+                    in the system. wallet.currency can be a leftover mislabel from before
+                    RegisterController.php stopped setting it from preferred_currency
+                    (confirmed live: a genuine $10 balance showing as "BDT 10.00" for a
+                    user who'd selected BDT at signup) — showing it here would just repeat
+                    that bug for every such account until they're individually corrected. */}
+                <p className="text-3xl font-bold">{formatPreciseCurrency(wallet.balance)}</p>
                 <p className="text-sm text-muted-foreground">balance</p>
                 <p className="text-sm text-muted-foreground">
-                  {formatPreciseCurrency(wallet.balance, wallet.currency)}
-                  {wallet.available_balance > wallet.balance &&
-                    ` + ${formatCurrency(wallet.available_balance - wallet.balance, wallet.currency)} buffer`}
-                  {' '}available to spend
-                  {wallet.reserved_balance > 0 && ` · ${formatPreciseCurrency(wallet.reserved_balance, wallet.currency)} reserved`}
+                  {/* Credit buffer is an internal spending-headroom mechanic, deliberately
+                      not surfaced to users — this only ever shows the real balance. */}
+                  {formatPreciseCurrency(wallet.balance)} available to spend
+                  {wallet.reserved_balance > 0 && ` · ${formatPreciseCurrency(wallet.reserved_balance)} reserved`}
                 </p>
               </div>
             ) : (
@@ -157,9 +163,9 @@ export function WalletView() {
                       <td className="px-4 py-2.5 text-muted-foreground">{entry.description}</td>
                       <td className={`px-4 py-2.5 text-right tabular-nums ${entry.type === 'credit' || entry.type === 'refund' ? 'text-green-600' : 'text-destructive'}`}>
                         {entry.type === 'credit' || entry.type === 'refund' ? '+' : '−'}
-                        {formatPreciseCurrency(entry.amount, entry.currency)}
+                        {formatPreciseCurrency(entry.amount)}
                       </td>
-                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(entry.balance_after, entry.currency)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(entry.balance_after)}</td>
                     </tr>
                   ))}
                 </tbody>

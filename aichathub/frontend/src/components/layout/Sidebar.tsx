@@ -12,6 +12,7 @@ import { SkeletonListItem } from '@/components/ui/Skeleton'
 import { SessionRow } from '@/components/chat/SessionRow'
 import { PrivateChatPopover } from '@/components/chat/PrivateChatPopover'
 import { useChatSession } from '@/contexts/ChatSessionContext'
+import { useAvailableModels } from '@/hooks/useAvailableModels'
 import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
 import { cn } from '@/lib/utils'
 import type { SettingsTab } from '@/components/settings/SettingsModal'
@@ -34,8 +35,9 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
   const { user } = useAuthStore()
   const {
     sessions, sessionsLoading, activeSessionId, setActiveSessionId, renameSession, deleteSession,
-    projects, projectsLoading, createProject, renameProject, deleteProject,
+    projects, projectsLoading, createProject, renameProject, deleteProject, createSession,
   } = useChatSession()
+  const { availableModels } = useAvailableModels()
   const { collapsed, toggle: toggleCollapsed } = useSidebarCollapsed()
 
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -69,6 +71,21 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
   const openSession = (id: string) => {
     setActiveSessionId(id)
     router.push(`/chat?session=${id}`)
+  }
+
+  // Empty projects previously had no way to start a chat at all — "No chats yet." was
+  // just plain text, no action (confirmed live). createSession already supports
+  // projectId (see ChatSessionContext's CreateSessionParams), just nothing here called
+  // it with one. Navigation waits for the mutation's own onSuccess (which is what
+  // actually sets activeSessionId) rather than firing immediately — routing to /chat
+  // while activeSessionId is still null would let chat/page.tsx's own auto-create
+  // effect race this and spin up a second, unwanted ungrouped session first.
+  const createChatInProject = (projectId: string) => {
+    if (availableModels.length === 0) return
+    createSession.mutate(
+      { modelId: availableModels[0].id, projectId },
+      { onSuccess: () => router.push('/chat') }
+    )
   }
 
   const toggleProject = (id: string) => {
@@ -119,7 +136,20 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
   if (collapsed) {
     return (
       <aside className={cn('hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-4 sm:flex', isPrivate && 'incognito')}>
-        <Logo iconOnly className="mb-3 h-6 w-6 text-foreground" />
+        <Logo iconOnly className="h-6 w-6 text-foreground" />
+
+        {/* Same position as the expanded state's collapse button (right next to the
+            logo) — it used to sit down here instead, after the flex-1 spacer, so the
+            toggle visibly jumped from top to bottom depending on which state you were
+            in (confirmed live: "unpredictable interaction, loss of muscle memory"). */}
+        <button
+          onClick={toggleCollapsed}
+          aria-label="Expand sidebar"
+          title="Expand sidebar"
+          className="mb-3 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
 
         <button
           onClick={() => { setActiveSessionId(null); router.push('/chat') }}
@@ -133,15 +163,6 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
         <div className="flex-1" />
 
         <button
-          onClick={toggleCollapsed}
-          aria-label="Expand sidebar"
-          title="Expand sidebar"
-          className="mb-3 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
-
-        <button
           onClick={() => openSettings('account')}
           aria-label="Settings"
           title="Settings"
@@ -151,7 +172,7 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
         </button>
 
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-          {user?.email?.[0]?.toUpperCase() ?? '?'}
+          {user?.name?.[0]?.toUpperCase() ?? '?'}
         </div>
         <button
           onClick={onLogout}
@@ -262,6 +283,20 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
                   <span className="shrink-0 text-[11px] text-muted-foreground/60">{project.sessions_count}</span>
                   {renamingProjectId !== project.id && (
                     <div className="flex shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {/* Only the empty-project state (below) had a way to start a chat —
+                          once a project had at least one, that action disappeared
+                          entirely with nothing to replace it (confirmed live: "after
+                          creating one chat, there is no option to open a new chat").
+                          Same createChatInProject() used there. */}
+                      <button
+                        onClick={() => createChatInProject(project.id)}
+                        disabled={createSession.isPending}
+                        className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                        aria-label="New chat in this project"
+                        title="New chat in this project"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
                       <button
                         onClick={() => { setRenamingProjectId(project.id); setRenameProjectValue(project.name) }}
                         className="p-1 text-muted-foreground hover:text-foreground"
@@ -282,7 +317,14 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
                 {expanded && (
                   <div className="ml-4 border-l border-border pl-1">
                     {projectSessions.length === 0 ? (
-                      <p className="px-2.5 py-1.5 text-xs text-muted-foreground">No chats yet.</p>
+                      <button
+                        onClick={() => createChatInProject(project.id)}
+                        disabled={createSession.isPending}
+                        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                      >
+                        <Plus className="h-3 w-3" />
+                        New chat
+                      </button>
                     ) : (
                       projectSessions.map((s) => (
                         <SessionRow
@@ -356,9 +398,9 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
           item was never buying anything). */}
       <div className="flex items-center gap-2 border-t border-border p-3">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-          {user?.email?.[0]?.toUpperCase() ?? '?'}
+          {user?.name?.[0]?.toUpperCase() ?? '?'}
         </div>
-        <span className="min-w-0 flex-1 truncate text-left text-sm text-muted-foreground">{user?.email}</span>
+        <span className="min-w-0 flex-1 truncate text-left text-sm text-muted-foreground">{user?.name}</span>
         <button
           onClick={onLogout}
           aria-label="Sign out"

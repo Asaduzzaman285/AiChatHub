@@ -17,7 +17,10 @@ export function WalletBalanceChip() {
   return (
     <div className="flex shrink-0 items-center gap-1 rounded-full bg-accent px-2.5 py-1 text-xs font-medium text-muted-foreground">
       <ArrowUp className="h-3 w-3" />
-      {wallet ? formatCurrency(wallet.available_balance) : '—'}
+      {/* Plain balance, not available_balance (balance + unused credit buffer) —
+          the buffer is an internal spending-headroom mechanic, not something users
+          should see as part of "their" balance. */}
+      {wallet ? formatCurrency(wallet.balance) : '—'}
     </div>
   )
 }

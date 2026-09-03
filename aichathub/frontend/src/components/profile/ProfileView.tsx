@@ -180,7 +180,9 @@ export function ProfileView() {
               </div>
             ) : wallet ? (
               <div className="space-y-1">
-                <p className="text-2xl font-bold">{formatPreciseCurrency(wallet.balance, wallet.currency)}</p>
+                {/* Always USD, ignoring wallet.currency — see WalletView.tsx's matching
+                    comment for why that field can't be trusted for display. */}
+                <p className="text-2xl font-bold">{formatPreciseCurrency(wallet.balance)}</p>
                 <p className="text-xs text-muted-foreground">balance</p>
               </div>
             ) : (

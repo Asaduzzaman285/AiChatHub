@@ -36,8 +36,17 @@ export function PricingSection() {
               <div key={i} className="h-80 animate-pulse rounded-2xl border border-neutral-200 bg-neutral-50" />
             ))
           ) : (
-            packages?.filter((pkg) => pkg.slug !== 'pro').map((pkg) => {
-              const featured = pkg.slug === 'standard'
+            // Explicit order (Basic, Play, Standard) rather than however the API
+            // happens to return them — Play sits in the visual center and is the
+            // featured/highlighted card here. Pro renders separately below.
+            // Note: "Play" is the one slug that isn't lowercase in the actual data
+            // (confirmed via GET /packages) — matched case-insensitively so this
+            // doesn't silently break if that's ever corrected server-side.
+            ['basic', 'play', 'standard']
+              .map((slug) => packages?.find((pkg) => pkg.slug.toLowerCase() === slug))
+              .filter((pkg): pkg is Package => !!pkg)
+              .map((pkg) => {
+              const featured = pkg.slug.toLowerCase() === 'play'
               return (
                 <PricingCard
                   key={pkg.id}

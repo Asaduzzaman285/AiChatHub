@@ -136,9 +136,8 @@ export function PlansView() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Subscribing and upgrading always charge the full plan price via Stripe (test mode) or bKash
-        (sandbox), right away — never from wallet balance, which is reserved for AI usage. Downgrading
-        takes effect at your next renewal, with no change until then.
+        Subscribing and upgrading always charge the full plan price right away — never from wallet
+        balance, which is reserved for AI usage.
       </p>
 
       {subscription?.scheduled_package && (
@@ -265,18 +264,10 @@ export function PlansView() {
                         Upgrade — full price charged now
                       </Button>
                     )
-                  ) : (
-                    <Button
-                      className="w-full"
-                      variant="outline"
-                      disabled={isPending || subscription?.scheduled_package?.slug === pkg.slug}
-                      onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'downgrade' })}
-                    >
-                      {subscription?.scheduled_package?.slug === pkg.slug
-                        ? 'Switching here at renewal'
-                        : isPending ? 'Scheduling…' : 'Downgrade at renewal'}
-                    </Button>
-                  )}
+                  ) : null /* Downgrade UI removed for now (2026-09-02) — changePlan's
+                       'downgrade' direction and the backend endpoint are untouched,
+                       this just hides the entry point. Restore this button (and the
+                       isPending/scheduled_package branch above it) to re-enable. */}
                 </CardContent>
               </Card>
             )

@@ -27,12 +27,11 @@ class RegisterController extends Controller
 
         // Resolve env values NOW (before closure) so they are available inside it
         $userId      = (string) $user->id;
-        $currency    = $user->preferred_currency ?? 'USD';
         $walletUrl   = rtrim(config('services.wallet_url', 'http://wallet-nginx'), '/');
         $internalKey = config('services.internal_key', '');
 
         // Fire event + wallet creation AFTER response is sent — never block registration
-        dispatch(function () use ($userId, $currency, $walletUrl, $internalKey) {
+        dispatch(function () use ($userId, $walletUrl, $internalKey) {
 
             // 1. Send verification email via event
             $user = \App\Models\User::find($userId);
@@ -47,8 +46,17 @@ class RegisterController extends Controller
                         'X-Internal-Service-Key' => $internalKey,
                         'Accept'                 => 'application/json',
                     ])->timeout(15)->post("{$walletUrl}/api/internal/wallet/create", [
-                        'user_id'  => $userId,
-                        'currency' => $currency,
+                        'user_id' => $userId,
+                        // Always USD, regardless of the user's preferred_currency — every
+                        // dollar that ever moves through this wallet (subscription
+                        // credits, AI usage costs, Stripe/bKash top-ups) is computed and
+                        // stored as a raw USD-equivalent number with no conversion
+                        // anywhere in the system. Passing preferred_currency here used to
+                        // just relabel real USD amounts as the user's chosen display
+                        // currency (e.g. a genuine $10 wallet showing as "BDT 10.00") —
+                        // wallet-service already defaults to USD when this is omitted, so
+                        // this key isn't even needed, but stays explicit for clarity.
+                        'currency' => 'USD',
                     ]);
                 } catch (\Throwable $e) {
                     // \Throwable, not \Exception — a route-not-found / connection-refused

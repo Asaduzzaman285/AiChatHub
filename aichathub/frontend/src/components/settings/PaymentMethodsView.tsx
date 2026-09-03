@@ -95,10 +95,10 @@ export function PaymentMethodsView() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+      <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle>Payment methods</CardTitle>
         {!adding && (
-          <Button variant="outline" className="text-xs" onClick={() => setAdding(true)}>Add card</Button>
+          <Button variant="outline" className="shrink-0 text-xs" onClick={() => setAdding(true)}>Add card</Button>
         )}
       </CardHeader>
       <CardContent className="space-y-3">

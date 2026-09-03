@@ -42,6 +42,7 @@ export function CompareCard({
   card,
   fillWidth,
   isChoosing,
+  isDeemphasized,
   onChoose,
   onDismiss,
 }: {
@@ -55,6 +56,10 @@ export function CompareCard({
   // spinner in place of the button label instead of the click silently appearing to
   // do nothing (confirmed live feedback: no loading state read as broken).
   isChoosing?: boolean
+  // True once a sibling card has been chosen as best and this one wasn't — fades
+  // and disables it rather than removing it, so the comparison stays available for
+  // reference while still making the choice read clearly at a glance.
+  isDeemphasized?: boolean
   onChoose: (card: CompareCardData) => void
   onDismiss: (modelId: string, cardKey: string) => void
 }) {
@@ -90,9 +95,10 @@ export function CompareCard({
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
-        'group flex flex-col rounded-xl border bg-card',
+        'group flex flex-col rounded-xl border bg-card transition-opacity',
         fillWidth ? 'min-w-0 flex-1' : 'w-80 shrink-0',
-        card.isChosen ? 'border-primary ring-1 ring-primary' : 'border-border'
+        card.isChosen ? 'border-primary ring-1 ring-primary' : 'border-border',
+        isDeemphasized && 'opacity-50 pointer-events-none'
       )}
       // isDragging affects opacity only (not display/position) — avoids the card
       // popping in/out of the horizontal-scroll flow mid-drag. Read via the
@@ -162,9 +168,14 @@ export function CompareCard({
         )}
       </div>
 
-      {card.usageText && (
-        <p className="border-t border-border px-3 py-1 text-[10px] tabular-nums text-muted-foreground">
-          {card.usageText}
+      {/* Rendered directly from the raw fields (not card.usageText) so input/output can
+          each get their own color, matching MessageBubble's treatment — a single
+          pre-joined string from formatUsage() can't be split into two colors. */}
+      {card.promptTokens != null && card.completionTokens != null && (
+        <p className="border-t border-border px-3 py-1 text-[10px] tabular-nums">
+          <span className="text-info">{card.promptTokens.toLocaleString()} in</span>
+          {' · '}
+          <span className="text-success">{card.completionTokens.toLocaleString()} out</span>
         </p>
       )}
 

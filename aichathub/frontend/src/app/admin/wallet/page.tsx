@@ -176,9 +176,9 @@ export default function AdminWalletPage() {
                       <td className="py-2 capitalize">{entry.type.replace('_', ' ')}</td>
                       <td className="py-2 text-muted-foreground">{entry.description}</td>
                       <td className={`py-2 text-right ${entry.type === 'credit' || entry.type === 'refund' || entry.type === 'admin_adjustment' ? 'text-green-600' : 'text-destructive'}`}>
-                        {formatCurrency(entry.amount, entry.currency)}
+                        {formatCurrency(entry.amount)}
                       </td>
-                      <td className="py-2 text-right">{formatCurrency(entry.balance_after, entry.currency)}</td>
+                      <td className="py-2 text-right">{formatCurrency(entry.balance_after)}</td>
                       <td className="py-2 text-muted-foreground">{formatDate(entry.created_at)}</td>
                     </tr>
                   ))}

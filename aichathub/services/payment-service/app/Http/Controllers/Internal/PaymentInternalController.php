@@ -43,10 +43,20 @@ class PaymentInternalController extends Controller
             // subscription — CheckoutCompletionService routes each to a
             // different subscription-service internal endpoint on completion.
             'type'         => 'nullable|in:subscription_purchase,subscription_upgrade',
+            // The end user's actual browser Origin, forwarded through by
+            // subscription-service (see SubscriptionController) — this is a
+            // server-to-server call, so the real Origin header is otherwise lost at
+            // this hop. Used for both sandbox key selection and the checkout
+            // redirect target; absent entirely for any caller that doesn't send it,
+            // which just falls through to today's existing (live, FRONTEND_URL)
+            // behavior.
+            'origin'       => 'nullable|string',
         ]);
 
         $gateway = $data['gateway'] ?? 'stripe';
         $type    = $data['type'] ?? 'subscription_purchase';
+
+        $this->stripe->useSandboxIfOrigin($data['origin'] ?? null);
 
         if ($gateway === 'bkash' && $data['currency'] !== 'USD') {
             return response()->json(['error' => 'bKash purchases must be specified in USD (converted to BDT automatically).'], 422);
@@ -69,6 +79,7 @@ class PaymentInternalController extends Controller
                 $data['currency'],
                 $data['description'],
                 ['package_slug' => $data['package_slug']],
+                $data['origin'] ?? null,
             );
 
         if ($result['error']) {

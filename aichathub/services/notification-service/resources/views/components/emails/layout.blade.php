@@ -11,7 +11,16 @@
         <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.08);">
           <tr>
             <td style="background-color:#111827; padding:24px 32px;">
-              <span style="color:#ffffff; font-size:18px; font-weight:700; letter-spacing:-0.02em;">✨ Alveta.ai</span>
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="vertical-align:middle; padding-right:8px;">
+                    <img src="https://app.alveta.ai/logo-email.svg" width="24" height="21" alt="Alveta.ai" style="display:block;">
+                  </td>
+                  <td style="vertical-align:middle;">
+                    <span style="color:#ffffff; font-size:18px; font-weight:700; letter-spacing:-0.02em;">Alveta.ai</span>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
           <tr>

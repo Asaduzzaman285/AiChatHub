@@ -52,6 +52,16 @@ class CheckoutController extends Controller
             return response()->json(['message' => 'Checkout session not found.', 'error' => 'not_found'], 404);
         }
 
+        // Must match whichever key actually created this session (see StripeGateway::
+        // useSandboxIfOrigin()) — a test-mode session (cs_test_...) is invisible to a
+        // live-mode key and vice versa, so retrieveCheckoutSession() below would throw
+        // on a mismatch. Missed this exact call site when the sandbox switch was first
+        // built (only createCheckoutSession()'s two callers were wired) — confirmed
+        // live: a real staging purchase got stuck retrying and never resolved, because
+        // this always defaulted to live keys regardless of which mode created the
+        // session it was trying to look up.
+        $stripe->useSandboxIfOrigin($request->header('Origin'));
+
         if (! in_array($transaction->status, ['completed', 'cancelled', 'failed'], true)) {
             if ($transaction->gateway === 'bkash') {
                 $alreadyExecuted = ! empty($transaction->metadata['trx_id'] ?? null);

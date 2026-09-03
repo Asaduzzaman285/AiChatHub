@@ -8,6 +8,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Laravel\Ai\Exceptions\AiException;
@@ -106,6 +107,30 @@ $app = Application::configure(basePath: dirname(__DIR__))
             return response()->json(['error' => 'This model is temporarily unavailable. Please try a different model.', 'code' => 'provider_error'], 502);
         });
     })->create();
+
+// Global default, not a per-call-site header — this service's coroutine hooks
+// (config/octane.php's hook_flags, SWOOLE_HOOK_ALL) silently break automatic Brotli
+// decompression on any *non-streaming* outbound HTTP call, the same underlying bug
+// already found and fixed today for payment-service's internal calls. Regular chat
+// streaming is unaffected (stream:true routes through Guzzle's StreamHandler, which
+// bypasses the hooked cURL path entirely) — but TitleGeneratorAgent's one-shot,
+// non-streaming call to DeepSeek is not, and laravel/ai's own DeepSeek client (vendor
+// code, not editable here) sets no Accept-Encoding override of its own. Confirmed
+// live: every title-generation attempt failed the exact same way (DeepSeekGateway::
+// validateTextResponse() given null) since at least the day before this fix — the
+// response body was Brotli-compressed and the hooked client never decoded it,
+// leaving unparseable bytes where JSON was expected. A global default here — instead
+// of chasing this same bug call-site by call-site as new non-streaming features
+// (embeddings, image generation, etc.) get added — closes it for every future
+// non-streaming Http:: call this service makes, provider APIs included.
+// booted(), not a direct top-level call — this file only configures the app; the
+// Http:: facade's root isn't bound yet at this point (confirmed live: calling it
+// directly here crash-looped both this container and the queue worker with "A facade
+// root has not been set" on every boot). booted() defers this until Laravel has
+// actually finished bootstrapping, facades included.
+$app->booted(function () {
+    Http::globalRequestMiddleware(fn ($request) => $request->withHeader('Accept-Encoding', 'identity'));
+});
 
 // scoped(), not singleton() — this service runs under Laravel Octane (Swoole), where
 // the app boots once and the same container instance serves many requests on the same

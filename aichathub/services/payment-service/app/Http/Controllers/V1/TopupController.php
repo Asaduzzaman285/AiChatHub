@@ -36,6 +36,10 @@ class TopupController extends Controller
         $userId  = $this->authUserId($request);
         $gateway = $data['gateway'] ?? 'stripe';
         $amount  = (float) $data['amount'];
+        $origin  = $request->header('Origin');
+
+        // No-op on any origin but staging.alveta.ai — see StripeGateway::useSandboxIfOrigin().
+        $stripe->useSandboxIfOrigin($origin);
 
         if ($gateway === 'bkash' && strtoupper($data['currency'] ?? 'USD') !== 'USD') {
             return response()->json(['error' => 'bKash top-ups must be specified in USD (converted to BDT automatically).'], 422);
@@ -58,6 +62,7 @@ class TopupController extends Controller
                 strtoupper($data['currency'] ?? 'USD'),
                 'Alveta.ai wallet top-up',
                 ['type' => 'wallet_topup'],
+                $origin,
             );
 
         if ($result['error']) {

@@ -5,6 +5,14 @@ return [
         'secret'          => env('STRIPE_SECRET_KEY'),
         'webhook_secret'  => env('STRIPE_WEBHOOK_SECRET'),
         'publishable_key' => env('STRIPE_PUBLISHABLE_KEY'),
+        // Sandbox path for staging.alveta.ai (same backend as production — see
+        // StripeGateway::useSandboxIfOrigin()). Only ever selected when a request's
+        // origin exactly matches sandbox_origin; every other case (including no
+        // Origin header at all, e.g. server-to-server calls) keeps using the live
+        // keys above, unchanged.
+        'test_secret'          => env('STRIPE_TEST_SECRET_KEY'),
+        'test_publishable_key' => env('STRIPE_TEST_PUBLISHABLE_KEY'),
+        'sandbox_origin'       => env('STRIPE_SANDBOX_ORIGIN'),
     ],
 
     'bkash' => [

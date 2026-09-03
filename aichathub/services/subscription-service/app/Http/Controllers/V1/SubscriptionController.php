@@ -68,7 +68,7 @@ class SubscriptionController extends Controller
         $price    = (float) $package->monthly_price_usd;
 
         if ($price > 0) {
-            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source']);
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source'], 'subscription_purchase', $request->header('Origin'));
 
             if (! $checkoutUrl) {
                 return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
@@ -172,7 +172,7 @@ class SubscriptionController extends Controller
         }
 
         return $direction === 'upgrade'
-            ? $this->doUpgrade($userId, $current, $newPackage, $data)
+            ? $this->doUpgrade($userId, $current, $newPackage, $data, $request->header('Origin'))
             : $this->doDowngrade($userId, $current, $newPackage);
     }
 
@@ -183,13 +183,13 @@ class SubscriptionController extends Controller
      * validation comment above). A free ($0) package needs no charge at all
      * and applies immediately, same as subscribe()'s equivalent case.
      */
-    private function doUpgrade(string $userId, UserSubscription $current, Package $newPackage, array $data): JsonResponse
+    private function doUpgrade(string $userId, UserSubscription $current, Package $newPackage, array $data, ?string $origin = null): JsonResponse
     {
         $currency = $data['currency'] ?? 'USD';
         $price    = (float) $newPackage->monthly_price_usd;
 
         if ($price > 0) {
-            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade');
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade', $origin);
 
             if (! $checkoutUrl) {
                 return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
@@ -240,7 +240,7 @@ class SubscriptionController extends Controller
      * (422) — bKash happened to match by coincidence ("bkash" == "bkash"),
      * which is why only that path had ever actually been exercised before.
      */
-    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase'): ?string
+    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase', ?string $origin = null): ?string
     {
         $paymentUrl  = rtrim(config('services.payment_url'), '/');
         $internalKey = config('services.internal_key');
@@ -264,6 +264,10 @@ class SubscriptionController extends Controller
                 'type'         => $type,
                 'description'  => ($type === 'subscription_upgrade' ? 'Upgrade: ' : 'Subscription: ').$package->name,
                 'package_slug' => $package->slug,
+                // Forwarded through so payment-service can pick sandbox vs. live keys
+                // and redirect back to the right domain — this server-to-server call
+                // otherwise loses the original browser's Origin header entirely.
+                'origin'       => $origin,
             ]);
 
             if (! $response->successful()) {

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
-import { cn, formatPreciseCurrency, formatDate, formatNumber } from '@/lib/utils'
+import { cn, formatDate, formatNumber, formatPreciseCurrency } from '@/lib/utils'
 import type { UsageLogEntry, UsageSummary } from '@/types'
 
 const PERIODS = [
@@ -48,6 +48,8 @@ export function UsageView() {
         ))}
       </div>
 
+      {/* Total spend restored at explicit request — only the individual/per-row costs
+          in the tables below stay hidden, not the aggregate total. */}
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader>
@@ -98,8 +100,10 @@ export function UsageView() {
                     <th className="px-4 py-2 font-medium">Provider</th>
                     <th className="px-4 py-2 font-medium text-right">Prompt tokens</th>
                     <th className="px-4 py-2 font-medium text-right">Completion tokens</th>
-                    <th className="px-4 py-2 font-medium text-right">Total tokens</th>
-                    <th className="py-2 pl-4 font-medium text-right">Cost</th>
+                    {/* Cost column commented out (not deleted) at explicit request — this
+                        tab is token-focused now, matching the chat UI's own reversal. */}
+                    <th className="py-2 pl-4 font-medium text-right">Total tokens</th>
+                    {/* <th className="py-2 pl-4 font-medium text-right">Cost</th> */}
                   </tr>
                 </thead>
                 <tbody>
@@ -109,8 +113,8 @@ export function UsageView() {
                       <td className="px-4 py-2.5 capitalize text-muted-foreground">{m.provider}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.prompt_tokens)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.completion_tokens)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(m.total_tokens)}</td>
-                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(m.cost)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatNumber(m.total_tokens)}</td>
+                      {/* <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(m.cost)}</td> */}
                     </tr>
                   ))}
                 </tbody>
@@ -141,8 +145,8 @@ export function UsageView() {
                     <th className="py-2 pr-4 font-medium">Date</th>
                     <th className="px-4 py-2 font-medium">Model</th>
                     <th className="px-4 py-2 font-medium">Type</th>
-                    <th className="px-4 py-2 font-medium text-right">Tokens</th>
-                    <th className="py-2 pl-4 font-medium text-right">Cost</th>
+                    <th className="py-2 pl-4 font-medium text-right">Tokens</th>
+                    {/* <th className="py-2 pl-4 font-medium text-right">Cost</th> */}
                   </tr>
                 </thead>
                 <tbody>
@@ -151,8 +155,8 @@ export function UsageView() {
                       <td className="py-2.5 pr-4">{formatDate(log.created_at)}</td>
                       <td className="px-4 py-2.5">{log.model?.name ?? '—'}</td>
                       <td className="px-4 py-2.5 capitalize text-muted-foreground">{log.operation_type.replace('_', ' ')}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">{formatNumber(log.total_tokens)}</td>
-                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(log.actual_cost)}</td>
+                      <td className="py-2.5 pl-4 text-right tabular-nums">{formatNumber(log.total_tokens)}</td>
+                      {/* <td className="py-2.5 pl-4 text-right tabular-nums">{formatPreciseCurrency(log.actual_cost)}</td> */}
                     </tr>
                   ))}
                 </tbody>

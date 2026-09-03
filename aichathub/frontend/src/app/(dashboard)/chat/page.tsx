@@ -77,6 +77,22 @@ export default function ChatPage() {
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+
+  // Auto-grow the composer as content wraps, instead of staying a single fixed-height
+  // line no matter how much text is pasted/typed (confirmed live — it was a plain
+  // <input>, which can't show more than one line at all). Reset to 'auto' first so
+  // shrinking (e.g. after deleting text, or after sending) is measured correctly —
+  // scrollHeight only ever grows if the previous inline height isn't cleared first.
+  // The 240px cap is enforced by this same textarea's own max-h-[240px] class below;
+  // once content exceeds it, the browser clips to that height and its own
+  // overflow-y-auto takes over scrolling internally.
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [input])
 
   // Deep Think (Anthropic-only extended reasoning) / Web Search — single-model chat
   // only for now (not sendCompareTurn), gated to only render when the active model's
@@ -125,7 +141,7 @@ export default function ChatPage() {
   const [showCompactionPanel, setShowCompactionPanel] = useState(false)
   const [startingNewChat, setStartingNewChat] = useState(false)
 
-  const { models, availableModels } = useAvailableModels()
+  const { models, availableModels, modelsLoading } = useAvailableModels()
 
   const { data: messages } = useQuery({
     queryKey: ['chat', 'messages', activeSessionId],
@@ -329,7 +345,7 @@ export default function ChatPage() {
   // all put a pasted image under clipboardData.items with kind 'file' and a MIME type
   // starting with "image/" rather than as plain text, so this never fires for regular
   // copy-pasted text.
-  const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const imageItem = Array.from(e.clipboardData.items).find((item) => item.kind === 'file' && item.type.startsWith('image/'))
     if (!imageItem) return
     e.preventDefault()
@@ -425,6 +441,13 @@ export default function ChatPage() {
       apiClient.patch(`/api/v1/sessions/${activeSessionId}/messages/${card.messageId}/choose`),
     onSuccess: async (_data, card) => {
       if (card.modelId) setActiveModelId(card.modelId)
+      // Collapses the composer's selection down to just the winner — matching
+      // handleNotPreferred's behavior for a dismissed card. Without this, the losing
+      // models stayed in compareExtraModelIds after a choice was made: still checked
+      // in the dropdown, still part of the next message sent (confirmed live — this
+      // was the one piece handleNotPreferred already got right that choosing best
+      // never did).
+      setCompareExtraModelIds([])
       // Awaited (not fire-and-forget) so isPending — and therefore the button's
       // loading state below — stays true until the refetched messages actually
       // reflect the new is_chosen flag, not just until the PATCH itself resolves.
@@ -780,7 +803,14 @@ export default function ChatPage() {
     <div className={cn('flex h-screen flex-col bg-background text-foreground', activeSession?.is_private && 'incognito')}>
       {!activeSession ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          {availableModels.length === 0 ? (
+          {modelsLoading ? (
+            // Checked before the "no models" branch below — without this, availableModels
+            // defaults to [] while the /models request is still in flight, which is
+            // indistinguishable from "this account genuinely has zero models." Every user
+            // briefly saw the wrong empty state on every login/reload, worst for returning
+            // users who actually have full model access (confirmed live).
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/50" />
+          ) : availableModels.length === 0 ? (
             <>
               {/* Real brand mark, not a generic Sparkles placeholder — and the "check
                   Plans in Settings" instruction is now an actual button instead of
@@ -843,7 +873,15 @@ export default function ChatPage() {
                   {availableModels.map((m) => (
                     <DropdownMenuItem key={m.id} onSelect={() => setActiveModelId(m.id)}>
                       <ModelIcon provider={m.provider} className="h-5 w-5 shrink-0" />
-                      <span className="truncate">{m.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                      {/* Compare mode can hold several models at once (the primary
+                          activeModelId plus any added via the composer's "+") — this
+                          dropdown only ever highlighted a single selection with no way
+                          to see which models were actually part of the active compare
+                          set (confirmed live). */}
+                      {compareModelIds.includes(m.id) && (
+                        <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      )}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -909,7 +947,7 @@ export default function ChatPage() {
                   {SUGGESTED_QUESTIONS.map((q) => (
                     <button
                       key={q}
-                      onClick={() => { setInput(q); sendSingle(q) }}
+                      onClick={() => setInput(q)}
                       className="w-full py-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
                     >
                       {q}
@@ -1100,13 +1138,24 @@ export default function ChatPage() {
               )}
             >
                 <div className="px-3 pt-3">
-                  <input
+                  <textarea
+                    ref={composerRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onPaste={handlePaste}
+                    // Enter sends (matching the old single-line <input>'s native
+                    // submit-on-Enter behavior inside a <form>, which a textarea
+                    // doesn't do on its own); Shift+Enter inserts a real newline.
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        send()
+                      }
+                    }}
                     disabled={isStreaming || isComparing}
                     placeholder="Ask me anything"
-                    className="w-full bg-transparent py-2 text-sm text-foreground focus:outline-none disabled:opacity-50"
+                    rows={1}
+                    className="max-h-[240px] w-full resize-none overflow-y-auto bg-transparent py-2 text-sm text-foreground focus:outline-none disabled:opacity-50"
                   />
                 </div>
 
@@ -1385,7 +1434,7 @@ function MessageBubble({
   attachments?: FileAttachment[]
 }) {
   const isUser = role === 'user'
-  // const hasTokenCounts = !isUser && promptTokens != null && completionTokens != null
+  const hasTokenCounts = !isUser && promptTokens != null && completionTokens != null
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
     navigator.clipboard.writeText(content)
@@ -1457,8 +1506,8 @@ function MessageBubble({
             </ReactMarkdown>
           )}
         </div>
-        {/* Reversed at explicit request — cost now shown, input/output token counts
-            commented out (not deleted) so it's a one-line re-enable later.
+        {/* Reversed back at explicit request (2026-09-02) — token counts shown again,
+            cost commented out (not deleted) so it's a one-line re-enable later. */}
         {hasTokenCounts && (
           <p className="px-1 text-[10px] tabular-nums">
             <span className="text-info">{promptTokens!.toLocaleString()} in</span>
@@ -1466,12 +1515,11 @@ function MessageBubble({
             <span className="text-success">{completionTokens!.toLocaleString()} out</span>
           </p>
         )}
-        */}
         {!isUser && !isLoading && (
           <div className="flex items-center gap-1.5 px-1">
-            {cost != null && (
+            {/* {cost != null && (
               <span className="text-[10px] tabular-nums text-muted-foreground">{formatPreciseCurrency(cost)}</span>
-            )}
+            )} */}
             <button
               type="button"
               onClick={handleCopy}

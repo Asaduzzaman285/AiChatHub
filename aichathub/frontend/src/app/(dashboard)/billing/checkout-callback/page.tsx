@@ -74,6 +74,14 @@ export default function CheckoutCallbackPage() {
           // pre-purchase model list until a manual reload.
           queryClient.invalidateQueries({ queryKey: ['models'] })
           setPhase('success')
+          // A successful package purchase lands straight in chat rather than waiting
+          // on a manual click — the brief delay just lets the success state actually
+          // register before the page moves on. Wallet top-ups stay manual (the
+          // "Back to Wallet" button below) — there's no obvious next screen to jump to
+          // there the way there is for "you just bought access to the app."
+          if (type === 'subscription') {
+            setTimeout(() => router.push('/chat'), 1200)
+          }
           return
         }
 

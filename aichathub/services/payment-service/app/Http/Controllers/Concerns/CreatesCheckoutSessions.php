@@ -25,6 +25,15 @@ trait CreatesCheckoutSessions
         string $currency,
         string $description,
         array $metadata,
+        // The browser's own Origin, when one is available (topup gets it directly;
+        // subscribe/upgrade forward it through from subscription-service, since it's
+        // otherwise lost on that server-to-server hop). Redirecting back to whatever
+        // origin actually initiated checkout — rather than always the hardcoded
+        // FRONTEND_URL — is what makes the post-payment callback page work at all on
+        // any domain other than that one (confirmed broken live for staging.alveta.ai
+        // during today's Stripe go-live test: the callback loaded on the wrong origin
+        // with no auth token available there to verify the payment).
+        ?string $origin = null,
     ): array {
         $idempotencyKey = (string) Str::uuid();
 
@@ -40,7 +49,7 @@ trait CreatesCheckoutSessions
             'metadata'        => $metadata,
         ]);
 
-        $frontendUrl = rtrim((string) config('services.frontend_url'), '/');
+        $frontendUrl = rtrim($origin ?: (string) config('services.frontend_url'), '/');
         $returnType  = $type === 'wallet_topup' ? 'topup' : 'subscription';
 
         try {

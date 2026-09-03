@@ -11,12 +11,12 @@ import type { AiModel } from '@/types'
 // default model" (first available text model — no is_default/last-used concept exists
 // on AiModel) is defined in exactly one place.
 export function useAvailableModels() {
-  const { data: models } = useQuery({
+  const { data: models, isLoading: modelsLoading } = useQuery({
     queryKey: ['models'],
     queryFn: async () => (await apiClient.get<{ models: AiModel[] }>('/api/v1/models')).data.models,
   })
 
   const availableModels = useMemo(() => (models ?? []).filter((m) => m.type === 'text' && m.available), [models])
 
-  return { models, availableModels }
+  return { models, availableModels, modelsLoading }
 }

@@ -96,6 +96,11 @@ export function CompareCardGroup({
                 onChoose={onChoose}
                 onDismiss={onDismiss}
                 isChoosing={card.cardKey === pendingChooseCardKey}
+                // De-emphasize the rest once one card's been chosen, rather than
+                // removing them — the comparison stays visible for reference, the
+                // choice just reads clearly at a glance (confirmed as the wanted
+                // behavior over deleting the other cards outright).
+                isDeemphasized={cards.some((c) => c.isChosen) && !card.isChosen}
               />
             ))}
           </div>

@@ -93,12 +93,21 @@ export function Hero() {
               scaling up on larger breakpoints (was 44/64/80px) since that's the design's
               actual desktop size, not a floor to scale from. tracking-tight was reversed
               from what Figma wants (that's negative spacing; 1% is positive). */}
-          <h1 className="mx-auto max-w-[588px] text-balance text-[36px] font-medium leading-none tracking-[0.01em] text-white sm:text-[52px]">
-            Bringing the Power of AI,
-            <br />
-            All Together in One Platform
+          {/* max-w widened from the Figma-measured 588px, and the forced <br/> removed —
+              at that width, this renders as 4 wrapped lines instead of 2 (confirmed live
+              via screenshot: "Bringing the / Power of AI, / All Together in One /
+              Platform"). Root cause is almost certainly the font substitution already
+              noted above — Inter Display was never loaded, so this falls back to plain
+              Inter, which measures wider at the same point size, and the <br/>'s forced
+              break point made each half wrap AGAIN inside the narrow box. Letting
+              text-balance choose the break itself, inside more room, is what actually
+              guarantees 2 lines regardless of exactly how much wider the substituted
+              font measures — pixel-exact Figma parity isn't achievable without loading
+              the real font, which is a separate, bigger change. */}
+          <h1 className="mx-auto max-w-[720px] text-balance text-[36px] font-medium leading-none tracking-[0.01em] text-white sm:text-[52px]">
+            Bringing the Power of AI, All Together in One Platform
           </h1>
-          <p className="mx-auto mt-4 max-w-[500px] text-balance text-sm leading-relaxed text-white/70 sm:text-base">
+          <p className="mx-auto mt-4 max-w-[620px] text-balance text-sm leading-relaxed text-white/70 sm:text-base">
             Access all the leading AI models from one dashboard. Create, compare, and get more done without switching between multiple AI tools
           </p>
 

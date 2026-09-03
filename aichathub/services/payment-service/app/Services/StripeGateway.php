@@ -18,6 +18,27 @@ class StripeGateway
     }
 
     /**
+     * Switches this instance to the test-mode Stripe client, but only when $origin
+     * exactly matches the configured sandbox origin (staging.alveta.ai) — every other
+     * case, including null (no Origin header at all, e.g. a server-to-server call),
+     * leaves the live client from the constructor untouched. Deliberately NOT called
+     * from resolveOrCreateCustomer()/attachToCustomer()/charge() — a saved card is
+     * always tokenized against the frontend's one build-time publishable key (live,
+     * since staging shares that build), so a test-mode secret key here would just
+     * reject it as a cross-mode object instead of actually sandboxing anything. Only
+     * the one-time Checkout Session path (createCheckoutSession(), used by top-up,
+     * subscribe, and upgrade) is safe to sandbox this way — it never touches a
+     * pre-existing Customer/PaymentMethod object at all.
+     */
+    public function useSandboxIfOrigin(?string $origin): void
+    {
+        $sandboxOrigin = config('services.stripe.sandbox_origin');
+        if ($origin && $sandboxOrigin && $origin === $sandboxOrigin) {
+            $this->stripe = new StripeClient(config('services.stripe.test_secret'));
+        }
+    }
+
+    /**
      * One Stripe Customer per user, created lazily. Needed so saved-card charges can
      * go through Stripe's off_session flow (see charge() below) instead of a bare
      * payment_method with nothing backing it — real cards under SCA can reject that.
