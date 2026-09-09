@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Internal\CurrencyInternalController;
 use App\Http\Controllers\Internal\SubscriptionActivationController;
 use App\Http\Controllers\Internal\SubscriptionCheckController;
 use Illuminate\Support\Facades\Route;
@@ -15,3 +16,7 @@ Route::post('/subscriptions/activate', [SubscriptionActivationController::class,
 
 // Called by Payment Service once a card/bKash-funded upgrade is verified paid.
 Route::post('/subscriptions/activate-upgrade', [SubscriptionActivationController::class, 'activateUpgrade']);
+
+// Called by wallet-service/billing-service to snapshot a rate onto a new
+// transaction/invoice row at creation time — see the controller's own comment.
+Route::get('/currencies/{code}/rate', [CurrencyInternalController::class, 'rate']);

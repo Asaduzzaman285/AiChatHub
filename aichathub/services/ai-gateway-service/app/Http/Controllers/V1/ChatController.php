@@ -8,11 +8,17 @@ use App\Http\Controllers\Controller;
 use App\Jobs\ReleaseWalletReservationJob;
 use App\Models\AiModel;
 use App\Services\ChatServiceClient;
+use App\Services\GeneratedAttachmentTracker;
 use App\Services\PendingReservationTracker;
 use App\Services\SubscriptionClientService;
 use App\Services\WalletClientService;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Laravel\Ai\Exceptions\AiException;
+use Laravel\Ai\Exceptions\InsufficientCreditsException;
+use Laravel\Ai\Exceptions\ProviderOverloadedException;
+use Laravel\Ai\Exceptions\RateLimitedException;
 use Laravel\Ai\Files\Image;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Streaming\Events\TextDelta;
@@ -76,6 +82,7 @@ class ChatController extends Controller
         // (see ChatServiceClient). Documents resolve to extracted plain text instead,
         // which works with any model regardless of vision support.
         $images = [];
+        $imageAttachments = [];
         $documentContext = '';
         if (! empty($data['attachment_ids'])) {
             $attachments = $this->chatClient->resolveAttachments($data['attachment_ids']);
@@ -100,6 +107,25 @@ class ChatController extends Controller
             }
         }
 
+        // Only reached when THIS turn has no new attachment of its own. Extracted text
+        // is deliberately never written into persisted message content or `history`
+        // (a big document re-sent as normal chat text on every future turn would blow
+        // past a model's context budget on its own) — but that meant a document's
+        // content was gone from the model's view the instant the turn that uploaded it
+        // ended, even though the UI kept showing it attached in that same chat.
+        // Confirmed live: a user uploaded a resume, asked for an edit, then a follow-up
+        // ("keep the same structure") got "I don't have access to the file" — the model
+        // was telling the truth about its own context, the UI just implied otherwise.
+        // Re-resolving from chat-service here closes that gap for documents specifically
+        // (images excluded — see getSessionAttachments's own comment on why).
+        if ($documentContext === '' && $persistToChatService) {
+            foreach ($this->chatClient->getSessionAttachments($sessionId) as $a) {
+                if (! empty($a['extracted_text'])) {
+                    $documentContext .= "\n\n--- Previously attached file: {$a['original_name']} ---\n{$a['extracted_text']}\n--- End of {$a['original_name']} ---\n";
+                }
+            }
+        }
+
         // Re-derived from the model's real capabilities, never trusted straight from the
         // client — some providers throw (not silently ignore) an unsupported WebSearch
         // tool, and Deep Think is only meaningful for providers TextChatAgent actually
@@ -109,12 +135,39 @@ class ChatController extends Controller
             && TextChatAgent::supportsDeepThink($model->provider)
             && (bool) ($model->capabilities['reasoning'] ?? false);
 
+        // Automatic, not a mode the user switches into — the tool is simply made
+        // available to whatever text model they're already talking to, and the model
+        // itself decides whether the user's message actually wants an image (same
+        // behavior as ChatGPT/Gemini). Two gates, same "re-derive server-side" rule as
+        // web search above: the selected model must itself support function/tool
+        // calling (a model with capabilities.function_calling=false has no mechanism
+        // to invoke this at all — DeepSeek's chat models are the current example), and
+        // the user's actual subscription must include gemini-2.5-flash-image,
+        // independent of which model is selected for the surrounding conversation.
+        // (Was dall-e-3, then gpt-image-2 — see GenerateImageTool's own comment for
+        // why it moved twice: first dall-e-3's retirement, then a deliberate switch
+        // to Gemini's Nano Banana for cost and identity-preserving edit quality.)
+        $imageGenEnabled = (bool) ($model->capabilities['function_calling'] ?? false)
+            && ($this->subscriptionClient->canAccess($userId, 'gemini-2.5-flash-image')['allowed'] ?? false);
+
+        // Same double-duty pattern as the image gate above: 'document-pdf' both gates the
+        // whole "generate a file" bundle (xlsx/pptx/pdf offered together, not as three
+        // separate toggles) and prices PDF generation specifically. The spreadsheet and
+        // presentation tools each still look up their own pricing row before running —
+        // pricing for those two can be seeded on the admin side independently, so this
+        // one flag doesn't require all three rates to exist at once to start rolling out.
+        $documentGenEnabled = (bool) ($model->capabilities['function_calling'] ?? false)
+            && ($this->subscriptionClient->canAccess($userId, 'document-pdf')['allowed'] ?? false);
+
         $agent = new TextChatAgent(
-            userId:            $userId,
-            sessionId:         $sessionId,
-            history:           $data['history'] ?? [],
-            webSearchEnabled:  $webSearchEnabled,
-            deepThinkEnabled:  $deepThinkEnabled,
+            userId:              $userId,
+            sessionId:           $sessionId,
+            history:             $data['history'] ?? [],
+            webSearchEnabled:    $webSearchEnabled,
+            deepThinkEnabled:    $deepThinkEnabled,
+            imageGenEnabled:     $imageGenEnabled,
+            documentGenEnabled:  $documentGenEnabled,
+            imageAttachments:    $imageAttachments,
         );
 
         if ($persistToChatService) {
@@ -137,13 +190,22 @@ class ChatController extends Controller
                     $promptTokens     = $response->usage?->promptTokens ?? 0;
                     $completionTokens = $response->usage?->completionTokens ?? 0;
 
+                    // Populated by GenerateImageTool::handle() if the model called it
+                    // during this turn — the tool itself has no way to reach this
+                    // persistence step directly (it's invoked deep inside laravel/ai's own
+                    // tool-calling loop), so it leaves the attachment id here instead. Same
+                    // linkage mechanism a user's own upload already uses (attachment_ids ->
+                    // appendMessage() -> file_attachments.message_id), so MessageBubble's
+                    // existing rendering shows it with no frontend changes.
+                    $generatedAttachmentIds = app(GeneratedAttachmentTracker::class)->all();
+
                     $this->chatClient->appendMessage($sessionId, $userId, 'assistant', $response->text ?? '', [
                         'model_id'          => $model->id,
                         'prompt_tokens'     => $promptTokens,
                         'completion_tokens' => $completionTokens,
                         'cost'              => $this->calculateCost($model, $promptTokens, $completionTokens),
                         'is_streaming'      => true,
-                    ]);
+                    ], $generatedAttachmentIds);
                 });
             }
 
@@ -272,6 +334,18 @@ class ChatController extends Controller
             foreach ($attachments as $a) {
                 if (! empty($a['extracted_text'])) {
                     $documentContext .= "\n\n--- Attached file: {$a['original_name']} ---\n{$a['extracted_text']}\n--- End of {$a['original_name']} ---\n";
+                }
+            }
+        }
+
+        // Same reasoning as /chat/stream's identical block — see its own comment. A
+        // compare turn with no new attachment can still be a follow-up on a document
+        // uploaded earlier in this same session ("keep the same structure" applies to
+        // compare mode too, not just single-chat).
+        if ($documentContext === '' && $sessionId !== null) {
+            foreach ($this->chatClient->getSessionAttachments($sessionId) as $a) {
+                if (! empty($a['extracted_text'])) {
+                    $documentContext .= "\n\n--- Previously attached file: {$a['original_name']} ---\n{$a['extracted_text']}\n--- End of {$a['original_name']} ---\n";
                 }
             }
         }
@@ -422,6 +496,8 @@ class ChatController extends Controller
                         // renders a live-streaming error (see CompareCard's `error`
                         // prop / collapseCompareGroups(), which also knows to never
                         // treat an errored message as a valid "chosen" candidate).
+                        $friendlyError = $this->friendlyProviderError($model, $e);
+
                         if ($persistToChatService) {
                             // A single space, not '' — chat-service validates content as
                             // required|string, and Laravel's required rule rejects an
@@ -429,11 +505,11 @@ class ChatController extends Controller
                             // this text; it checks metadata.error first.
                             $this->chatClient->appendMessage($sessionId, $userId, 'assistant', ' ', [
                                 'model_id' => $model->id,
-                                'metadata' => ['compare_group_id' => $compareGroupId, 'error' => $e->getMessage()],
+                                'metadata' => ['compare_group_id' => $compareGroupId, 'error' => $friendlyError],
                             ]);
                         }
 
-                        $channel->push(['model' => $modelId, 'error' => $e->getMessage()]);
+                        $channel->push(['model' => $modelId, 'error' => $friendlyError]);
                     } finally {
                         $waitGroup->done();
                     }
@@ -573,5 +649,40 @@ class ChatController extends Controller
 
         return ($promptTokens / 1_000_000 * (float) $pricing->input_rate_per_million)
              + ($completionTokens / 1_000_000 * (float) $pricing->output_rate_per_million);
+    }
+
+    /**
+     * Turns a raw provider exception into the "{Model} failed to generate a response
+     * because/due to ..." wording the compare UI shows per failed card. Needed here
+     * (unlike stream()'s single-model path) because compare()'s per-model coroutine
+     * catches its own exception and never reaches bootstrap/app.php's global
+     * exception renderers — without this, the client got $e->getMessage() verbatim,
+     * which for a provider SDK exception is often a raw, technical string never meant
+     * for an end user (confirmed live: reported as illegible/unhelpful error text).
+     */
+    private function friendlyProviderError(AiModel $model, \Throwable $e): string
+    {
+        if ($e instanceof RateLimitedException) {
+            return "{$model->name} failed to generate a response due to a provider rate-limit error.";
+        }
+        if ($e instanceof InsufficientCreditsException) {
+            return "{$model->name} failed to generate a response because the provider account is unavailable.";
+        }
+        if ($e instanceof ProviderOverloadedException) {
+            return "{$model->name} failed to generate a response because the provider is currently overloaded.";
+        }
+        if (str_contains(strtolower($e->getMessage()), 'timed out') || str_contains(strtolower($e->getMessage()), 'timeout')) {
+            return "{$model->name} could not generate a response because the provider request timed out.";
+        }
+        if ($e instanceof RequestException) {
+            return $e->response->status() === 401
+                ? "{$model->name} failed to generate a response because it isn't configured correctly (invalid provider API key)."
+                : "{$model->name} failed to generate a response because the provider request failed.";
+        }
+        if ($e instanceof AiException) {
+            return "{$model->name} failed to generate a response because the provider is temporarily unavailable.";
+        }
+
+        return "{$model->name} failed to generate a response due to an unexpected error.";
     }
 }

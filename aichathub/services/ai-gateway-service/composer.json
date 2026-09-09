@@ -4,10 +4,13 @@
     "type": "project",
     "require": {
         "php": "^8.3",
+        "dompdf/dompdf": "^3.1",
         "illuminate/redis": "^12.0",
         "laravel/ai": "*",
         "laravel/framework": "^12.0",
         "laravel/octane": "^2.18",
+        "phpoffice/phppresentation": "^1.2",
+        "phpoffice/phpspreadsheet": "^3.10",
         "sentry/sentry-laravel": "^4.0"
     },
     "require-dev": {

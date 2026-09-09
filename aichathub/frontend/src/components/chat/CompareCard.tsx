@@ -3,10 +3,19 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy, Download, GripVertical, Loader2, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { Check, Copy, Download, Expand, GripVertical, Loader2, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Dialog, DialogContent } from '@/components/ui/Dialog'
 import { ModelIcon } from './ModelIcon'
+
+// Shared between the compact card body and the expand modal's full-size body so a
+// response reads identically in both places — text-card-foreground + prose-*:text-
+// inherit override Tailwind Typography's light-mode-only default colors, which
+// otherwise render unreadable against a dark or incognito bg-card (see the card
+// body's own comment below for the fuller history of that bug).
+const PROSE_CLASSES = 'prose prose-sm max-w-none text-card-foreground prose-pre:bg-black/80 prose-pre:text-white prose-code:before:content-none prose-code:after:content-none prose-headings:text-inherit prose-p:text-inherit prose-strong:text-inherit prose-em:text-inherit prose-a:text-inherit prose-code:text-inherit prose-li:text-inherit prose-blockquote:text-inherit'
 
 export interface CompareCardData {
   cardKey: string
@@ -70,6 +79,7 @@ export function CompareCard({
   // there's somewhere for it to go.
   const [vote, setVote] = useState<'up' | 'down' | null>(null)
   const [copied, setCopied] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(card.content)
@@ -91,6 +101,7 @@ export function CompareCard({
   }
 
   return (
+    <>
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
@@ -98,7 +109,12 @@ export function CompareCard({
         'group flex flex-col rounded-xl border bg-card transition-opacity',
         fillWidth ? 'min-w-0 flex-1' : 'w-80 shrink-0',
         card.isChosen ? 'border-primary ring-1 ring-primary' : 'border-border',
-        isDeemphasized && 'opacity-50 pointer-events-none'
+        // opacity only, deliberately no pointer-events-none — a de-emphasized card
+        // must still be fully clickable, or "best" becomes a one-way, unchangeable
+        // choice per turn. The whole point of leaving the other cards visible (see
+        // isDeemphasized's own comment in CompareCardGroup) is so the user can change
+        // their mind and pick a different one right up until the next message sends.
+        isDeemphasized && 'opacity-50'
       )}
       // isDragging affects opacity only (not display/position) — avoids the card
       // popping in/out of the horizontal-scroll flow mid-drag. Read via the
@@ -123,16 +139,41 @@ export function CompareCard({
           {card.provider && <ModelIcon provider={card.provider} className="h-5 w-5 shrink-0" />}
           <span className="truncate text-sm font-medium">{card.modelName}</span>
         </div>
-        <button
-          type="button"
-          onClick={() => card.modelId && onDismiss(card.modelId, card.cardKey)}
-          disabled={!card.modelId}
-          className="shrink-0 text-muted-foreground/60 hover:text-destructive disabled:opacity-30"
-          aria-label={`Not preferred — remove ${card.modelName} from this comparison`}
-          title="Not preferred — remove from comparison"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* Copy placed before Expand — explicit ordering request, both now live in
+              the same header cluster instead of Copy being buried in the footer row
+              below with the vote/download buttons. */}
+          <button
+            type="button"
+            onClick={handleCopy}
+            disabled={!card.content}
+            aria-label="Copy response"
+            title="Copy"
+            className="text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            disabled={!card.content}
+            className="text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
+            aria-label={`Expand ${card.modelName}'s full response`}
+            title="Expand"
+          >
+            <Expand className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => card.modelId && onDismiss(card.modelId, card.cardKey)}
+            disabled={!card.modelId}
+            className="text-muted-foreground/60 hover:text-destructive disabled:opacity-30"
+            aria-label={`Not preferred — remove ${card.modelName} from this comparison`}
+            title="Not preferred — remove from comparison"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* min-w-0 + overflow-x-auto — without both, a wide markdown table (or an
@@ -152,11 +193,15 @@ export function CompareCard({
           MessageBubble already uses for the same "thinking" moment) instead of a
           differently-shaped card being swapped in for the whole group — see
           chat/page.tsx's compareTurns render block for the other half of this fix. */}
-      <div className="prose prose-sm min-h-[88px] min-w-0 max-w-none flex-1 overflow-x-auto p-3 text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      {/* text-card-foreground + prose-*:text-inherit mirror MessageBubble's own fix
+          (chat/page.tsx) — without them, Tailwind Typography's default light-mode
+          prose colors render regardless of theme, which is unreadable against a dark
+          or incognito bg-card. This card never got that same fix before. */}
+      <div className={cn(PROSE_CLASSES, 'min-h-[88px] min-w-0 flex-1 overflow-x-auto p-3 text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0')}>
         {card.error ? (
           <span className="text-destructive">{card.error}</span>
         ) : card.content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>
             {card.content}
           </ReactMarkdown>
         ) : (
@@ -180,16 +225,6 @@ export function CompareCard({
       )}
 
       <div className="flex items-center gap-1 border-t border-border px-2 py-1.5">
-        <button
-          type="button"
-          onClick={handleCopy}
-          disabled={!card.content}
-          aria-label="Copy response"
-          title="Copy"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/60 hover:text-foreground disabled:opacity-30"
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        </button>
         <button
           type="button"
           onClick={() => setVote((v) => (v === 'up' ? null : 'up'))}
@@ -251,5 +286,21 @@ export function CompareCard({
         </button>
       </div>
     </div>
+    <Dialog open={expanded} onOpenChange={setExpanded}>
+      <DialogContent className="flex max-h-[85vh] w-[90vw] max-w-3xl translate-y-0 top-[8vh] flex-col gap-0 overflow-hidden p-0">
+        <div className="flex items-center gap-1.5 border-b border-border px-4 py-3">
+          {card.provider && <ModelIcon provider={card.provider} className="h-5 w-5 shrink-0" />}
+          <span className="truncate text-sm font-medium">{card.modelName}</span>
+        </div>
+        <div className={cn(PROSE_CLASSES, 'min-w-0 flex-1 overflow-y-auto p-4 text-sm')}>
+          {card.content && (
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>
+              {card.content}
+            </ReactMarkdown>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

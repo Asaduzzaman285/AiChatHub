@@ -31,19 +31,19 @@ class EmailVerificationController extends Controller
      */
     public function verify(string $token): RedirectResponse|JsonResponse
     {
-        $frontendUrl = rtrim(config('services.frontend_url'), '/');
-
         $verification = EmailVerification::where('token', $token)
             ->where('used', false)
             ->with('user')
             ->first();
 
+        $defaultFrontendUrl = rtrim(config('services.frontend_url'), '/');
+
         if (! $verification) {
-            return redirect("{$frontendUrl}/login?verified=0&reason=invalid_token");
+            return redirect("{$defaultFrontendUrl}/login?verified=0&reason=invalid_token");
         }
 
         if ($verification->isExpired()) {
-            return redirect("{$frontendUrl}/login?verified=0&reason=token_expired");
+            return redirect("{$this->redirectOrigin($verification->origin)}/login?verified=0&reason=token_expired");
         }
 
         // An email-change confirmation (see EmailChangeController) — distinct from the
@@ -82,7 +82,28 @@ class EmailVerificationController extends Controller
             $this->notificationClient->send('welcome', $userId, $email, ['name' => $name], "welcome:{$userId}");
         })->afterResponse();
 
-        return redirect("{$frontendUrl}/login?verified=1");
+        return redirect("{$this->redirectOrigin($verification->origin)}/login?verified=1");
+    }
+
+    /**
+     * Redirect target for a verification click — the origin the registration
+     * actually came from (staging.alveta.ai or app.alveta.ai), captured at
+     * registration time since a plain email-link click has no Origin header
+     * of its own to read (see UserRegistered's docblock). Validated against
+     * the two known frontend origins rather than trusted as-is: Origin is
+     * client-supplied at registration time, and blindly redirecting to
+     * whatever a registration request claimed would be an open redirect.
+     */
+    private function redirectOrigin(?string $origin): string
+    {
+        $defaultFrontendUrl = rtrim(config('services.frontend_url'), '/');
+        $stagingFrontendUrl = rtrim((string) config('services.staging_frontend_url'), '/');
+
+        $allowed = array_filter([$defaultFrontendUrl, $stagingFrontendUrl]);
+
+        return $origin && in_array(rtrim($origin, '/'), $allowed, true)
+            ? rtrim($origin, '/')
+            : $defaultFrontendUrl;
     }
 
     /**
@@ -118,7 +139,7 @@ class EmailVerificationController extends Controller
             ], 429);
         }
 
-        event(new UserRegistered($user));
+        event(new UserRegistered($user, $request->header('Origin')));
 
         return response()->json([
             'message' => 'If that email exists and is unverified, a new link has been sent.',

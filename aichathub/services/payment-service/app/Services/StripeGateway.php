@@ -151,6 +151,18 @@ class StripeGateway
      * native recurring Subscription objects, so there's no Dashboard-created
      * Product/Price to reference; the line item is built inline via price_data.
      *
+     * adaptive_pricing is explicitly disabled — the account's Dashboard setting
+     * for it defaults to on, which silently overrides whatever $currency this
+     * method was called with: it shows the customer a "choose currency" picker
+     * and converts the price using Stripe's own live market rate, not this
+     * app's admin-configured currency_rates. Confirmed live: a $1 USD session
+     * for a Bangladeshi customer offered "BDT 127.97" as an alternative,
+     * conflicting with the app's actual design (card checkout is always USD;
+     * BDT only ever comes from bKash's own fixed package sticker price — see
+     * SubscriptionController::resolveCurrency()). Disabling this per-session
+     * (rather than just in the Dashboard) keeps that guarantee even if the
+     * account-level default is ever changed back.
+     *
      * @throws ApiErrorException
      */
     public function createCheckoutSession(
@@ -176,6 +188,7 @@ class StripeGateway
             'cancel_url'          => $cancelUrl,
             'metadata'            => $metadata,
             'payment_intent_data' => ['metadata' => $metadata],
+            'adaptive_pricing'    => ['enabled' => false],
         ], ['idempotency_key' => $idempotencyKey]);
     }
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { formatDistanceToNow } from 'date-fns'
-import { Clock, Pencil, Trash2 } from 'lucide-react'
+import { Clock, Lock, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ChatSession } from '@/types'
 
@@ -42,8 +42,11 @@ export function SessionRow({
           className="flex-1 min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-sm"
         />
       ) : (
-        <button onClick={onOpen} className="flex-1 min-w-0 truncate text-left">
-          {session.title}
+        <button onClick={onOpen} className="flex flex-1 min-w-0 items-center gap-1 text-left">
+          {/* Distinct from the "deletes in..." clock below — this marks the chat as
+              private at a glance in the list itself, not just once you're inside it. */}
+          {session.is_private && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" aria-label="Private chat" />}
+          <span className="truncate">{session.title}</span>
         </button>
       )}
       {/* Persistent (not hover-gated like rename/delete below) — this is informational,

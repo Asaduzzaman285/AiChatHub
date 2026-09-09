@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\ReleaseWalletReservationJob;
+use App\Services\GeneratedAttachmentTracker;
 use App\Services\PendingReservationTracker;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -139,6 +140,7 @@ $app->booted(function () {
 // Octane flushes anything bound via scoped() between requests (FlushTemporaryContainerInstances),
 // restoring the "fresh per request" behavior this class's own docblock assumes.
 $app->scoped(PendingReservationTracker::class);
+$app->scoped(GeneratedAttachmentTracker::class);
 
 // Safety net for CostTrackingMiddleware: releases a wallet reservation that was made
 // but never settled (deduct() never ran). The actual provider HTTP call runs inside a

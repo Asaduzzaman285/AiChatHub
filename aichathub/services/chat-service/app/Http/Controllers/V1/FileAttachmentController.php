@@ -28,6 +28,8 @@ class FileAttachmentController extends Controller
         'text/csv',
         'application/json',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       // .xlsx
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
     ];
 
     private const ALLOWED_MIMES = [...self::IMAGE_MIMES, ...self::DOCUMENT_MIMES];

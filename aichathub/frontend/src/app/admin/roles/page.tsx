@@ -180,7 +180,11 @@ export default function AdminRolesPage() {
                       className="px-2.5 py-1.5 text-xs"
                       disabled={remove.isPending || role.admin_count > 0}
                       title={role.admin_count > 0 ? 'Reassign admins off this role before deleting it' : undefined}
-                      onClick={() => remove.mutate(role.id)}
+                      onClick={() => {
+                        if (window.confirm(`Delete the "${role.name}" role? This can't be undone.`)) {
+                          remove.mutate(role.id)
+                        }
+                      }}
                     >
                       Delete
                     </Button>

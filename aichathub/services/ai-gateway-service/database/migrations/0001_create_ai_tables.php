@@ -14,7 +14,7 @@ return new class extends Migration
             $table->string('provider', 50);
             $table->string('name', 100);
             $table->string('model_id', 100);          // e.g. 'gpt-4o'
-            $table->string('type', 50);               // text | image_generation | audio_tts | audio_stt | embedding
+            $table->string('type', 50);               // text | image_generation | document_generation | audio_tts | audio_stt | embedding
             $table->text('description')->nullable();
             $table->integer('context_window')->nullable();
             $table->integer('max_output_tokens')->nullable();
@@ -30,7 +30,7 @@ return new class extends Migration
         Schema::create('model_pricing', function (Blueprint $table) {
             $table->uuid('id')->primary()->default(DB::raw('uuid_generate_v4()'));
             $table->foreignUuid('model_id')->constrained('ai_models')->cascadeOnDelete();
-            $table->string('pricing_type', 30);       // token_based | flat_per_image | character_based | per_minute
+            $table->string('pricing_type', 30);       // token_based | flat_per_image | flat_per_file | character_based | per_minute
             $table->decimal('input_rate_per_million', 10, 6)->nullable();
             $table->decimal('output_rate_per_million', 10, 6)->nullable();
             $table->decimal('flat_rate_per_unit', 10, 4)->nullable();

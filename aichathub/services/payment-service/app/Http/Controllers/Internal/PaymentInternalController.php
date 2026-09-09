@@ -36,6 +36,11 @@ class PaymentInternalController extends Controller
             // BDT (converted from USD internally), so it's rejected below
             // rather than silently ignored if the caller passes anything else.
             'currency'     => 'required|string|in:USD,BDT',
+            // bKash only — the package's own fixed BDT sticker price
+            // (subscription-service's monthly_price_bdt), charged exactly as
+            // set instead of a live-formula conversion of `amount`. See
+            // BkashGateway::createCheckoutSession()'s $fixedAmountBdt.
+            'amount_bdt'   => 'nullable|numeric|min:0.01',
             'description'  => 'required|string',
             'package_slug' => 'required|string',
             'gateway'      => 'nullable|in:stripe,bkash',
@@ -57,6 +62,7 @@ class PaymentInternalController extends Controller
         $type    = $data['type'] ?? 'subscription_purchase';
 
         $this->stripe->useSandboxIfOrigin($data['origin'] ?? null);
+        $this->bkash->useSandboxIfOrigin($data['origin'] ?? null);
 
         if ($gateway === 'bkash' && $data['currency'] !== 'USD') {
             return response()->json(['error' => 'bKash purchases must be specified in USD (converted to BDT automatically).'], 422);
@@ -70,6 +76,7 @@ class PaymentInternalController extends Controller
                 (float) $data['amount'],
                 $data['description'],
                 ['package_slug' => $data['package_slug']],
+                isset($data['amount_bdt']) ? (float) $data['amount_bdt'] : null,
             )
             : $this->beginCheckout(
                 $this->stripe,

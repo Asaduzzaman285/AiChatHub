@@ -4,6 +4,11 @@ namespace App\Ai\Agents;
 
 use App\Ai\Middleware\CostTrackingMiddleware;
 use App\Ai\Middleware\UsageLoggingMiddleware;
+use App\Ai\Tools\GenerateImageTool;
+use App\Ai\Tools\GeneratePdfTool;
+use App\Ai\Tools\GeneratePresentationTool;
+use App\Ai\Tools\GenerateSpreadsheetTool;
+use App\Services\GeneratedAttachmentTracker;
 use Laravel\Ai\Attributes\MaxTokens;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
@@ -38,6 +43,20 @@ class TextChatAgent implements Agent, Conversational, HasMiddleware, HasTools, H
         // is only a verified-safe payload for Anthropic.
         private bool $webSearchEnabled = false,
         private bool $deepThinkEnabled = false,
+        // Same "re-derived server-side, never trusted from client input" rule as the
+        // two above — ChatController::stream() sets this from a real subscription
+        // access check against gpt-image-2, not from anything the request body claims.
+        private bool $imageGenEnabled = false,
+        // One flag for all three document tools (xlsx/pptx/pdf) — they're offered as
+        // a single "generate a file" capability, not three separate toggles. Same
+        // re-derivation rule as above.
+        private bool $documentGenEnabled = false,
+        // Raw {base64, mime_type} pairs for images attached to the CURRENT message
+        // only — handed to GenerateImageTool so "edit this photo" can use the
+        // attached image as the edit's source instead of generating from scratch.
+        // Same array ChatController already builds for vision input; this is a
+        // second consumer of that same resolved data, not a new resolution step.
+        private array $imageAttachments = [],
     ) {}
 
     public function instructions(): string
@@ -63,7 +82,20 @@ class TextChatAgent implements Agent, Conversational, HasMiddleware, HasTools, H
 
     public function tools(): iterable
     {
-        return $this->webSearchEnabled ? [new WebSearch()] : [];
+        $tools = [];
+        if ($this->webSearchEnabled) {
+            $tools[] = new WebSearch();
+        }
+        if ($this->imageGenEnabled) {
+            $tools[] = new GenerateImageTool($this->userId, app(GeneratedAttachmentTracker::class), $this->imageAttachments);
+        }
+        if ($this->documentGenEnabled) {
+            $tracker = app(GeneratedAttachmentTracker::class);
+            $tools[] = new GenerateSpreadsheetTool($this->userId, $tracker);
+            $tools[] = new GeneratePresentationTool($this->userId, $tracker);
+            $tools[] = new GeneratePdfTool($this->userId, $tracker);
+        }
+        return $tools;
     }
 
     // laravel/ai v0.10.2 has no first-class "reasoning" contract (no SupportsReasoning

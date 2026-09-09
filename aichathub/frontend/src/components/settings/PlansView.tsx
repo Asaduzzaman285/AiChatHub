@@ -9,11 +9,17 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
+import { useAuthStore } from '@/stores/auth-store'
 import type { Package, Subscription } from '@/types'
 
 /** Shared by the Settings modal's Plans tab — extracted from the old standalone /pricing route. */
 export function PlansView() {
   const queryClient = useQueryClient()
+  const user = useAuthStore((s) => s.user)
+  // Informational display only — see subscribe()/changePlan()'s own currency field,
+  // which follows whichever payment method is actually clicked (bKash -> BDT,
+  // card -> USD), not this. This is just what a package's card shows as its price.
+  const displayCurrency = user?.preferred_currency ?? 'USD'
   const [pendingSlug, setPendingSlug] = useState<string | null>(null)
   // Which package the payment-source picker is currently open for — null means
   // no picker is showing (either nothing clicked yet, or a single-option package).
@@ -40,7 +46,10 @@ export function PlansView() {
       return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
         payment_source: source,
-        currency: 'USD',
+        // bKash only ever settles in BDT, card only ever in USD — the currency
+        // sent here follows the payment method actually clicked, independent
+        // of the card's own displayed sticker price (displayCurrency above).
+        currency: source === 'bkash' ? 'BDT' : 'USD',
       })
     },
     onSuccess: (res) => {
@@ -92,7 +101,7 @@ export function PlansView() {
       setPendingSlug(slug)
       return apiClient.post<{ checkout_url?: string; message?: string }>(`/api/v1/subscription/${direction}`, {
         package_slug: slug,
-        ...(direction === 'upgrade' ? { payment_source: source, currency: 'USD' } : {}),
+        ...(direction === 'upgrade' ? { payment_source: source, currency: source === 'bkash' ? 'BDT' : 'USD' } : {}),
       })
     },
     onSuccess: (res, variables) => {
@@ -176,14 +185,29 @@ export function PlansView() {
                   <CardTitle>{pkg.name}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div>
-                    <span className="text-3xl font-bold">{formatCurrency(pkg.price.usd)}</span>
-                    <span className="text-sm text-muted-foreground">/mo</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">{pkg.description}</p>
-                  <p className="text-sm">
-                    Includes <strong>{formatCurrency(pkg.wallet_credit_usd)}</strong> monthly wallet credit
-                  </p>
+                  {(() => {
+                    const cardCurrency = displayCurrency === 'BDT' && pkg.price.bdt !== null ? 'BDT' : 'USD'
+                    const cardPrice = cardCurrency === 'BDT' ? pkg.price.bdt! : pkg.price.usd
+                    // Informational only — the wallet credit itself is always a
+                    // real USD number internally (see WalletView.tsx). Converted
+                    // here using the package's own implied rate (its BDT sticker
+                    // ÷ its USD price) purely so this card doesn't show two
+                    // numbers in two different currencies at once.
+                    const cardWalletCredit =
+                      cardCurrency === 'BDT' && pkg.price.usd > 0 ? pkg.wallet_credit_usd * (pkg.price.bdt! / pkg.price.usd) : pkg.wallet_credit_usd
+                    return (
+                      <>
+                        <div>
+                          <span className="text-3xl font-bold">{formatCurrency(cardPrice, cardCurrency)}</span>
+                          <span className="text-sm text-muted-foreground">/mo</span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{pkg.description}</p>
+                        <p className="text-sm">
+                          Includes <strong>{formatCurrency(cardWalletCredit, cardCurrency)}</strong> monthly wallet credit
+                        </p>
+                      </>
+                    )
+                  })()}
                   {pkg.features.vision && (
                     <p className="text-xs text-muted-foreground">Includes image/file upload &amp; vision models</p>
                   )}
@@ -202,10 +226,6 @@ export function PlansView() {
                         >
                           {isPending ? 'Subscribing…' : 'Pay with Card (Stripe)'}
                         </Button>
-                        {/* bKash temporarily disabled — commented out, not removed; uncomment
-                            to re-enable (see WalletView.tsx and PlansView.tsx's upgrade branch
-                            below for the matching pair, and payment-service's config/BkashGateway
-                            if a fuller rollback is ever needed).
                         <Button
                           className="w-full"
                           variant="outline"
@@ -214,7 +234,6 @@ export function PlansView() {
                         >
                           {isPending ? 'Subscribing…' : 'Pay with bKash'}
                         </Button>
-                        */}
                         <button
                           type="button"
                           className="w-full text-xs text-muted-foreground hover:text-foreground"
@@ -239,8 +258,6 @@ export function PlansView() {
                         >
                           {isPending ? 'Upgrading…' : 'Pay with Card (Stripe)'}
                         </Button>
-                        {/* bKash temporarily disabled — see the matching comment above. */}
-                        {/*
                         <Button
                           className="w-full"
                           variant="outline"
@@ -249,7 +266,6 @@ export function PlansView() {
                         >
                           {isPending ? 'Upgrading…' : 'Pay with bKash'}
                         </Button>
-                        */}
                         <button
                           type="button"
                           className="w-full text-xs text-muted-foreground hover:text-foreground"

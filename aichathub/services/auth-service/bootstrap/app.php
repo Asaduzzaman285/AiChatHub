@@ -13,6 +13,19 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withProviders([
         \App\Providers\EventServiceProvider::class,
     ])
+    // Application::configure() above already calls ->withEvents() internally with
+    // discovery ON by default — this app registers listeners explicitly via
+    // EventServiceProvider's $listen array instead, so that auto-discovery is
+    // pure downside here: any listener whose class/method naturally matches the
+    // discovery convention (a `handle(EventType $event)` method under
+    // app/Listeners) gets registered a SECOND time, under a different internal
+    // string key ("Class@handle" from discovery vs "Class" from $listen), which
+    // Laravel's dispatcher does not deduplicate. Confirmed live: this is exactly
+    // why SendVerificationEmail ran twice per registration, sending two
+    // verification emails with two different tokens (only the second/newer
+    // token stayed valid — clicking the first email's link failed as
+    // "invalid_token"). discover: false turns this off.
+    ->withEvents(discover: false)
     ->withRouting(
         api: __DIR__.'/../routes/api.php',
         apiPrefix: 'api/v1',

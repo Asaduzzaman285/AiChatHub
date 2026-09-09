@@ -58,4 +58,8 @@ export const ALL_PERMISSIONS: { group: string; permissions: { value: string; lab
     group: 'AI Models',
     permissions: [{ value: 'models.manage', label: 'Create & edit AI models' }],
   },
+  {
+    group: 'Currencies',
+    permissions: [{ value: 'currencies.manage', label: 'Manage currencies & conversion rates' }],
+  },
 ]

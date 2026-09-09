@@ -28,6 +28,7 @@ class SendVerificationEmail implements ShouldQueue
             'token'      => $token,
             'used'       => false,
             'expires_at' => now()->addHours(24),
+            'origin'     => $event->origin,
         ]);
 
         $verifyUrl = config('services.api_public_url') . '/api/v1/auth/verify/' . $token;

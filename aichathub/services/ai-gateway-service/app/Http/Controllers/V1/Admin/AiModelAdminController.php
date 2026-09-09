@@ -21,7 +21,7 @@ use Illuminate\Validation\Rule;
  */
 class AiModelAdminController extends Controller
 {
-    private const PRICING_TYPES = ['token_based', 'flat_per_image', 'character_based', 'per_minute'];
+    private const PRICING_TYPES = ['token_based', 'flat_per_image', 'flat_per_file', 'character_based', 'per_minute'];
 
     /** GET /models/admin — every model, active or not, with its current pricing embedded. */
     public function index(): JsonResponse
@@ -184,7 +184,7 @@ class AiModelAdminController extends Controller
             'provider'                 => [$isCreate ? 'required' : 'sometimes', 'string', 'max:50'],
             'name'                     => [$isCreate ? 'required' : 'sometimes', 'string', 'max:100'],
             'model_id'                 => array_filter([$isCreate ? 'required' : 'prohibited', 'string', 'max:100', $modelIdRule]),
-            'type'                     => [$isCreate ? 'required' : 'sometimes', Rule::in(['text', 'image_generation', 'audio_tts', 'audio_stt', 'embedding'])],
+            'type'                     => [$isCreate ? 'required' : 'sometimes', Rule::in(['text', 'image_generation', 'document_generation', 'audio_tts', 'audio_stt', 'embedding'])],
             'description'              => 'nullable|string',
             'context_window'           => 'nullable|integer|min:1',
             'max_output_tokens'        => 'nullable|integer|min:1',

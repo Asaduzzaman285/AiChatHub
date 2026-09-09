@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import { AxiosError } from 'axios'
 import { useAuthStore } from '@/stores/auth-store'
 import apiClient from '@/lib/api-client'
@@ -23,6 +24,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const queryClient = useQueryClient()
   const { user, clearAuth } = useAuthStore()
   const { sessions, activeSessionId } = useChatSession()
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -64,6 +66,15 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     } catch {
       // Even if the server call fails, clear local state so the user isn't stuck.
     }
+    // React Query's cache is a long-lived singleton independent of which user is
+    // logged in — ['chat','sessions']/['projects']/etc. carry no user id in their
+    // query key, and the default staleTime (60s, see query-provider.tsx) means a
+    // same-tab remount after login often serves the cache as "fresh" without
+    // refetching. Confirmed live: logging out of User A and into User B kept
+    // showing User A's sidebar chats until a full page reload (which builds a
+    // brand-new QueryClient). clear() wipes every cached query on logout so the
+    // next user who logs in in this tab starts from nothing but their own data.
+    queryClient.clear()
     clearAuth()
     router.replace('/login')
   }

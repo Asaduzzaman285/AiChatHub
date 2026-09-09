@@ -164,6 +164,8 @@ class ChatInternalController extends Controller
 
     private const TEXT_MIMES = ['text/plain', 'text/markdown', 'text/csv', 'application/json'];
     private const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    private const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    private const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
     /**
      * POST /internal/attachments/resolve
@@ -204,12 +206,106 @@ class ChatInternalController extends Controller
         return response()->json(['attachments' => $resolved]);
     }
 
+    /**
+     * GET /internal/sessions/{sessionId}/attachments
+     * Lets ai-gateway-service re-inject a previously-uploaded document's extracted
+     * text on a LATER turn that has no new attachment of its own. Without this, a
+     * follow-up like "keep the same structure" had genuinely nothing to refer to —
+     * extracted text is deliberately never written into persisted message content
+     * or `history` (see resolveAttachments's own comment), so once the turn that
+     * uploaded a file was over, its content was gone from every future turn even
+     * though the UI still showed it attached in that chat. Confirmed live: exactly
+     * this — a user uploaded a resume, asked for an edit, then a follow-up got
+     * "I don't have access to the file."
+     * Images excluded on purpose — re-sending base64 on every future turn is a
+     * much bigger cost/latency problem than plain extracted text and isn't what
+     * was reported; scoped to the actual complaint (documents), not vision.
+     * Capped at the 4 most recent, same ceiling attachment_ids itself already has,
+     * so a long session with many uploads doesn't grow this without bound.
+     */
+    public function sessionAttachments(Request $request, string $sessionId): JsonResponse
+    {
+        $attachments = FileAttachment::where('session_id', $sessionId)
+            ->where('mime_type', 'not like', 'image/%')
+            ->orderBy('created_at', 'desc')
+            ->limit(4)
+            ->get();
+
+        $resolved = $attachments->map(function (FileAttachment $a) {
+            $bytes = Storage::disk($a->storage_disk)->get($a->storage_path);
+
+            return [
+                'id'             => $a->id,
+                'original_name'  => $a->original_name,
+                'extracted_text' => $this->extractText($bytes, $a->mime_type, $a->original_name),
+            ];
+        });
+
+        return response()->json(['attachments' => $resolved]);
+    }
+
+    /**
+     * POST /internal/attachments/create-from-bytes
+     * Server-to-server twin of FileAttachmentController::upload() — same store-to-R2 +
+     * FileAttachment::create() logic, but for bytes a caller already holds in memory
+     * (an AI-generated image/file) rather than a browser's multipart upload. Used by
+     * ai-gateway-service's image/document generation tools so a generated result can
+     * be linked to a message via the exact same attachment mechanism a real upload
+     * already uses — see FileAttachmentController::upload() for the pattern this
+     * mirrors, and appendMessage()'s attachment_ids handling for the message_id link.
+     *
+     * Real multipart file, not base64-in-JSON — see ChatServiceClient::
+     * createAttachmentFromBytes()'s own comment for why that broke on real image
+     * payloads (a curl rewind failure on retry, confirmed live).
+     */
+    public function createAttachmentFromBytes(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'user_id'   => 'required|uuid',
+            'mime_type' => 'required|string|max:100',
+            'file'      => 'required|file',
+        ]);
+
+        $file = $request->file('file');
+        $bytes = $file->get();
+        $originalFilename = $file->getClientOriginalName();
+
+        $userId = $data['user_id'];
+        $extension = pathinfo($originalFilename, PATHINFO_EXTENSION) ?: 'bin';
+        $storedName = \Illuminate\Support\Str::uuid().'.'.$extension;
+        $path = "attachments/{$userId}/{$storedName}";
+
+        Storage::disk('s3')->put($path, $bytes);
+
+        // Generated content is trusted (it never passed through a user's own upload
+        // form) — virus_scan_status is set straight to 'clean' rather than run through
+        // ClamAvScanner, same reasoning FileAttachmentController's own CLAMAV_ENABLED
+        // toggle uses for "this content didn't come from an untrusted upload."
+        $attachment = FileAttachment::create([
+            'user_id'           => $userId,
+            'session_id'        => null,
+            'file_name'         => $storedName,
+            'original_name'     => $originalFilename,
+            'file_size'         => strlen($bytes),
+            'mime_type'         => $data['mime_type'],
+            'storage_disk'      => 's3',
+            'storage_path'      => $path,
+            'storage_url'       => Storage::disk('s3')->url($path),
+            'virus_scan_status' => 'clean',
+            'virus_scan_at'     => now(),
+        ]);
+
+        return response()->json(['attachment' => $attachment], 201);
+    }
+
     private function extractText(string $bytes, string $mimeType, string $originalName): string
     {
         try {
             $text = match (true) {
                 $mimeType === 'application/pdf' => (new PdfParser())->parseContent($bytes)->getText(),
                 $mimeType === self::DOCX_MIME    => $this->extractDocxText($bytes),
+                $mimeType === self::XLSX_MIME    => $this->extractXlsxText($bytes),
+                $mimeType === self::PPTX_MIME    => $this->extractPptxText($bytes),
                 in_array($mimeType, self::TEXT_MIMES, true) => $bytes,
                 default => '',
             };
@@ -245,6 +341,69 @@ class ChatInternalController extends Controller
             $xml = preg_replace('/<w:tab\/>/', "\t", $xml);
 
             return html_entity_decode(strip_tags($xml), ENT_QUOTES | ENT_XML1);
+        } finally {
+            @unlink($tmpPath);
+        }
+    }
+
+    // Same phpoffice/phpspreadsheet library ai-gateway-service uses to *generate*
+    // .xlsx files (GenerateSpreadsheetTool) — reused here for the opposite direction,
+    // reading one a user uploaded. toArray() gives cell values in row/column order,
+    // tab-separated per row so the model still sees real table structure rather than
+    // cells run together.
+    private function extractXlsxText(string $bytes): string
+    {
+        $tmpPath = tempnam(sys_get_temp_dir(), 'xlsx_');
+        file_put_contents($tmpPath, $bytes);
+
+        try {
+            $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($tmpPath);
+            $lines = [];
+
+            foreach ($spreadsheet->getAllSheets() as $sheet) {
+                $lines[] = "--- Sheet: {$sheet->getTitle()} ---";
+                foreach ($sheet->toArray(null, true, true, false) as $row) {
+                    $lines[] = implode("\t", array_map(fn ($cell) => (string) ($cell ?? ''), $row));
+                }
+            }
+
+            return implode("\n", $lines);
+        } finally {
+            @unlink($tmpPath);
+        }
+    }
+
+    // Same phpoffice/phppresentation library used to generate .pptx files — reused
+    // here to read one back. Only RichText shapes carry extractable text (images/
+    // charts on a slide are skipped, same limitation any text-only extraction has).
+    private function extractPptxText(string $bytes): string
+    {
+        $tmpPath = tempnam(sys_get_temp_dir(), 'pptx_');
+        file_put_contents($tmpPath, $bytes);
+
+        try {
+            $presentation = \PhpOffice\PhpPresentation\IOFactory::load($tmpPath);
+            $lines = [];
+
+            foreach ($presentation->getAllSlides() as $index => $slide) {
+                $lines[] = '--- Slide '.($index + 1).' ---';
+                foreach ($slide->getShapeCollection() as $shape) {
+                    if (! $shape instanceof \PhpOffice\PhpPresentation\Shape\RichText) {
+                        continue;
+                    }
+                    foreach ($shape->getParagraphs() as $paragraph) {
+                        $text = '';
+                        foreach ($paragraph->getRichTextElements() as $element) {
+                            $text .= $element->getText();
+                        }
+                        if (trim($text) !== '') {
+                            $lines[] = $text;
+                        }
+                    }
+                }
+            }
+
+            return implode("\n", $lines);
         } finally {
             @unlink($tmpPath);
         }

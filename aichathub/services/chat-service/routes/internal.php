@@ -6,3 +6,5 @@ use Illuminate\Support\Facades\Route;
 // Auth:   X-Internal-Service-Key header
 Route::post('/sessions/{sessionId}/messages', [ChatInternalController::class, 'appendMessage']);
 Route::post('/attachments/resolve', [ChatInternalController::class, 'resolveAttachments']);
+Route::post('/attachments/create-from-bytes', [ChatInternalController::class, 'createAttachmentFromBytes']);
+Route::get('/sessions/{sessionId}/attachments', [ChatInternalController::class, 'sessionAttachments']);

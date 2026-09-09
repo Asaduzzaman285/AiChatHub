@@ -77,25 +77,31 @@
      still violet-tinted) so it reads as its own distinct "incognito" identity rather
      than just an inverted version of the normal branding — --primary in particular
      is plain light gray, not violet, so buttons/user-bubbles/focus rings carry no
-     brand color at all while inside a private chat. */
+     brand color at all while inside a private chat.
+     Lightened from the original near-black (background 7%/card 11%, an 4-point gap)
+     after live feedback that it read as flat, low-contrast "pure black" — sidebar and
+     card boundaries were barely distinguishable from the page behind them. Background/
+     card/border are spaced further apart now (14/21/29) so panel edges are actually
+     visible, and muted-foreground is bumped for legibility, while staying clearly
+     darker and less saturated than .dark so it still reads as its own identity. */
   .incognito {
-    --background: 0 0% 7%;
-    --foreground: 0 0% 92%;
-    --card: 0 0% 11%;
-    --card-foreground: 0 0% 92%;
-    --primary: 0 0% 80%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 16%;
-    --secondary-foreground: 0 0% 92%;
-    --muted: 0 0% 16%;
-    --muted-foreground: 0 0% 60%;
-    --accent: 0 0% 18%;
-    --accent-foreground: 0 0% 92%;
-    --destructive: 0 62% 40%;
+    --background: 0 0% 14%;
+    --foreground: 0 0% 94%;
+    --card: 0 0% 21%;
+    --card-foreground: 0 0% 94%;
+    --primary: 0 0% 82%;
+    --primary-foreground: 0 0% 12%;
+    --secondary: 0 0% 26%;
+    --secondary-foreground: 0 0% 94%;
+    --muted: 0 0% 26%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 0 0% 28%;
+    --accent-foreground: 0 0% 94%;
+    --destructive: 0 62% 45%;
     --destructive-foreground: 0 0% 96%;
-    --border: 0 0% 20%;
-    --input: 0 0% 20%;
-    --ring: 0 0% 50%;
+    --border: 0 0% 29%;
+    --input: 0 0% 29%;
+    --ring: 0 0% 55%;
 
     --success: 152 40% 45%;
     --success-soft: 152 20% 16%;

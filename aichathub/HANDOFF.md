@@ -3632,6 +3632,166 @@ Genuine Day 1 progress, all real (not templates/plans anymore):
   full browser click-through QA pass, and the final dry-run rehearsal) — unchanged, still needs the
   user's own action first.
 
+## 2026-09-05 Session — Image + document generation shipped, five real bugs found and fixed, deployed live
+
+### Image generation — automatic, ChatGPT/Gemini-style, no mode switch
+Confirmed via reading the actual vendor package (not assumed) that `laravel/ai` v0.10.2 ships a generic
+`Laravel\Ai\Contracts\Tool` function-calling contract — the same mechanism already powering the existing
+`WebSearch` tool in `TextChatAgent`, just with a tool we write instead of a provider-native one. The
+model itself decides when to call it based on the user's own words; no separate mode, no keyword
+matching. New `app/Ai/Tools/GenerateImageTool.php` (ai-gateway-service): calls
+`Ai::imageProvider('openai')->image($prompt, model: 'dall-e-3')`, charges a flat wallet fee via the new
+`ChargesForGeneratedFile` trait, uploads the raw bytes to chat-service's new
+`POST /internal/attachments/create-from-bytes` endpoint (mirrors `FileAttachmentController::upload()`'s
+store pattern, just from bytes already in memory instead of a multipart upload), and records the
+resulting attachment id on a new `GeneratedAttachmentTracker` request-scoped singleton (`$app->scoped()`,
+same Octane-safe pattern as `PendingReservationTracker`) so `ChatController::stream()` can read it back
+after the agent call completes and link it to the persisted assistant message via the *existing*
+`file_attachments`/`message_id` mechanism — `MessageBubble` already renders any attachment linked that
+way, so this needed **zero new frontend rendering code**. Gated by a new `imageGenEnabled` flag on
+`TextChatAgent`, re-derived server-side in `ChatController::stream()` exactly like `webSearchEnabled`/
+`deepThinkEnabled` (never trusted from the client): the selected model must support function calling,
+and the user's subscription must include `dall-e-3`. **Pricing**: seeded via the real admin API (never a
+raw DB write) — `provider_flat_rate_per_unit: 0.040` (OpenAI's real per-image cost), `markup_percentage:
+20`, resolving to `flat_rate_per_unit: 0.048` charged to the user.
+
+### Document generation — PDF/Excel/PPTX "generate from a request" (Phase 2 of the same plan)
+Same `Tool` shape, three new tools, all using `ChargesForGeneratedFile`: `GenerateSpreadsheetTool`
+(`phpoffice/phpspreadsheet`, structured `{sheet_name, rows}` schema — the model supplies real cell
+values, not prose), `GeneratePresentationTool` (`phpoffice/phppresentation`, `{title, slides: [{title,
+bullets}]}`), `GeneratePdfTool` (`dompdf/dompdf`, `{title, sections: [{heading, body}]}` — this tool owns
+the actual HTML structure so the model never has to get markup right). One shared `documentGenEnabled`
+flag on `TextChatAgent` turns on all three together (offered as a single "generate a file" capability,
+not three toggles). Two admin-side whitelist gaps had to be closed first: `AiModelAdminController`'s
+`PRICING_TYPES` const didn't have a per-file flat-rate type (added `flat_per_file`, alongside the
+existing `flat_per_image`) and its `type` validation didn't have a document-generation catalog type
+(added `document_generation`) — both are pure PHP whitelist arrays, no migration needed since `type`/
+`pricing_type` are plain `varchar` columns.
+
+**Pricing decision**: unlike images, none of these three libraries call a paid external API — PDF/Excel/
+PPTX generation is local PHP with ~zero marginal cost, matching how ChatGPT/Gemini/Claude themselves
+don't meter file generation as its own billable unit (bundled into their subscriptions; API-level, they
+bill for the code-execution sandbox, not the file). Landed on a flat **$0.02/file convenience fee**
+(not cost-recovery, an anti-abuse/monetization lever), seeded via the admin API as three separate catalog
+rows (`document-pdf`/`document-xlsx`/`document-pptx`, `provider_flat_rate_per_unit: 0.02`,
+`markup_percentage: 0`) so pricing can be tuned per format independently later if needed, then added to
+Basic/Standard/Pro's `model_access` (subscription-service) — same three tiers `dall-e-3` is already on,
+`Play` excluded, matching its `image_gen: false` positioning. Gated the same double-duty way `dall-e-3`
+gates images: `document-pdf`'s subscription access is the on/off switch for the whole three-tool bundle,
+while each tool still independently checks its own pricing row before running — so xlsx/pptx pricing can
+be adjusted without touching the gate.
+
+**Found and fixed along the way**: `composer audit` flagged 10 advisories (high/medium DoS/XSS) on
+`league/commonmark` 2.8.3 — a pre-existing Laravel-framework transitive dependency (`^2.8.1`), unrelated
+to the new packages. Safely bumped to 2.10.0 within Laravel's own constraint; audit clean afterward.
+
+**Explicitly deferred** (flagged, not started): Phase 3 — "analyze an uploaded Excel/PPTX, then
+regenerate with conditions." Real, separate scope (structured parsing of arbitrary real-world
+spreadsheets, expanded accepted-mimes, a materially bigger lift) — recommended to prove Phase 1+2 live
+first.
+
+### Compare mode — three real UX bugs fixed from live user reports
+- **Expand button**: each `CompareCard` had a close (×) button but no way to see a long response in
+  full. Added an expand icon next to it that opens the complete response in a large scrollable modal
+  (reused `@/components/ui/Dialog`'s Radix primitives with a wider/taller `className` override, not the
+  fixed `max-w-md` default).
+- **A failed model used to reserve a full empty card.** If 3 of 4 selected models succeeded and one hit
+  a provider error, the failed one still rendered a full card (header, empty body, footer buttons) just
+  to show one line of error text — a 4-model row looked broken instead of "3 succeeded." Fixed in
+  `CompareCardGroup.tsx`: cards are now split into `successCards`/`failedCards`, the grid lays out
+  `successCards` only (exactly as if the failed model was never requested), and failures render as plain
+  text lines below the row. Also fixed the error text itself — `ChatController::compare()`'s per-model
+  catch block was pushing `$e->getMessage()` straight to the client, a raw/technical provider-SDK
+  string never meant for an end user. New `friendlyProviderError()` helper maps
+  `RateLimitedException`/`InsufficientCreditsException`/`ProviderOverloadedException`/timeout/401/generic
+  cases to plain sentences ("Claude Sonnet 4.5 failed to generate a response due to a provider
+  rate-limit error."), used both for the live SSE error event and the persisted `metadata.error` so a
+  reload shows the same friendly text.
+- **Auto-scroll fighting the user during multi-model streaming.** One `useEffect` in `chat/page.tsx`
+  force-scrolled to bottom on every change to `messages`, `streamingMessages`, *and* `compareTurns` —
+  the last one updates on every single SSE chunk from every model streaming in parallel, so the page
+  kept yanking back to the bottom continuously for the whole duration of a compare turn, fighting anyone
+  trying to scroll up and read an earlier column. Removed `compareTurns` from that effect's dependency
+  list. Single-chat streaming (driven by `streamingMessages`) is unaffected.
+
+### Cross-user sidebar cache bug — confirmed real, root-caused, fixed
+Reported: log out of User A, log into User B in the same tab, sidebar still shows User A's chat titles
+until a manual reload. Root cause: React Query's `QueryClient` is a long-lived singleton independent of
+which user is logged in, `query-provider.tsx` sets a global `staleTime: 60_000`, and query keys like
+`['chat','sessions']` carry no user id — so a same-tab remount after login often served the previous
+user's cached data as "fresh enough" to skip refetching. A full reload only "fixed" it by accident
+(builds a brand-new `QueryClient`). Fix: `queryClient.clear()` added to both logout handlers
+(`app/(dashboard)/layout.tsx` and `app/admin/layout.tsx`) — wipes every cached query on logout so the
+next login in that tab starts from nothing.
+
+### Private Chat → New Chat — confirmed real, root-caused, fixed ("stuck in dark mode" reports)
+Reported: clicking "New chat" while sitting in an *empty* Private Chat kept showing the private/dark
+interface, and at least one user couldn't escape it even after logging out and back in repeatedly.
+Root cause found in `chat/page.tsx`'s auto-create effect: to avoid piling up duplicate empty "New Chat"
+rows, it reuses an existing session matching `title === 'New Chat' && message_count === 0 &&
+!project_id` instead of always creating a fresh one — but that filter never excluded private sessions.
+An empty Private Chat *is* an empty "New Chat" row, so clicking "New chat" just reselected that same
+private session (often itself) instead of ever leaving it — nothing had actually changed, hence the
+dark UI persisting. This also explains why logging out and back in never helped: the same effect
+re-runs and re-picks the same private session on every fresh mount, login included. Fix: added
+`&& !s.is_private` to the reuse filter, so a private chat is never eligible for reuse — "New chat" now
+always lands on a normal session regardless of whether the private chat it's leaving is empty or not.
+Also added a lock icon before the title of every private chat in the sidebar list itself
+(`SessionRow.tsx`) — previously the only private indicator was a "deletes in..." clock, and only once a
+chat had an active expiry.
+
+**Still open, analyzed but not fixed (needs a decision, not more investigation)**: separately, *any*
+brand-new empty chat — private or not — still shows up in the sidebar the instant "New chat" is clicked,
+before any message is sent, because session creation itself is eager (`POST /sessions` fires
+immediately, not deferred to first send). Two ways to close that gap: keep eager creation but filter the
+sidebar list to `message_count > 0`, or make creation itself lazy. Recommended the smaller filter-based
+fix; holding for the user's call before touching it.
+
+### Dark mode / incognito theme — one real bug, one real design gap
+- **Real bug**: `CompareCard.tsx`'s markdown wrapper never received the same fix `MessageBubble`
+  already has — no `text-card-foreground` base color and no `prose-headings/prose-p:text-inherit`
+  overrides, so Tailwind Typography's default *light-mode* text colors rendered unchanged against the
+  dark/incognito card background, reading as nearly invisible. Fixed to match `MessageBubble` exactly;
+  factored the shared class list into a `PROSE_CLASSES` constant reused by both the compact card and the
+  new expand-modal body.
+- **Design gap**: the incognito (private-chat) palette was genuinely near-black with too little
+  separation between layers — `--background` 7% lightness, `--card` only 11%, a 4-point gap, 0%
+  saturation throughout. Lightened to background 14% / card 21% / border 29%, muted-foreground bumped
+  for legibility — panel edges (sidebar included, which shares this palette in private mode) are now
+  actually distinguishable, while staying clearly darker/neutral-toned than the normal violet `.dark`
+  theme so it still reads as its own identity.
+
+### Deployed live this session (production, alveta.ai)
+No CI/CD exists yet (`.github/workflows/` still empty, per the 2026-08-12 note above) and the server has
+no git checkout — `/opt/aichathub` on the Contabo VPS is a plain synced source tree, not a git clone.
+Deploy mechanics used: packaged exactly the 26 changed/new files (not a full-tree sync, to avoid
+touching `.env`, `vendor/`, `storage/logs/*`, or local-only build artifacts like `tsconfig.tsbuildinfo`)
+into a tarball, `scp`'d it to the server, extracted over `/opt/aichathub`, then `docker compose -f
+docker-compose.prod.yml build` + `up -d --force-recreate` for exactly the four affected services
+(`ai-gateway-service`, `ai-gateway-queue-worker`, `chat-service`, `frontend` — the `ai-gateway-service-fpm`
+image the queue worker uses is a separate build from the same source dir, both needed rebuilding). A
+tar backup of the pre-deploy source for all touched service directories was taken on the server first
+(`/root/pre-deploy-backup-<timestamp>.tar.gz`, same convention as the existing 2026-08-24 backup already
+there). Confirmed clean: all four images built with no errors (Next.js build succeeded, `composer
+install` picked up the three new packages + the commonmark bump automatically via the Dockerfile's
+normal `COPY composer.json/lock` → `composer install` layer), all four containers came up without
+crash-looping, `docker logs` clean on each, `api.alveta.ai`/`app.alveta.ai` both responding correctly
+post-deploy. Also bundled in this same batch: the earlier-session "Most Popular" badge fix
+(`PricingCard.tsx` gained a `popularBadge` prop, defaulting to `featured` — Pro's horizontal banner now
+passes it `false` explicitly so it keeps its highlighted border/shadow without also claiming to be
+"Most Popular" alongside another card doing the same).
+
+Post-deploy, completed the two pieces that were blocked on code being live: created the
+`document-pdf`/`document-xlsx`/`document-pptx` catalog rows + $0.02/file pricing via the real admin API,
+and added all three to Basic/Standard/Pro's `model_access` in subscription-service (same tiers
+`dall-e-3` is already on). Document generation is now live end-to-end, not just code-complete.
+
+**Not yet done**: a real end-to-end click-through test of image/document generation in the live chat UI
+(ask for an image, a PDF, an Excel, a PPTX; confirm wallet deductions and that attachments persist after
+reload) — everything below the UI has been verified independently (pricing rows confirmed via their API
+responses, containers healthy, code paths traced against the actual vendor libraries) but the full loop
+hasn't been clicked through live yet.
+
 ---
 
 ## Service Implementation Checklist

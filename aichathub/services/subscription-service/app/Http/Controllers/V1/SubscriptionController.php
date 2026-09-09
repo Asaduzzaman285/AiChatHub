@@ -64,11 +64,11 @@ class SubscriptionController extends Controller
 
         $package = Package::where('slug', $data['package_slug'])->where('is_active', true)->firstOrFail();
 
-        $currency = $data['currency'] ?? 'USD';
-        $price    = (float) $package->monthly_price_usd;
+        [$currency, $amountBdt] = $this->resolveCurrency($data['currency'] ?? 'USD', $data['payment_source'], $package);
+        $price = (float) $package->monthly_price_usd;
 
         if ($price > 0) {
-            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source'], 'subscription_purchase', $request->header('Origin'));
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source'], 'subscription_purchase', $request->header('Origin'), $amountBdt);
 
             if (! $checkoutUrl) {
                 return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
@@ -185,11 +185,11 @@ class SubscriptionController extends Controller
      */
     private function doUpgrade(string $userId, UserSubscription $current, Package $newPackage, array $data, ?string $origin = null): JsonResponse
     {
-        $currency = $data['currency'] ?? 'USD';
-        $price    = (float) $newPackage->monthly_price_usd;
+        [$currency, $amountBdt] = $this->resolveCurrency($data['currency'] ?? 'USD', $data['payment_source'], $newPackage);
+        $price = (float) $newPackage->monthly_price_usd;
 
         if ($price > 0) {
-            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade', $origin);
+            $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade', $origin, $amountBdt);
 
             if (! $checkoutUrl) {
                 return response()->json(['message' => 'Could not start checkout. Please try again.', 'error' => 'checkout_failed'], 502);
@@ -240,7 +240,28 @@ class SubscriptionController extends Controller
      * (422) — bKash happened to match by coincidence ("bkash" == "bkash"),
      * which is why only that path had ever actually been exercised before.
      */
-    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase', ?string $origin = null): ?string
+    /**
+     * Decides what currency to actually bill in and, for a BDT bKash purchase,
+     * the exact fixed sticker amount to charge — not a live formula conversion
+     * of the USD price (see CurrencyRate's docblock / the admin currency page:
+     * that formula is for ad-hoc amounts with no sticker, like wallet top-ups,
+     * not for repricing a package's own admin-set monthly_price_bdt). Falls
+     * back to USD whenever BDT isn't actually chargeable: bKash is the only
+     * gateway that settles in BDT at all, and a package with no
+     * monthly_price_bdt set has nothing to charge.
+     *
+     * @return array{0: string, 1: ?float} [currency, amount_bdt]
+     */
+    private function resolveCurrency(string $requestedCurrency, string $paymentSource, Package $package): array
+    {
+        if (strtoupper($requestedCurrency) !== 'BDT' || $paymentSource !== 'bkash' || $package->monthly_price_bdt === null) {
+            return ['USD', null];
+        }
+
+        return ['BDT', (float) $package->monthly_price_bdt];
+    }
+
+    private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase', ?string $origin = null, ?float $amountBdt = null): ?string
     {
         $paymentUrl  = rtrim(config('services.payment_url'), '/');
         $internalKey = config('services.internal_key');
@@ -252,6 +273,13 @@ class SubscriptionController extends Controller
 
         $gateway = $paymentSource === 'card' ? 'stripe' : $paymentSource;
 
+        // payment-service's own Transaction bookkeeping for bKash is always USD
+        // (see PaymentInternalController::createCheckoutSession's validation) —
+        // amount_bdt below carries the real fixed BDT charge separately, so
+        // $currency (which drives this subscription's own display currency,
+        // formatSubscription()) can stay 'BDT' without that 422ing.
+        $wireCurrency = $gateway === 'bkash' ? 'USD' : $currency;
+
         try {
             $response = Http::withHeaders([
                 'X-Internal-Service-Key' => $internalKey,
@@ -259,7 +287,8 @@ class SubscriptionController extends Controller
             ])->timeout(20)->post("{$paymentUrl}/api/internal/payments/checkout", [
                 'user_id'      => $userId,
                 'amount'       => $amount,
-                'currency'     => $currency,
+                'currency'     => $wireCurrency,
+                'amount_bdt'   => $amountBdt,
                 'gateway'      => $gateway,
                 'type'         => $type,
                 'description'  => ($type === 'subscription_upgrade' ? 'Upgrade: ' : 'Subscription: ').$package->name,

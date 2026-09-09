@@ -36,7 +36,7 @@ class PackageActivationService
             $package,
             $transactionId,
             $currency,
-            1.000000,
+            $this->exchangeRateFor($currency, $package),
             null,
         );
 
@@ -51,6 +51,28 @@ class PackageActivationService
         $this->createInvoiceAfterResponse($userId, $subscription->id, $package, $currency, $transactionId);
 
         return $subscription;
+    }
+
+    /**
+     * What this specific package purchase's currency actually converts at —
+     * the ratio the admin's own fixed monthly_price_bdt/monthly_price_usd
+     * implies, NOT a live currency_rates lookup. This is a permanent snapshot
+     * (user_subscriptions.exchange_rate is never recomputed later, same rule
+     * as every other rate snapshot in this app), so it needs to record what
+     * was truly charged for this transaction, not today's admin-configured
+     * rate which could change tomorrow. Was previously hardcoded to
+     * 1.000000 regardless of currency — harmless while BDT was never actually
+     * reachable end-to-end, but wrong now that it is.
+     */
+    private function exchangeRateFor(string $currency, Package $package): float
+    {
+        $usd = (float) $package->monthly_price_usd;
+
+        if ($currency === 'USD' || $usd <= 0 || $package->monthly_price_bdt === null) {
+            return 1.000000;
+        }
+
+        return round((float) $package->monthly_price_bdt / $usd, 6);
     }
 
     /**

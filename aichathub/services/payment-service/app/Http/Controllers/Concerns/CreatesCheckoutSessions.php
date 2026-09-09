@@ -94,6 +94,7 @@ trait CreatesCheckoutSessions
         float $amountUsd,
         string $description,
         array $metadata,
+        ?float $fixedAmountBdt = null,
     ): array {
         $idempotencyKey = (string) Str::uuid();
 
@@ -107,7 +108,13 @@ trait CreatesCheckoutSessions
             'exchange_rate'   => config('services.bkash.usd_to_bdt_rate'),
             'idempotency_key' => $idempotencyKey,
             'description'     => $description,
-            'metadata'        => $metadata,
+            // is_sandbox is read back by anything that touches this payment
+            // again later with no browser Origin of its own to check — the
+            // reconciliation sweep and admin refunds (see RefundService,
+            // ReconcileBkashPaymentJob) — since sandbox/live must match
+            // whichever mode actually created this paymentID, not whatever
+            // mode a later, unrelated request happens to be in.
+            'metadata'        => array_merge($metadata, ['is_sandbox' => $bkash->isSandbox()]),
         ]);
 
         $frontendUrl = rtrim((string) config('services.frontend_url'), '/');
@@ -115,7 +122,7 @@ trait CreatesCheckoutSessions
         $callbackUrl = "{$frontendUrl}/billing/checkout-callback?type={$returnType}";
         $fullMetadata = array_merge($metadata, ['transaction_id' => $transaction->id, 'user_id' => $userId]);
 
-        $result = $bkash->createCheckoutSession($amountUsd, $description, $callbackUrl, $fullMetadata);
+        $result = $bkash->createCheckoutSession($amountUsd, $description, $callbackUrl, $fullMetadata, $fixedAmountBdt);
 
         if ($result['error']) {
             $transaction->update([
@@ -129,7 +136,10 @@ trait CreatesCheckoutSessions
 
         $transaction->update([
             'gateway_reference' => $result['payment_id'],
-            'metadata'          => array_merge($fullMetadata, ['amount_bdt' => $result['amount_bdt']]),
+            // Merged onto $transaction->metadata (not just $fullMetadata) so the
+            // is_sandbox flag set at creation above survives this update instead
+            // of being silently dropped.
+            'metadata'          => array_merge($transaction->metadata ?? [], $fullMetadata, ['amount_bdt' => $result['amount_bdt']]),
         ]);
 
         return ['transaction' => $transaction, 'checkout_url' => $result['bkash_url'], 'error' => null];

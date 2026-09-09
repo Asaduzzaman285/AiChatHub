@@ -11,7 +11,18 @@ use Illuminate\Support\Facades\DB;
 
 class PackageController extends Controller
 {
-    public function index(): JsonResponse
+    /**
+     * GET /packages — public, unauthenticated. Includes detected_currency so
+     * the landing page's pricing section (and the post-registration Welcome
+     * screen, before a session even exists) can show BDT pricing to a
+     * Bangladeshi visitor without a second request — geo comes from
+     * Cloudflare's CF-IPCountry header, which survives Caddy's reverse_proxy
+     * and api-gateway's ProxyController (both forward all incoming headers
+     * unchanged). Not a stored preference — an authenticated user's actual
+     * preferred_currency (set at registration, same geo logic) always wins
+     * once they're logged in; this is only for the anonymous, pre-signup view.
+     */
+    public function index(Request $request): JsonResponse
     {
         $packages = DB::table('packages')
             ->where('is_active', true)
@@ -24,14 +35,17 @@ class PackageController extends Controller
                 'description' => $p->description,
                 'price'       => [
                     'usd' => (float) $p->monthly_price_usd,
-                    'bdt' => (float) $p->monthly_price_bdt,
+                    'bdt' => $p->monthly_price_bdt !== null ? (float) $p->monthly_price_bdt : null,
                 ],
                 'wallet_credit_usd' => (float) $p->monthly_wallet_credit_usd,
                 'features'    => json_decode($p->features, true),
                 'model_access'=> json_decode($p->model_access, true),
             ]);
 
-        return response()->json(['packages' => $packages]);
+        return response()->json([
+            'packages'          => $packages,
+            'detected_currency' => strtoupper((string) $request->header('CF-IPCountry')) === 'BD' ? 'BDT' : 'USD',
+        ]);
     }
 
     public function show(string $slug): JsonResponse
@@ -52,7 +66,7 @@ class PackageController extends Controller
             'description' => $p->description,
             'price'       => [
                 'usd' => (float) $p->monthly_price_usd,
-                'bdt' => (float) $p->monthly_price_bdt,
+                'bdt' => $p->monthly_price_bdt !== null ? (float) $p->monthly_price_bdt : null,
             ],
             'wallet_credit_usd' => (float) $p->monthly_wallet_credit_usd,
             'features'    => json_decode($p->features, true),

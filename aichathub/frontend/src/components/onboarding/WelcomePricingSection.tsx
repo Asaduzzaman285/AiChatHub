@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -7,29 +8,36 @@ import apiClient from '@/lib/api-client'
 import { PricingCard } from '@/components/pricing/PricingCard'
 import { Button } from '@/components/ui/Button'
 import { describeError } from '@/lib/errors'
+import { useAuthStore } from '@/stores/auth-store'
 import type { Package } from '@/types'
 
 /** Same PricingCard the public landing page uses. The CTA used to just route into
  * /chat?settings=plans — opening the Settings modal's Plans tab and requiring a
  * second click there to actually start checkout (confirmed live: read as "why did
  * clicking Pay just show me a settings screen?"). Calls the same subscribe endpoint
- * PlansView.tsx uses directly instead, going straight to the payment gateway — no
- * payment_source picker here since bKash is disabled everywhere else in the app
- * right now (card is the only real option; re-add a picker alongside bKash's own
- * re-enable if that ever changes). */
+ * PlansView.tsx uses directly instead, going straight to the payment gateway.
+ *
+ * A logged-in user already has a real preferred_currency (set at registration
+ * via geo-detection) rather than needing a fresh IP lookup like the anonymous
+ * landing page does — used here purely for the card's displayed sticker price.
+ * The currency actually charged follows whichever payment method is clicked
+ * (bKash always settles BDT, card always USD), same rule as PlansView.tsx. */
 export function WelcomePricingSection() {
   const router = useRouter()
+  const user = useAuthStore((s) => s.user)
+  const displayCurrency = user?.preferred_currency ?? 'USD'
+  const [choosingSlug, setChoosingSlug] = useState<string | null>(null)
   const { data: packages, isLoading } = useQuery({
     queryKey: ['packages', 'public'],
     queryFn: async () => (await apiClient.get<{ packages: Package[] }>('/api/v1/packages')).data.packages,
   })
 
   const subscribe = useMutation({
-    mutationFn: async (slug: string) =>
+    mutationFn: async ({ slug, source }: { slug: string; source: 'card' | 'bkash' }) =>
       apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
-        payment_source: 'card',
-        currency: 'USD',
+        payment_source: source,
+        currency: source === 'bkash' ? 'BDT' : 'USD',
       }),
     onSuccess: (res) => {
       if (res.data.checkout_url) {
@@ -49,8 +57,47 @@ export function WelcomePricingSection() {
       }
       const { message } = describeError(err, "We couldn't start checkout — please try again.")
       toast.error(message)
+      setChoosingSlug(null)
     },
   })
+
+  const ctaFor = (slug: string) => {
+    if (choosingSlug === slug) {
+      return (
+        <div className="mt-6 space-y-2">
+          <Button
+            className="w-full rounded-full"
+            disabled={subscribe.isPending}
+            onClick={() => subscribe.mutate({ slug, source: 'card' })}
+          >
+            {subscribe.isPending ? 'Starting checkout…' : 'Pay with Card (Stripe)'}
+          </Button>
+          <Button
+            className="w-full rounded-full"
+            variant="outline"
+            disabled={subscribe.isPending}
+            onClick={() => subscribe.mutate({ slug, source: 'bkash' })}
+          >
+            {subscribe.isPending ? 'Starting checkout…' : 'Pay with bKash'}
+          </Button>
+          <button
+            type="button"
+            className="w-full text-xs text-muted-foreground hover:text-foreground"
+            disabled={subscribe.isPending}
+            onClick={() => setChoosingSlug(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <Button className="mt-6 w-full rounded-full" onClick={() => setChoosingSlug(slug)}>
+        Get Started
+      </Button>
+    )
+  }
 
   return (
     <div className="mt-16">
@@ -76,15 +123,8 @@ export function WelcomePricingSection() {
               key={pkg.id}
               pkg={pkg}
               featured={pkg.slug === 'standard'}
-              cta={
-                <Button
-                  className="mt-6 w-full rounded-full"
-                  disabled={subscribe.isPending}
-                  onClick={() => subscribe.mutate(pkg.slug)}
-                >
-                  {subscribe.isPending ? 'Starting checkout…' : 'Get Started'}
-                </Button>
-              }
+              currency={displayCurrency}
+              cta={ctaFor(pkg.slug)}
             />
           ))
         )}
@@ -95,16 +135,10 @@ export function WelcomePricingSection() {
           <PricingCard
             pkg={packages.find((pkg) => pkg.slug === 'pro')!}
             featured
+            popularBadge={false}
             layout="horizontal"
-            cta={
-              <Button
-                className="w-full rounded-full"
-                disabled={subscribe.isPending}
-                onClick={() => subscribe.mutate('pro')}
-              >
-                {subscribe.isPending ? 'Starting checkout…' : 'Get Started'}
-              </Button>
-            }
+            currency={displayCurrency}
+            cta={ctaFor('pro')}
           />
         </div>
       )}

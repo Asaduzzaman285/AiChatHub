@@ -102,4 +102,41 @@ class MessageController extends Controller
 
         return response()->json(['message' => 'Choice recorded.']);
     }
+
+    /**
+     * DELETE /sessions/{sessionId}/messages/{messageId}
+     * Backs "edit a previously-sent prompt" on the frontend — editing changes what the
+     * user asked, so everything sent *after* the original wording (its old reply, and
+     * anything since) is stale and gets removed along with the message itself. The
+     * frontend then sends the edited text through the normal streaming flow exactly
+     * like a fresh message, generating a new reply against the rewritten prompt, rather
+     * than this endpoint trying to rewrite content and regenerate in place. Only ever
+     * called on a role:'user' message; there's no "edit an assistant reply" feature.
+     */
+    public function destroy(Request $request, string $sessionId, string $messageId): JsonResponse
+    {
+        $session = ChatSession::where('id', $sessionId)->where('user_id', $this->authUserId($request))->first();
+        if (! $session) {
+            return response()->json(['message' => 'Session not found.'], 404);
+        }
+
+        $message = ChatMessage::where('id', $messageId)->where('session_id', $sessionId)->first();
+        if (! $message) {
+            return response()->json(['message' => 'Message not found.'], 404);
+        }
+        if ($message->role !== 'user') {
+            return response()->json(['message' => 'Only your own messages can be edited.'], 422);
+        }
+
+        $deletedCount = ChatMessage::where('session_id', $sessionId)
+            ->where('created_at', '>=', $message->created_at)
+            ->where('id', '!=', $message->id)
+            ->delete();
+
+        $message->delete();
+        $session->decrement('message_count', $deletedCount + 1);
+        $session->touch();
+
+        return response()->json(['message' => 'Message and its continuation removed.']);
+    }
 }

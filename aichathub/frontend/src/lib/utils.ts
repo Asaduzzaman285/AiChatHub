@@ -5,8 +5,46 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Forces a real "Save As" download instead of a browser navigation. A plain
+ * `<a href={crossOriginUrl} download>` only forces a save prompt reliably for
+ * same-origin links — confirmed live: attachment storage_urls are R2-signed URLs
+ * on a different origin than the app, and clicking those links was opening a new
+ * tab instead of downloading (a Content-Disposition header from R2 would fix it
+ * server-side too, but this works regardless of what the storage response sends).
+ * Fetches the bytes as a blob and downloads from a same-origin blob: URL instead,
+ * which every browser honors unconditionally.
+ */
+export async function downloadFile(url: string, filename: string): Promise<void> {
+  try {
+    const response = await fetch(url)
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(blobUrl)
+  } catch {
+    // CORS or network failure — fall back to a plain navigation so the user still
+    // gets the file (as a new tab, the old behavior) rather than nothing at all.
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+// en-US's Intl currency data doesn't reliably carry a native symbol for every
+// ISO code (BDT renders as the bare string "BDT" rather than "৳") — this map
+// only needs to cover currencies the app actually charges in.
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: '$', BDT: '৳' }
+
 export function formatCurrency(amount: number | string, currency = 'USD'): string {
   const value = typeof amount === 'string' ? parseFloat(amount) : amount
+  const symbol = CURRENCY_SYMBOLS[currency]
+  if (symbol) {
+    return `${symbol}${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}`
+  }
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value)
 }
 
@@ -15,7 +53,7 @@ export function formatCurrency(amount: number | string, currency = 'USD'): strin
  * decimal(12,6) wallet/cost columns instead of rounding it away. */
 export function formatPreciseCurrency(amount: number | string, currency = 'USD'): string {
   const value = typeof amount === 'string' ? parseFloat(amount) : amount
-  const symbol = currency === 'USD' ? '$' : `${currency} `
+  const symbol = CURRENCY_SYMBOLS[currency] ?? `${currency} `
   return `${symbol}${value.toFixed(6)}`
 }
 

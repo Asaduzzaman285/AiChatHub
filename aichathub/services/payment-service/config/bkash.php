@@ -6,7 +6,12 @@ return [
     | bKash Credentials
     |--------------------------------------------------------------------------
     */
-    'sandbox' => env('BKASH_SANDBOX', true),
+    // Defaults to live now that sandbox/live is chosen per-request by origin
+    // (BkashGateway::useSandboxIfOrigin(), same pattern as Stripe) rather than
+    // this one global flag — it's only ever flipped true transiently, right
+    // before a staging.alveta.ai-originated call, never left true for the
+    // whole app the way it was before.
+    'sandbox' => env('BKASH_SANDBOX', false),
 
     'credentials' => [
         'app_key' => env('BKASH_APP_KEY', ''),

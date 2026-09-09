@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Inter, Plus_Jakarta_Sans } from 'next/font/google'
 import { Toaster } from 'sonner'
 import { QueryProvider } from '@/lib/query-provider'
+import { ImageLightboxProvider } from '@/components/ui/ImageLightbox'
 import 'highlight.js/styles/github.css'
 import './globals.css'
 
@@ -27,8 +28,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} ${jakarta.variable} font-sans`}>
         <QueryProvider>
-          {children}
-          <Toaster position="top-right" richColors />
+          <ImageLightboxProvider>
+            {children}
+            <Toaster position="top-right" richColors />
+          </ImageLightboxProvider>
         </QueryProvider>
       </body>
     </html>

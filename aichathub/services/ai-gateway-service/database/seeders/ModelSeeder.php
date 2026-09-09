@@ -30,7 +30,7 @@ class ModelSeeder extends Seeder
             // Pro tier additional models
             ['provider' => 'openai',    'name' => 'GPT-4 Turbo',        'model_id' => 'gpt-4-turbo',                   'type' => 'text', 'context_window' => 128000, 'tier' => 'pro'],
             ['provider' => 'anthropic', 'name' => 'Claude 3 Opus',      'model_id' => 'claude-3-opus-20240229',        'type' => 'text', 'context_window' => 200000, 'tier' => 'pro'],
-            ['provider' => 'openai',    'name' => 'DALL-E 3',           'model_id' => 'dall-e-3',                      'type' => 'image_generation', 'context_window' => null, 'tier' => 'pro'],
+            ['provider' => 'gemini',    'name' => 'Nano Banana',        'model_id' => 'gemini-2.5-flash-image',        'type' => 'image_generation', 'context_window' => null, 'tier' => 'pro'],
             ['provider' => 'elevenlabs','name' => 'ElevenLabs Turbo',   'model_id' => 'eleven_turbo_v2_5',             'type' => 'audio_tts', 'context_window' => null, 'tier' => 'pro'],
             ['provider' => 'openai',    'name' => 'Whisper',            'model_id' => 'whisper-1',                     'type' => 'audio_stt', 'context_window' => null, 'tier' => 'pro'],
         ];

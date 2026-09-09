@@ -10,10 +10,18 @@ import type { Package } from '@/types'
 export function PricingSection() {
   // Public, unauthenticated fetch — see api-gateway/routes/api.php's explicit
   // GET /packages route carved out of the auth-required group for this reason.
-  const { data: packages, isLoading } = useQuery({
+  // detected_currency comes from the visitor's IP (Cloudflare's CF-IPCountry
+  // header, read server-side in subscription-service's PackageController) —
+  // 'BDT' for a Bangladeshi visitor, 'USD' for everyone else. Purely
+  // informational display for an anonymous visitor; an authenticated user's
+  // stored preferred_currency (set at registration, same geo logic) takes
+  // over once they're logged in — see WelcomePricingSection/PlansView.
+  const { data, isLoading } = useQuery({
     queryKey: ['packages', 'public'],
-    queryFn: async () => (await apiClient.get<{ packages: Package[] }>('/api/v1/packages')).data.packages,
+    queryFn: async () => (await apiClient.get<{ packages: Package[]; detected_currency: 'USD' | 'BDT' }>('/api/v1/packages')).data,
   })
+  const packages = data?.packages
+  const currency = data?.detected_currency ?? 'USD'
 
   return (
     <section id="pricing" className="px-6 py-20">
@@ -52,6 +60,7 @@ export function PricingSection() {
                   key={pkg.id}
                   pkg={pkg}
                   featured={featured}
+                  currency={currency}
                   cta={
                     <Link
                       href="/register"
@@ -74,7 +83,9 @@ export function PricingSection() {
             <PricingCard
               pkg={packages.find((pkg) => pkg.slug === 'pro')!}
               featured
+              popularBadge={false}
               layout="horizontal"
+              currency={currency}
               cta={
                 <Link
                   href="/register"

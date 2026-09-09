@@ -55,6 +55,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Swoole Options
+    |--------------------------------------------------------------------------
+    |
+    | package_max_length raises Swoole's HTTP server request-body ceiling from
+    | its own undocumented-but-real default (2MB) — confirmed live as the actual
+    | cause of AI-generated images silently failing to save: a gpt-image-2 PNG
+    | attached as a real multipart upload from ai-gateway-service routinely
+    | crosses that 2MB line, Swoole drops/resets the connection mid-body rather
+    | than returning a clean 413, and Guzzle's own retry-on-connection-drop logic
+    | (3 attempts, then giving up) reported this as "cURL error 0 ... unable to
+    | rewind the body" every single time — the same failure on every retry
+    | because the same oversized body hit the same silent ceiling each time, not
+    | a transient network blip. 20MB comfortably covers this plus the existing
+    | 10MB user-upload cap (FileAttachmentController::MAX_SIZE_KB) with headroom
+    | for multipart framing overhead.
+    |
+    */
+
+    'swoole' => [
+        'options' => [
+            'package_max_length' => 20 * 1024 * 1024,
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Octane Listeners
     |--------------------------------------------------------------------------
     |

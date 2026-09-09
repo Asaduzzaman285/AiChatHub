@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import {
-  ChevronDown, ChevronLeft, ChevronRight, Folder, FolderPlus, LogOut, MessageSquare, Plus,
+  ChevronDown, ChevronLeft, ChevronRight, Folder, FolderPlus, LogOut, MessageSquare, Pencil, Plus,
   Settings as SettingsIcon, Trash2,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
@@ -81,6 +81,21 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
   // while activeSessionId is still null would let chat/page.tsx's own auto-create
   // effect race this and spin up a second, unwanted ungrouped session first.
   const createChatInProject = (projectId: string) => {
+    // Reuse an existing empty chat in this project instead of creating another one —
+    // same reasoning as chat/page.tsx's top-level auto-create reuse effect. Without
+    // this, clicking "New chat in this project" repeatedly created a new empty
+    // session every time (confirmed live: three indistinguishable "New Chat" rows
+    // piled up under one project). Private sessions excluded for the same reason as
+    // that effect — reusing one would silently keep the user inside private mode.
+    const reusable = sessions
+      ?.filter((s) => s.project_id === projectId && s.message_count === 0 && !s.is_private)
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0]
+    if (reusable) {
+      setActiveSessionId(reusable.id)
+      router.push(`/chat?session=${reusable.id}`)
+      return
+    }
+
     if (availableModels.length === 0) return
     createSession.mutate(
       { modelId: availableModels[0].id, projectId },
@@ -126,7 +141,11 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
     }
   }
 
-  const ungroupedSessions = sessions?.filter((s) => !s.project_id) ?? []
+  // message_count > 0 — an empty "New Chat" row (no message sent yet) never shows in
+  // the sidebar at all, active or not, private or not. Decided explicitly: a chat only
+  // earns a place in history once something real was actually said in it, matching
+  // ChatGPT's own behavior. Applies equally here and to projectSessions below.
+  const ungroupedSessions = sessions?.filter((s) => !s.project_id && s.message_count > 0) ?? []
 
   // Collapsed: an icon-only rail (logo mark, New chat, Settings, avatar) — the
   // session/project list has no sensible icon-only form (it's text-titled), so it
@@ -135,7 +154,7 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
   // the account shown right below it, not the chat actions above.
   if (collapsed) {
     return (
-      <aside className={cn('hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-4 sm:flex', isPrivate && 'incognito')}>
+      <aside className={cn('hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-border bg-card text-foreground py-4 sm:flex', isPrivate && 'incognito')}>
         <Logo iconOnly className="h-6 w-6 text-foreground" />
 
         {/* Same position as the expanded state's collapse button (right next to the
@@ -186,8 +205,17 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
     )
   }
 
+  // text-foreground paired with bg-card right here — not just isPrivate && 'incognito' —
+  // is deliberate. CSS custom properties don't retroactively repaint an already-inherited
+  // `color`: body resolves its own text-foreground once, against the light theme (since
+  // .incognito sits below body, not above it), and any descendant here that never restates
+  // a color class was inheriting that already-resolved light-theme dark text regardless of
+  // .incognito being applied — exactly why session titles read as barely-visible dark-on-dark
+  // (confirmed live via screenshot). Re-declaring text-foreground here forces it to
+  // re-resolve against .incognito's own scope, same pattern chat/page.tsx's root wrapper
+  // already uses for the main panel.
   return (
-    <aside className={cn('hidden w-64 shrink-0 flex-col border-r border-border bg-card sm:flex', isPrivate && 'incognito')}>
+    <aside className={cn('hidden w-64 shrink-0 flex-col border-r border-border bg-card text-foreground sm:flex', isPrivate && 'incognito')}>
       <div className="flex items-center justify-between gap-2 p-4">
         <Logo className="h-6 w-auto text-foreground" />
         <button
@@ -255,7 +283,7 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
         ) : (
           projects?.map((project) => {
             const expanded = expandedProjectIds.has(project.id)
-            const projectSessions = sessions?.filter((s) => s.project_id === project.id) ?? []
+            const projectSessions = sessions?.filter((s) => s.project_id === project.id && s.message_count > 0) ?? []
             return (
               <div key={project.id}>
                 <div className="group flex items-center gap-1 rounded-md px-2.5 py-1.5 text-sm transition-colors hover:bg-accent">
@@ -302,7 +330,7 @@ export function Sidebar({ openSettings, onLogout, isPrivate }: {
                         className="p-1 text-muted-foreground hover:text-foreground"
                         aria-label="Rename project"
                       >
-                        <SettingsIcon className="h-3 w-3" />
+                        <Pencil className="h-3 w-3" />
                       </button>
                       <button
                         onClick={() => confirmDeleteProject(project.id, project.name)}

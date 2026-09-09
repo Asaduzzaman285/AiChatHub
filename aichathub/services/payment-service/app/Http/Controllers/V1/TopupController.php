@@ -40,6 +40,7 @@ class TopupController extends Controller
 
         // No-op on any origin but staging.alveta.ai — see StripeGateway::useSandboxIfOrigin().
         $stripe->useSandboxIfOrigin($origin);
+        $bkash->useSandboxIfOrigin($origin);
 
         if ($gateway === 'bkash' && strtoupper($data['currency'] ?? 'USD') !== 'USD') {
             return response()->json(['error' => 'bKash top-ups must be specified in USD (converted to BDT automatically).'], 422);

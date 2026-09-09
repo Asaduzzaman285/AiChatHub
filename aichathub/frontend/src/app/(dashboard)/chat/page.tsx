@@ -7,14 +7,16 @@ import { toast } from 'sonner'
 import { formatDistanceToNow } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import {
   AlertTriangle, ArrowUp, Bot, Check, ChevronDown, Code2, Compass, Copy, Download, FileText,
-  FolderClock, Globe, GraduationCap, Loader2, Lock, Paperclip, Plus, Sparkles, Telescope, Upload,
-  User, Wand2, X,
+  FolderClock, Globe, GraduationCap, Loader2, Lock, Paperclip, Pencil, Plus, Sparkles, Telescope,
+  Upload, User, Wand2, X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/Dialog'
+import { useImageLightbox } from '@/components/ui/ImageLightbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/DropdownMenu'
 import { Logo } from '@/components/Logo'
 import { ModelIcon } from '@/components/chat/ModelIcon'
@@ -22,7 +24,7 @@ import { CompareCardGroup, type CompareCardData } from '@/components/chat/Compar
 import { PrivateChatPopover } from '@/components/chat/PrivateChatPopover'
 import { WalletBalanceChip } from '@/components/wallet/WalletBalanceChip'
 import apiClient from '@/lib/api-client'
-import { cn, formatPreciseCurrency, formatUsage } from '@/lib/utils'
+import { cn, downloadFile, formatPreciseCurrency, formatUsage } from '@/lib/utils'
 import { estimateTokens, buildBoundedHistory, collapseCompareGroups, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS } from '@/lib/tokenEstimate'
 import { useAuthStore } from '@/stores/auth-store'
 import { useChatSession } from '@/contexts/ChatSessionContext'
@@ -239,8 +241,16 @@ export default function ChatPage() {
     // "+ New chat" click on an already-empty session just piled up more permanently
     // indistinguishable "New Chat" rows in the sidebar (confirmed live). Picks the
     // most recently updated match if more than one already exists from before this fix.
+    // !s.is_private is deliberate — without it, clicking "+ New chat" while sitting in
+    // an empty Private Chat reselected that SAME private session (it's an empty "New
+    // Chat" row too), so the click did nothing but re-show the incognito theme with no
+    // way out. Confirmed live: this is exactly why "New chat" appeared to stay stuck
+    // in private/dark mode when the private chat had no messages yet, and why a user
+    // logging out and back in never escaped it (this effect re-runs and re-picks the
+    // same private session on every fresh mount, login included). "New chat" must
+    // always land on a normal session, so private ones are never eligible for reuse.
     const reusableEmptySession = sessions
-      .filter((s) => s.title === 'New Chat' && s.message_count === 0 && !s.project_id)
+      .filter((s) => s.title === 'New Chat' && s.message_count === 0 && !s.project_id && !s.is_private)
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())[0]
     if (reusableEmptySession) {
       setActiveSessionId(reusableEmptySession.id)
@@ -263,9 +273,15 @@ export default function ChatPage() {
     }
   }, [activeSessionId, searchParams, router])
 
+  // compareTurns deliberately NOT a dependency — it updates on every single SSE chunk
+  // from every model streaming in parallel, and following each of those was forcing
+  // the viewport down continuously for the whole duration of a multi-model compare,
+  // fighting anyone trying to scroll up and read an earlier column while the rest
+  // were still streaming (reported live). Single-chat streaming is unaffected —
+  // streamingMessages still drives the same follow-to-bottom behavior there.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, streamingMessages, compareTurns])
+  }, [messages, streamingMessages])
 
   const activeSession = sessions?.find((s) => s.id === activeSessionId) ?? null
 
@@ -498,8 +514,16 @@ export default function ChatPage() {
     // Without this, a hung backend call (e.g. a cold container timing out
     // talking to another service) leaves the UI looking like it did nothing —
     // no error, no response, just a silently stuck "Sending…" button.
+    // 180s, not 60s — confirmed live: image/document generation (GenerateImageTool
+    // et al.) routinely takes well over a minute (the actual OpenAI image call,
+    // plus wallet reserve/deduct, plus uploading the result, plus the surrounding
+    // model still needing to produce its own final reply after the tool returns),
+    // and this same endpoint has no way to know in advance whether a given message
+    // will trigger one of those slower tool calls or not. 60s was aborting real,
+    // still-in-progress generations — the toast this produces auto-dismisses
+    // quickly too, so it read as "nothing happened at all" more often than not.
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 60000)
+    const timeoutId = setTimeout(() => controller.abort(), 180000)
 
     try {
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/chat/stream`, {
@@ -555,7 +579,11 @@ export default function ChatPage() {
       const message = err instanceof Error && err.name === 'AbortError'
         ? 'The request took too long and timed out. Please try again.'
         : err instanceof Error ? err.message : 'Chat request failed.'
-      toast.error(message)
+      // Sonner's default auto-dismiss (a few seconds) was firing and clearing
+      // before the user noticed anything — reported live as "sometimes no message
+      // is there at all" after a slow generation timed out. A failure the user is
+      // actively waiting on deserves to stay up until they dismiss it themselves.
+      toast.error(message, { duration: 10000 })
     } finally {
       clearTimeout(timeoutId)
       setIsStreaming(false)
@@ -570,6 +598,24 @@ export default function ChatPage() {
       setStreamingMessages([])
       queryClient.invalidateQueries({ queryKey: ['chat', 'sessions'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
+    }
+  }
+
+  // Editing a previously-sent prompt: the reply (and anything sent after it) was an
+  // answer to the OLD wording, so it's deleted server-side (see chat-service's new
+  // DELETE .../messages/{id}, an inclusive "this message and everything after" op),
+  // then the edited text is sent through the exact same path as a freshly-typed
+  // message — sendSingle already supports a text override for this. Only meaningful
+  // for single-chat history; a message inside a persisted compare turn isn't editable
+  // (MessageBubble only renders this for plain role:'user' bubbles, never CompareCard).
+  const handleEditMessage = async (messageId: string, newText: string) => {
+    if (!newText.trim() || !activeSessionId || isStreaming || isComparing) return
+    try {
+      await apiClient.delete(`/api/v1/sessions/${activeSessionId}/messages/${messageId}`)
+      await queryClient.invalidateQueries({ queryKey: ['chat', 'messages', activeSessionId] })
+      await sendSingle(newText.trim())
+    } catch {
+      toast.error("Couldn't edit that message — please try again.")
     }
   }
 
@@ -970,6 +1016,8 @@ export default function ChatPage() {
                     completionTokens={item.message.completion_tokens}
                     cost={item.message.cost}
                     attachments={item.message.attachments}
+                    onEdit={item.message.role === 'user' ? (text) => handleEditMessage(item.message.id, text) : undefined}
+                    editDisabled={isStreaming || isComparing}
                   />
                 )
               ) : (
@@ -1114,7 +1162,7 @@ export default function ChatPage() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,.txt,.md,.csv,.json,.docx"
+              accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pdf,.txt,.md,.csv,.json,.docx,.xlsx,.pptx"
               onChange={handleFileSelect}
               className="hidden"
             />
@@ -1423,6 +1471,7 @@ export default function ChatPage() {
 
 function MessageBubble({
   role, content, modelName, promptTokens, completionTokens, cost, isLoading, attachments,
+  onEdit, editDisabled,
 }: {
   role: string
   content: string
@@ -1432,14 +1481,45 @@ function MessageBubble({
   cost?: string | number | null
   isLoading?: boolean
   attachments?: FileAttachment[]
+  // Only ever passed for a persisted role:'user' message (see the renderItems call
+  // site) — undefined means "not editable" (a streaming placeholder, an assistant
+  // reply, or a compare-turn entry, which renders through CompareCard instead).
+  onEdit?: (newText: string) => void
+  editDisabled?: boolean
 }) {
   const isUser = role === 'user'
   const hasTokenCounts = !isUser && promptTokens != null && completionTokens != null
+  const { openLightbox } = useImageLightbox()
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
     navigator.clipboard.writeText(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+  // Single-chat mode had no way to save a response at all — only CompareCard had
+  // this (matching it exactly: a plain .md download, no dialog).
+  const handleDownload = () => {
+    const blob = new Blob([content], { type: 'text/markdown' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${modelName?.replace(/[^\w\- ]+/g, '').trim() || 'response'}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+  const [editing, setEditing] = useState(false)
+  const [editValue, setEditValue] = useState(content)
+  const startEdit = () => {
+    setEditValue(content)
+    setEditing(true)
+  }
+  const commitEdit = () => {
+    const text = editValue.trim()
+    setEditing(false)
+    if (!text || text === content) return
+    onEdit?.(text)
   }
   return (
     <div className={cn('flex items-start gap-2', isUser ? 'justify-end' : 'justify-start')}>
@@ -1448,7 +1528,13 @@ function MessageBubble({
           <Bot className="h-4 w-4 text-muted-foreground" />
         </div>
       )}
-      <div className={cn('max-w-[75%] space-y-1', isUser && 'flex flex-col items-end')}>
+      {/* min-w-0 — without it, a flex item's default min-width is its content's
+          intrinsic width, not 0. A pasted code block with one long unbroken line
+          forced this whole bubble wider than max-w-[75%] instead of scrolling inside
+          it, breaking it into a full-width band (confirmed live via screenshot).
+          Same fix CompareCard already needed for the identical reason, see its own
+          comment. */}
+      <div className={cn('min-w-0 max-w-[75%] space-y-1', isUser && 'flex flex-col items-end')}>
         {!isUser && modelName && <p className="text-[11px] text-muted-foreground px-1">{modelName}</p>}
         {/* Was silently lost after send before — the image reached the model fine but
             file_attachments.message_id was never populated by anything, so there was no
@@ -1457,55 +1543,127 @@ function MessageBubble({
           <div className={cn('flex flex-wrap gap-1.5', isUser && 'justify-end')}>
             {attachments.map((a) =>
               a.mime_type.startsWith('image/') ? (
-                <img key={a.id} src={a.storage_url} alt={a.original_name} className="h-24 w-24 rounded-lg border border-border object-cover" />
+                // Previously no download affordance at all for images — the <img> was
+                // the only element, so a generated/uploaded image had no explicit way
+                // to save it (right-click "Save as" only, easy to miss). A download
+                // button is mandatory for every attachment now, generated or uploaded,
+                // any mime type — this closes the one type that had none.
+                <div key={a.id} className="group/attach relative">
+                  {/* Same lightbox for every image in the app regardless of whether
+                      it was uploaded or AI-generated — both are plain file_attachments
+                      rows rendered through this one spot, so wiring the click here
+                      covers both without touching upload/generation logic at all. */}
+                  <img
+                    src={a.storage_url}
+                    alt={a.original_name}
+                    onClick={() => openLightbox(a.storage_url, a.original_name)}
+                    className="h-24 w-24 cursor-pointer rounded-lg border border-border object-cover"
+                  />
+                  {/* href kept (not a <button>) so right-click / middle-click / "open
+                      in new tab" still work as a real link — only the primary click
+                      is intercepted to force an actual save instead of a browser
+                      navigation. See downloadFile()'s own comment for why a plain
+                      `download` attribute wasn't enough for a cross-origin R2 URL. */}
+                  <a
+                    href={a.storage_url}
+                    onClick={(e) => { e.preventDefault(); downloadFile(a.storage_url, a.original_name) }}
+                    aria-label={`Download ${a.original_name}`}
+                    title="Download"
+                    className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover/attach:opacity-100"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </a>
+                </div>
               ) : (
                 <a
                   key={a.id}
                   href={a.storage_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  onClick={(e) => { e.preventDefault(); downloadFile(a.storage_url, a.original_name) }}
                   className="flex items-center gap-1.5 rounded-lg border border-border bg-accent/50 px-2 py-1.5 text-xs hover:bg-accent"
                 >
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="max-w-[140px] truncate">{a.original_name}</span>
+                  <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </a>
               )
             )}
           </div>
         )}
-        <div
-          className={cn(
-            'rounded-lg px-3 py-2 text-sm',
-            'prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
-            'prose-pre:bg-black/80 prose-pre:text-white prose-code:before:content-none prose-code:after:content-none',
-            // Every prose text color inherits from the wrapper's own text-{x}-foreground
-            // instead of a fixed prose-invert palette — `prose-invert` used to be pinned
-            // to the user bubble only, which happened to look fine against bg-primary in
-            // the normal light theme, but broke down the moment bg-card/bg-primary
-            // resolved to genuinely dark colors (private chat's incognito palette):
-            // the assistant bubble had no invert at all (Tailwind Typography's light-mode
-            // default text color rendering as dark-on-near-black), and the user bubble's
-            // invert conflicted with incognito's own light-gray bg-primary. Inheriting
-            // from the real theme token is correct in every palette, not just the two
-            // that happened to get manually checked.
-            'prose-headings:text-inherit prose-p:text-inherit prose-strong:text-inherit prose-em:text-inherit prose-a:text-inherit prose-code:text-inherit prose-li:text-inherit prose-blockquote:text-inherit',
-            isUser
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-card border border-border text-card-foreground'
-          )}
-        >
-          {isLoading ? (
-            <span className="flex items-center gap-1 py-0.5" aria-label="Thinking">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60" />
-            </span>
-          ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {content}
-            </ReactMarkdown>
-          )}
-        </div>
+        {editing ? (
+          // A bordered composer-like box, not the colored bubble — editing is a
+          // distinct mode, not just an inline text swap, so it should look like one.
+          <div className="w-full min-w-[280px] rounded-lg border border-primary bg-card p-2">
+            <textarea
+              autoFocus
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit() }
+                if (e.key === 'Escape') setEditing(false)
+              }}
+              rows={Math.min(10, editValue.split('\n').length + 1)}
+              className="w-full resize-none bg-transparent text-sm text-foreground focus:outline-none"
+            />
+            <div className="mt-1.5 flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={commitEdit}
+                className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+              >
+                Save & resend
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              'rounded-lg px-3 py-2 text-sm overflow-x-auto',
+              'prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
+              'prose-pre:bg-black/80 prose-pre:text-white prose-code:before:content-none prose-code:after:content-none',
+              // Every prose text color inherits from the wrapper's own text-{x}-foreground
+              // instead of a fixed prose-invert palette — `prose-invert` used to be pinned
+              // to the user bubble only, which happened to look fine against bg-primary in
+              // the normal light theme, but broke down the moment bg-card/bg-primary
+              // resolved to genuinely dark colors (private chat's incognito palette):
+              // the assistant bubble had no invert at all (Tailwind Typography's light-mode
+              // default text color rendering as dark-on-near-black), and the user bubble's
+              // invert conflicted with incognito's own light-gray bg-primary. Inheriting
+              // from the real theme token is correct in every palette, not just the two
+              // that happened to get manually checked.
+              'prose-headings:text-inherit prose-p:text-inherit prose-strong:text-inherit prose-em:text-inherit prose-a:text-inherit prose-code:text-inherit prose-li:text-inherit prose-blockquote:text-inherit',
+              isUser
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-card border border-border text-card-foreground'
+            )}
+          >
+            {isLoading ? (
+              <span className="flex items-center gap-1 py-0.5" aria-label="Thinking">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.3s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:-0.15s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-current opacity-60" />
+              </span>
+            ) : (
+              // remarkBreaks — CommonMark's own rule collapses a single "\n" inside a
+              // paragraph into a plain space; only a blank line starts a new one. Pasted
+              // code/text with no triple-backtick fence around it (the common case —
+              // nobody manually fences a paste) was rendering as one run-on line because
+              // of this, not the earlier width-overflow bug (already fixed separately).
+              // remarkBreaks turns every single newline into a real line break instead,
+              // matching what the user actually pasted. Fenced code blocks are
+              // unaffected either way — they already preserve internal newlines verbatim.
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>
+                {content}
+              </ReactMarkdown>
+            )}
+          </div>
+        )}
         {/* Reversed back at explicit request (2026-09-02) — token counts shown again,
             cost commented out (not deleted) so it's a one-line re-enable later. */}
         {hasTokenCounts && (
@@ -1529,6 +1687,43 @@ function MessageBubble({
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
             </button>
+            <button
+              type="button"
+              onClick={handleDownload}
+              aria-label="Download this response"
+              title="Download"
+              className="text-muted-foreground/70 hover:text-foreground"
+            >
+              <Download className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+        {isUser && !isLoading && !editing && (
+          <div className="flex items-center gap-1.5 px-1">
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy message"
+              title="Copy"
+              className="text-muted-foreground/70 hover:text-foreground"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            </button>
+            {/* onEdit is only ever passed for a persisted message (see the renderItems
+                call site) — a still-streaming placeholder has no real message id to
+                edit against yet. */}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={startEdit}
+                disabled={editDisabled}
+                aria-label="Edit message"
+                title={editDisabled ? 'Wait for the current response to finish' : 'Edit — this deletes everything sent after it'}
+                className="text-muted-foreground/70 hover:text-foreground disabled:opacity-30"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
           </div>
         )}
       </div>

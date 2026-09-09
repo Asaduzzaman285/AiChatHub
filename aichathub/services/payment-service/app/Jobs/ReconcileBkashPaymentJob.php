@@ -34,6 +34,12 @@ class ReconcileBkashPaymentJob implements ShouldQueue
             return;
         }
 
+        // Must match whichever mode actually created this paymentID — see the
+        // matching comment in CheckoutController::verify(). This job runs from
+        // a scheduled sweep with no browser Origin at all, so the stored flag
+        // is the only correct source here.
+        $bkash->useSandbox((bool) ($transaction->metadata['is_sandbox'] ?? false));
+
         $result = $bkash->queryPayment($transaction->gateway_reference);
 
         if ($result['trx_id'] ?? null) {

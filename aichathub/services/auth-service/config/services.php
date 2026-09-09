@@ -19,6 +19,13 @@ return [
     'notification_url'     => env('NOTIFICATION_SERVICE_URL', 'http://notification-nginx'),
     'subscription_url'     => env('SUBSCRIPTION_SERVICE_URL', 'http://subscription-nginx'),
     'frontend_url'         => env('FRONTEND_URL', 'http://localhost:3000'),
+    // The second real frontend origin (same backend, same DB — see
+    // StripeGateway::useSandboxIfOrigin()'s docblock in payment-service for the
+    // established "staging shares production" convention this app already
+    // follows). Used only to validate a stored registration Origin before
+    // redirecting a verification click back to it — see
+    // EmailVerificationController::redirectOrigin().
+    'staging_frontend_url' => env('STAGING_FRONTEND_URL', 'https://staging.alveta.ai'),
 
     // Public-facing base URL for links a user actually clicks (email verification,
     // email-change confirmation). Deliberately separate from APP_URL: in production

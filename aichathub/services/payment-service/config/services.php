@@ -16,7 +16,23 @@ return [
     ],
 
     'bkash' => [
+        // Last-resort fallback only, used when the live currency_rates lookup
+        // against subscription-service (BkashGateway::usdToBdt()) can't be
+        // reached — that internal endpoint (admin-configurable exchange rate +
+        // margin/tax/VAT/withholding) is the real source of truth now.
         'usd_to_bdt_rate' => (float) env('BKASH_USD_TO_BDT_RATE', 122),
+
+        // Sandbox path for staging.alveta.ai — same backend, same deployment as
+        // production (see StripeGateway::useSandboxIfOrigin(), mirrored here by
+        // BkashGateway::useSandboxIfOrigin()). Only ever selected when a
+        // request's Origin exactly matches this; every other case (including no
+        // Origin header, e.g. server-to-server calls) keeps using the live
+        // credentials in 'bkash.credentials' (config/bkash.php), unchanged.
+        'sandbox_origin'     => env('BKASH_SANDBOX_ORIGIN'),
+        'sandbox_app_key'    => env('BKASH_SANDBOX_APP_KEY', ''),
+        'sandbox_app_secret' => env('BKASH_SANDBOX_APP_SECRET', ''),
+        'sandbox_username'   => env('BKASH_SANDBOX_USERNAME', ''),
+        'sandbox_password'   => env('BKASH_SANDBOX_PASSWORD', ''),
     ],
 
     'wallet_url'       => env('WALLET_SERVICE_URL', 'http://wallet-nginx'),

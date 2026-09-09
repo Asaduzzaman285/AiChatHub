@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\V1\Admin\CurrencyAdminController;
 use App\Http\Controllers\V1\Admin\DashboardController;
 use App\Http\Controllers\V1\Admin\SubscriptionAdminController;
 use App\Http\Controllers\V1\PackageController;
@@ -43,4 +44,14 @@ Route::middleware('auth.jwt')->group(function () {
     // /admin/* path matches no proxy route at all.
     Route::get('/subscription/admin',           [SubscriptionAdminController::class, 'index'])->middleware('admin.gate:subscriptions.view');
     Route::get('/subscription/admin/dashboard', [DashboardController::class, 'index'])->middleware('admin.gate:dashboard.view');
+
+    // Currency catalog + conversion policy — same "nested under an existing
+    // proxied path, not bare /admin" reasoning as the subscription admin routes
+    // above. The conversion policy itself (exchange rate + margin/tax/VAT/
+    // withholding stack) is admin-owned; no other service or role can write it.
+    Route::get('/subscription/currencies/admin',    [CurrencyAdminController::class, 'index'])->middleware('admin.gate:currencies.manage');
+    Route::post('/subscription/currencies/admin',   [CurrencyAdminController::class, 'store'])->middleware('admin.gate:currencies.manage');
+    Route::patch('/subscription/currencies/admin/{code}/activate',   [CurrencyAdminController::class, 'activate'])->middleware('admin.gate:currencies.manage');
+    Route::patch('/subscription/currencies/admin/{code}/deactivate', [CurrencyAdminController::class, 'deactivate'])->middleware('admin.gate:currencies.manage');
+    Route::patch('/subscription/currencies/admin/{code}', [CurrencyAdminController::class, 'update'])->middleware('admin.gate:currencies.manage');
 });

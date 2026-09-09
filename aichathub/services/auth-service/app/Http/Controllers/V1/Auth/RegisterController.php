@@ -21,7 +21,7 @@ class RegisterController extends Controller
             'email'              => $request->email,
             'password'           => $request->password,
             'name'               => $request->name,
-            'preferred_currency' => $request->currency ?? 'USD',
+            'preferred_currency' => $this->resolveCurrency($request),
             'status'             => 'pending_verification',
         ]);
 
@@ -29,14 +29,20 @@ class RegisterController extends Controller
         $userId      = (string) $user->id;
         $walletUrl   = rtrim(config('services.wallet_url', 'http://wallet-nginx'), '/');
         $internalKey = config('services.internal_key', '');
+        // Captured now, not inside the closure — by the time the closure runs
+        // (after the response is sent), this request's own Origin header is
+        // still readable here but not worth relying on staying available on
+        // $request past this point. See UserRegistered's own docblock for why
+        // this needs to survive all the way to the eventual email click.
+        $origin      = $request->header('Origin');
 
         // Fire event + wallet creation AFTER response is sent — never block registration
-        dispatch(function () use ($userId, $walletUrl, $internalKey) {
+        dispatch(function () use ($userId, $walletUrl, $internalKey, $origin) {
 
             // 1. Send verification email via event
             $user = \App\Models\User::find($userId);
             if ($user) {
-                event(new UserRegistered($user));
+                event(new UserRegistered($user, $origin));
             }
 
             // 2. Auto-create wallet in wallet-service
@@ -74,5 +80,25 @@ class RegisterController extends Controller
             'message' => 'Registration successful. Please check your email to verify your account.',
             'user'    => ['id' => $user->id, 'email' => $user->email, 'name' => $user->name],
         ], 201);
+    }
+
+    /**
+     * The frontend never actually sends `currency` today — this is
+     * server-side geo-detection instead, from Cloudflare's CF-IPCountry
+     * header (survives Caddy's reverse_proxy and api-gateway's ProxyController
+     * unchanged, since both forward all incoming headers as-is). Only USD and
+     * BDT are chargeable anywhere in the system end-to-end right now
+     * (packages/checkout/bKash), so an explicit `currency` is clamped to that
+     * pair rather than trusting an arbitrary 3-letter code through to a
+     * column nothing downstream actually knows how to bill in.
+     */
+    private function resolveCurrency(RegisterRequest $request): string
+    {
+        $countryCode = strtoupper((string) $request->header('CF-IPCountry'));
+        $detected    = $countryCode === 'BD' ? 'BDT' : 'USD';
+
+        $requested = $request->currency ? strtoupper($request->currency) : null;
+
+        return in_array($requested, ['USD', 'BDT'], true) ? $requested : $detected;
     }
 }

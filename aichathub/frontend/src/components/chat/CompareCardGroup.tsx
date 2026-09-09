@@ -24,6 +24,15 @@ export function CompareCardGroup({
   // isn't even possible yet (no messageId until the turn finishes).
   pendingChooseCardKey?: string
 }) {
+  // A model that failed gets no card at all now — it used to render a full card
+  // (header, empty body, footer buttons) just to show one line of error text inside
+  // it, which reserved just as much width/space as a real response and made a
+  // 4-model row look broken rather than "3 succeeded." Splitting here means the
+  // successful cards lay out exactly as if the failed one was never requested, and
+  // the failure becomes a single plain-text line below the row instead.
+  const successCards = useMemo(() => cards.filter((c) => !c.error), [cards])
+  const failedCards = useMemo(() => cards.filter((c) => c.error), [cards])
+
   // Explicit key order — empty until the user actually drags something, so cards
   // start in whatever order the caller provided them. Local/display-only: reset in
   // chat/page.tsx's session-switch effect alongside the rest of this session's
@@ -31,14 +40,14 @@ export function CompareCardGroup({
   const [order, setOrder] = useState<string[]>([])
 
   const orderedCards = useMemo(() => {
-    if (order.length === 0) return cards
-    const byKey = new Map(cards.map((c) => [c.cardKey, c]))
+    if (order.length === 0) return successCards
+    const byKey = new Map(successCards.map((c) => [c.cardKey, c]))
     const ordered = order.map((key) => byKey.get(key)).filter((c): c is CompareCardData => !!c)
     // A card not yet present in `order` (e.g. one just streamed in) appends at the end
     // rather than disappearing.
-    const missing = cards.filter((c) => !order.includes(c.cardKey))
+    const missing = successCards.filter((c) => !order.includes(c.cardKey))
     return [...ordered, ...missing]
-  }, [cards, order])
+  }, [successCards, order])
 
   const sensors = useSensors(
     // A small activation distance keeps a plain tap/swipe on the handle from being
@@ -60,7 +69,7 @@ export function CompareCardGroup({
   }
 
   const aggregateText = useMemo(() => {
-    const usable = cards.filter((c) => !c.error && c.promptTokens != null && c.completionTokens != null)
+    const usable = successCards.filter((c) => c.promptTokens != null && c.completionTokens != null)
     if (usable.length === 0) return null
 
     const promptTotal = usable.reduce((sum, c) => sum + (c.promptTokens ?? 0), 0)
@@ -68,15 +77,16 @@ export function CompareCardGroup({
     const costTotal = usable.reduce((sum, c) => sum + Number(c.cost ?? 0), 0)
 
     return formatUsage(promptTotal, completionTotal, costTotal)
-  }, [cards])
+  }, [successCards])
 
   // 2-3 models: each card stretches to fill an equal share of the panel's width
   // (vw/2, vw/3 against the chat panel, not the literal browser viewport — the
   // sidebar/composer chrome still take their own space). 4 models: equal quarters
   // would be too narrow to read comfortably, so cards keep a fixed, readable width
   // and the row scrolls horizontally instead — same as dnd-kit's drag-to-reorder
-  // already assumed for the overflow case.
-  const fillWidth = cards.length <= 3
+  // already assumed for the overflow case. Based on successCards, not the original
+  // request count — a failed model no longer takes up a card's worth of layout.
+  const fillWidth = successCards.length <= 3
 
   return (
     <div className="space-y-1.5">
@@ -100,12 +110,25 @@ export function CompareCardGroup({
                 // removing them — the comparison stays visible for reference, the
                 // choice just reads clearly at a glance (confirmed as the wanted
                 // behavior over deleting the other cards outright).
-                isDeemphasized={cards.some((c) => c.isChosen) && !card.isChosen}
+                isDeemphasized={successCards.some((c) => c.isChosen) && !card.isChosen}
               />
             ))}
           </div>
         </SortableContext>
       </DndContext>
+      {/* One model failing must never block or visually crowd out the others — no
+          card, no reserved space, just a plain line naming which model and why,
+          once, below the whole row. The error text itself comes pre-formatted and
+          user-friendly from the backend (ChatController::friendlyProviderError). */}
+      {failedCards.length > 0 && (
+        <div className="space-y-0.5 px-1">
+          {failedCards.map((card) => (
+            <p key={card.cardKey} className="text-xs text-destructive">
+              {card.error}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

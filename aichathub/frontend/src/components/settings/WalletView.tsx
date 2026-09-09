@@ -114,13 +114,12 @@ export function WalletView() {
               <Button type="submit" className="w-full" disabled={topup.isPending} onClick={handleTopup('stripe')}>
                 {topup.isPending ? 'Processing…' : 'Pay with Card (Stripe)'}
               </Button>
-              {/* bKash temporarily disabled — commented out, not removed; uncomment to
-                  re-enable (same pair in PlansView.tsx's subscribe/upgrade branches). */}
-              {/*
               <Button type="submit" variant="outline" className="w-full" disabled={topup.isPending} onClick={handleTopup('bkash')}>
                 {topup.isPending ? 'Processing…' : 'Pay with bKash'}
               </Button>
-              */}
+              <p className="text-xs text-muted-foreground">
+                bKash converts this USD amount to BDT at checkout, using the current admin-configured rate.
+              </p>
             </form>
           </CardContent>
         </Card>

@@ -438,6 +438,27 @@ export interface AdminAiModel {
   pricing: AdminModelPricing | null
 }
 
+export interface AdminCurrencyRate {
+  exchange_rate: string
+  margin_percentage: string
+  tax_percentage: string
+  vat_percentage: string
+  withholding_tax_percentage: string
+  effective_rate: string
+  effective_from: string
+}
+
+export interface AdminCurrency {
+  id: string
+  code: string
+  name: string
+  symbol: string
+  decimal_places: number
+  is_active: boolean
+  created_at: string
+  rate: AdminCurrencyRate | null
+}
+
 export interface AuthAdminDashboard {
   total_users: number
   active_users: number

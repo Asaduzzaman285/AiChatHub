@@ -64,6 +64,17 @@ class CheckoutController extends Controller
 
         if (! in_array($transaction->status, ['completed', 'cancelled', 'failed'], true)) {
             if ($transaction->gateway === 'bkash') {
+                // Restored from what this specific transaction recorded at
+                // checkout-creation time (CreatesCheckoutSessions::beginBkashCheckout()),
+                // not re-derived from this request's own Origin — a
+                // sandbox-created paymentID is invisible to a live-mode token
+                // and vice versa, and re-deriving from "whatever Origin this
+                // verify call happens to arrive from" doesn't reliably say
+                // which mode actually created the payment (unlike Stripe,
+                // where the same reasoning previously bit this exact call site
+                // — see the comment on the line above).
+                $bkash->useSandbox((bool) ($transaction->metadata['is_sandbox'] ?? false));
+
                 $alreadyExecuted = ! empty($transaction->metadata['trx_id'] ?? null);
                 $result = $alreadyExecuted ? $bkash->queryPayment($sessionId) : $bkash->executePayment($sessionId);
 

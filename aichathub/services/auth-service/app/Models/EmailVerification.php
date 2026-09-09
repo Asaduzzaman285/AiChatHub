@@ -19,6 +19,7 @@ class EmailVerification extends Model
         'used',
         'expires_at',
         'new_email',
+        'origin',
     ];
 
     protected function casts(): array

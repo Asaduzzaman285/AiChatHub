@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { AxiosError } from 'axios'
 import {
   BrainCircuit,
@@ -11,6 +12,7 @@ import {
   ChevronRight,
   ClipboardList,
   CreditCard,
+  Coins,
   LayoutDashboard,
   LogOut,
   MessagesSquare,
@@ -41,6 +43,7 @@ const NAV_ITEMS = [
   { href: '/admin/wallet', label: 'Wallet', icon: Wallet, permission: 'wallet.view', group: 'operational' as const },
   { href: '/admin/ai-usage', label: 'AI Usage', icon: Receipt, permission: 'ai_usage.view', group: 'operational' as const },
   { href: '/admin/ai-models', label: 'AI Models', icon: BrainCircuit, permission: 'models.manage', group: 'operational' as const },
+  { href: '/admin/currencies', label: 'Currencies', icon: Coins, permission: 'currencies.manage', group: 'operational' as const },
   { href: '/admin/admins', label: 'Admins', icon: ShieldCheck, permission: 'admins.manage', group: 'management' as const },
   { href: '/admin/roles', label: 'Roles', icon: UserCog, permission: 'admins.manage', group: 'management' as const },
   { href: '/admin/audit-logs', label: 'Audit Logs', icon: ClipboardList, permission: 'audit_logs.view', group: 'management' as const },
@@ -56,6 +59,7 @@ const NAV_ITEMS = [
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
+  const queryClient = useQueryClient()
   const { user, accessToken, isAuthenticated, hasHydrated, setUser, clearAuth } = useAuthStore()
   const [checking, setChecking] = useState(true)
   const [retryTick, setRetryTick] = useState(0)
@@ -114,6 +118,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     } catch {
       // Even if the server call fails, clear local state so the user isn't stuck.
     }
+    // React Query's cache is a long-lived singleton independent of which user is
+    // logged in — query keys like ['chat','sessions'] carry no user id, so without
+    // this, logging in as a different admin in the same tab kept showing whatever
+    // the previous admin's cached queries held until a full reload created a fresh
+    // QueryClient. clear() wipes every cached query so the next admin starts blank.
+    queryClient.clear()
     clearAuth()
     router.replace('/login')
   }

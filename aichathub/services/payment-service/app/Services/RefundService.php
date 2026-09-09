@@ -29,6 +29,12 @@ class RefundService
         $amount = $amount ?? (float) $transaction->amount;
 
         if ($transaction->gateway === 'bkash') {
+            // Must match whichever mode actually created this paymentID — see
+            // the matching comment in CheckoutController::verify(). A refund
+            // is typically admin-triggered with no Origin tying it to the
+            // original purchase's environment at all.
+            $this->bkash->useSandbox((bool) ($transaction->metadata['is_sandbox'] ?? false));
+
             $trxId = $transaction->metadata['trx_id'] ?? null;
             if (! $trxId) {
                 return ['success' => false, 'error' => 'no_bkash_trx_id'];
