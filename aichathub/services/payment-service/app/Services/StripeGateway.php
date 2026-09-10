@@ -157,11 +157,13 @@ class StripeGateway
      * and converts the price using Stripe's own live market rate, not this
      * app's admin-configured currency_rates. Confirmed live: a $1 USD session
      * for a Bangladeshi customer offered "BDT 127.97" as an alternative,
-     * conflicting with the app's actual design (card checkout is always USD;
-     * BDT only ever comes from bKash's own fixed package sticker price — see
-     * SubscriptionController::resolveCurrency()). Disabling this per-session
-     * (rather than just in the Dashboard) keeps that guarantee even if the
-     * account-level default is ever changed back.
+     * conflicting with the app's actual design — whatever $currency this
+     * method is explicitly called with (USD, or BDT using a package's own
+     * fixed sticker price — see SubscriptionController::resolveCurrency()) is
+     * the only currency that should ever be charged, never a rate Stripe
+     * invented on its own. Disabling this per-session (rather than just in
+     * the Dashboard) keeps that guarantee even if the account-level default is
+     * ever changed back.
      *
      * @throws ApiErrorException
      */

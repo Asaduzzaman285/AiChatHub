@@ -33,6 +33,18 @@ export interface PackageFeatures {
   image_gen: boolean
   audio: boolean
   vision: boolean
+  // Added for the marketing team's proposed package table (2026-09) — video_gen
+  // and voice_gen are real capability flags (no generation backend exists for
+  // either yet; the checkbox exists so packages are already correctly
+  // configured the moment one ships). ide_integration and prompt_library are
+  // pure entitlement flags with no backing feature to gate today, same as
+  // api_access was originally. support_tier isn't boolean — every package
+  // needs exactly one of the two tiers, not an on/off toggle.
+  video_gen: boolean
+  voice_gen: boolean
+  ide_integration: boolean
+  prompt_library: boolean
+  support_tier: 'standard' | 'priority'
 }
 
 export interface Package {
@@ -42,6 +54,12 @@ export interface Package {
   description: string
   price: { usd: number; bdt: number | null }
   wallet_credit_usd: number
+  // Independent of wallet_credit_usd, same relationship as price.bdt has to
+  // price.usd — an admin-typed BDT credit granted on a bKash purchase, not
+  // derived from any formula. Null when unset, same fallback rule as
+  // price.bdt: PricingCard/PackageActivationService fall back to the USD
+  // figure whenever this is null.
+  wallet_credit_bdt: number | null
   features: PackageFeatures
   model_access: string[]
 }
@@ -147,12 +165,18 @@ export interface Transaction {
   user_id: string
   type: 'subscription_purchase' | 'wallet_topup' | 'refund'
   status: 'pending' | 'completed' | 'failed' | 'refunded'
+  // 'amount'/'currency' are always the internal USD bookkeeping value, even
+  // for a bKash purchase (payment-service's own Transaction convention) — the
+  // real amount actually charged, for a bKash row, is metadata.amount_bdt.
+  // Never live-reconvert these for display (see BillingView.tsx) — a
+  // transaction is a frozen historical fact, not an ongoing balance.
   amount: string
   currency: string
   gateway: string
   gateway_reference: string | null
   description: string | null
   error_message: string | null
+  metadata: { amount_bdt?: number; is_sandbox?: boolean; package_slug?: string } | null
   completed_at: string | null
   failed_at: string | null
   created_at: string
@@ -358,6 +382,7 @@ export interface AdminPackage {
   monthly_price_usd: string
   monthly_price_bdt: string | null
   monthly_wallet_credit_usd: string
+  monthly_wallet_credit_bdt: string | null
   credit_buffer_percentage: string
   model_access: string[]
   features: PackageFeatures

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -43,8 +43,35 @@ export default function RegisterPage() {
     if (isAuthenticated) router.replace(postLoginPath(user))
   }, [isAuthenticated, user, router])
 
-  const { register, handleSubmit, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, setValue, formState: { errors, isSubmitting } } =
     useForm<RegisterForm>({ resolver: zodResolver(registerSchema) })
+
+  // The <select> below defaults to whichever <option> is listed first (USD) —
+  // the zod schema's .default('USD') only fills in a value if the field were
+  // ever missing entirely, which it never is for a real registered select, so
+  // it did nothing to fix this. A BD visitor's form was always silently
+  // submitting "USD" unless they noticed and changed it themselves, which
+  // also meant the backend's own CF-IPCountry geo-detection (the actual
+  // fallback for when no currency is sent) never got a chance to run — an
+  // explicit value always wins over it. Reusing the same public /packages
+  // endpoint the pricing page already calls for its detected_currency field,
+  // rather than re-implementing geo-detection client-side, so both surfaces
+  // agree by construction. Doesn't override a value the visitor has already
+  // touched themselves.
+  const currencyTouched = useRef(false)
+  useEffect(() => {
+    apiClient
+      .get<{ detected_currency: 'USD' | 'BDT' }>('/api/v1/packages')
+      .then(({ data }) => {
+        if (!currencyTouched.current && data.detected_currency === 'BDT') {
+          setValue('currency', 'BDT')
+        }
+      })
+      .catch(() => {
+        // Detection failing just leaves the USD default in place — not worth
+        // surfacing an error over on a page whose main job is registration.
+      })
+  }, [setValue])
 
   const onSubmit = async (data: RegisterForm) => {
     setServerError(null)
@@ -160,7 +187,7 @@ export default function RegisterPage() {
             <div className="space-y-1">
               <label className="text-sm font-medium text-foreground">Currency</label>
               <select
-                {...register('currency')}
+                {...register('currency', { onChange: () => { currencyTouched.current = true } })}
                 className="w-full rounded-xl border border-input bg-background px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 <option value="USD">USD — US Dollar</option>
@@ -174,6 +201,7 @@ export default function RegisterPage() {
                 <input
                   type={showPassword ? 'text' : 'password'}
                   placeholder="e.g., Sij@ck2025"
+                  autoComplete="new-password"
                   {...register('password')}
                   className="w-full rounded-xl border border-input bg-background px-3.5 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -198,6 +226,7 @@ export default function RegisterPage() {
                 <input
                   type={showPasswordConfirmation ? 'text' : 'password'}
                   placeholder="••••••••"
+                  autoComplete="new-password"
                   {...register('password_confirmation')}
                   className="w-full rounded-xl border border-input bg-background px-3.5 py-2 pr-10 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />

@@ -8,6 +8,7 @@ import apiClient from '@/lib/api-client'
 import { PricingCard } from '@/components/pricing/PricingCard'
 import { Button } from '@/components/ui/Button'
 import { describeError } from '@/lib/errors'
+import { formatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 import type { Package } from '@/types'
 
@@ -19,26 +20,38 @@ import type { Package } from '@/types'
  *
  * A logged-in user already has a real preferred_currency (set at registration
  * via geo-detection) rather than needing a fresh IP lookup like the anonymous
- * landing page does — used here purely for the card's displayed sticker price.
- * The currency actually charged follows whichever payment method is clicked
- * (bKash always settles BDT, card always USD), same rule as PlansView.tsx. */
+ * landing page does — used here purely for which card-currency button shows
+ * first (see ctaFor()'s cardButton). The currency actually charged always
+ * follows whichever specific payment button is clicked, explicitly — card can
+ * now charge either USD or the package's own real BDT sticker price directly
+ * (see subscription-service's SubscriptionController::resolveCurrency()), not
+ * just bKash, same rule as PlansView.tsx. */
 export function WelcomePricingSection() {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const displayCurrency = user?.preferred_currency ?? 'USD'
   const [choosingSlug, setChoosingSlug] = useState<string | null>(null)
+  // Which specific button was clicked (e.g. 'card-BDT') — only that one shows
+  // its own "Starting checkout…" text; the package's other buttons just
+  // disable instead of all switching to loading text together (same fix as
+  // PlansView.tsx's pendingAction).
+  const [pendingKey, setPendingKey] = useState<string | null>(null)
   const { data: packages, isLoading } = useQuery({
     queryKey: ['packages', 'public'],
     queryFn: async () => (await apiClient.get<{ packages: Package[] }>('/api/v1/packages')).data.packages,
   })
 
   const subscribe = useMutation({
-    mutationFn: async ({ slug, source }: { slug: string; source: 'card' | 'bkash' }) =>
-      apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
+    mutationFn: async (
+      { slug, source, currency, key }: { slug: string; source: 'card' | 'bkash'; currency: 'USD' | 'BDT'; key: string }
+    ) => {
+      setPendingKey(key)
+      return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
         payment_source: source,
-        currency: source === 'bkash' ? 'BDT' : 'USD',
-      }),
+        currency,
+      })
+    },
     onSuccess: (res) => {
       if (res.data.checkout_url) {
         window.location.href = res.data.checkout_url
@@ -59,31 +72,51 @@ export function WelcomePricingSection() {
       toast.error(message)
       setChoosingSlug(null)
     },
+    onSettled: () => setPendingKey(null),
   })
 
-  const ctaFor = (slug: string) => {
+  const ctaFor = (pkg: Package) => {
+    const slug = pkg.slug
     if (choosingSlug === slug) {
+      const hasBdt = pkg.price.bdt !== null
+      const primaryCardCurrency: 'USD' | 'BDT' = displayCurrency === 'BDT' && hasBdt ? 'BDT' : 'USD'
+      const secondaryCardCurrency: 'USD' | 'BDT' | null = hasBdt ? (primaryCardCurrency === 'BDT' ? 'USD' : 'BDT') : null
+      const isPending = subscribe.isPending
+
+      const cardButton = (currency: 'USD' | 'BDT', primary: boolean) => {
+        const key = `card-${currency}`
+        const price = currency === 'BDT' ? pkg.price.bdt! : pkg.price.usd
+        return (
+          <Button
+            key={key}
+            className="w-full rounded-full"
+            variant={primary ? 'primary' : 'outline'}
+            disabled={isPending}
+            onClick={() => subscribe.mutate({ slug, source: 'card', currency, key })}
+          >
+            {isPending && pendingKey === key ? 'Starting checkout…' : `Pay ${formatCurrency(price, currency)} with Card (Stripe)`}
+          </Button>
+        )
+      }
+
       return (
         <div className="mt-6 space-y-2">
-          <Button
-            className="w-full rounded-full"
-            disabled={subscribe.isPending}
-            onClick={() => subscribe.mutate({ slug, source: 'card' })}
-          >
-            {subscribe.isPending ? 'Starting checkout…' : 'Pay with Card (Stripe)'}
-          </Button>
+          {cardButton(primaryCardCurrency, true)}
+          {secondaryCardCurrency && cardButton(secondaryCardCurrency, false)}
           <Button
             className="w-full rounded-full"
             variant="outline"
-            disabled={subscribe.isPending}
-            onClick={() => subscribe.mutate({ slug, source: 'bkash' })}
+            disabled={isPending}
+            onClick={() => subscribe.mutate({ slug, source: 'bkash', currency: 'BDT', key: 'bkash-BDT' })}
           >
-            {subscribe.isPending ? 'Starting checkout…' : 'Pay with bKash'}
+            {isPending && pendingKey === 'bkash-BDT'
+              ? 'Starting checkout…'
+              : `Pay ${hasBdt ? formatCurrency(pkg.price.bdt!, 'BDT') : formatCurrency(pkg.price.usd)} with bKash`}
           </Button>
           <button
             type="button"
             className="w-full text-xs text-muted-foreground hover:text-foreground"
-            disabled={subscribe.isPending}
+            disabled={isPending}
             onClick={() => setChoosingSlug(null)}
           >
             Cancel
@@ -124,7 +157,7 @@ export function WelcomePricingSection() {
               pkg={pkg}
               featured={pkg.slug === 'standard'}
               currency={displayCurrency}
-              cta={ctaFor(pkg.slug)}
+              cta={ctaFor(pkg)}
             />
           ))
         )}
@@ -138,7 +171,7 @@ export function WelcomePricingSection() {
             popularBadge={false}
             layout="horizontal"
             currency={displayCurrency}
-            cta={ctaFor('pro')}
+            cta={ctaFor(packages.find((pkg) => pkg.slug === 'pro')!)}
           />
         </div>
       )}

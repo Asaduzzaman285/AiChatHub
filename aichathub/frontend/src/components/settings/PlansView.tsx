@@ -16,11 +16,21 @@ import type { Package, Subscription } from '@/types'
 export function PlansView() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
-  // Informational display only — see subscribe()/changePlan()'s own currency field,
-  // which follows whichever payment method is actually clicked (bKash -> BDT,
-  // card -> USD), not this. This is just what a package's card shows as its price.
+  // Informational display only, and which card-currency button is shown first
+  // (see renderPaymentButtons() below) — the currency actually charged always
+  // follows whichever specific payment button is clicked, explicitly, not this.
   const displayCurrency = user?.preferred_currency ?? 'USD'
-  const [pendingSlug, setPendingSlug] = useState<string | null>(null)
+  // Identifies exactly which button was clicked for which package (e.g.
+  // { slug: 'pro', key: 'card-BDT' }) — not just the package, since a package
+  // now has up to three payment buttons (card/USD, card/BDT, bKash) and only
+  // the one actually clicked should ever show its own "…ing" loading text.
+  // The other buttons for that same package still disable (only one purchase
+  // per package can be in flight at once) but keep showing their real price,
+  // rather than every button switching to loading text together. Confirmed
+  // live: clicking any one of a package's buttons previously put ALL of that
+  // package's buttons into "Subscribing…"/"Upgrading…", including ones never
+  // clicked.
+  const [pendingAction, setPendingAction] = useState<{ slug: string; key: string } | null>(null)
   // Which package the payment-source picker is currently open for — null means
   // no picker is showing (either nothing clicked yet, or a single-option package).
   const [choosingSlug, setChoosingSlug] = useState<string | null>(null)
@@ -41,15 +51,19 @@ export function PlansView() {
   // below. A $0 package still activates with no payment step at all — that's
   // handled entirely server-side, not a client-visible "source" choice.
   const subscribe = useMutation({
-    mutationFn: async ({ slug, source }: { slug: string; source: 'card' | 'bkash' }) => {
-      setPendingSlug(slug)
+    mutationFn: async (
+      { slug, source, currency, key }: { slug: string; source: 'card' | 'bkash'; currency: 'USD' | 'BDT'; key: string }
+    ) => {
+      setPendingAction({ slug, key })
+      // bKash only ever settles in BDT — card can now charge either currency
+      // directly using the package's own real sticker price (see
+      // SubscriptionController::resolveCurrency()), so this follows whichever
+      // specific button was actually clicked rather than being derived from
+      // `source` alone.
       return apiClient.post<{ checkout_url?: string }>('/api/v1/subscription/subscribe', {
         package_slug: slug,
         payment_source: source,
-        // bKash only ever settles in BDT, card only ever in USD — the currency
-        // sent here follows the payment method actually clicked, independent
-        // of the card's own displayed sticker price (displayCurrency above).
-        currency: source === 'bkash' ? 'BDT' : 'USD',
+        currency,
       })
     },
     onSuccess: (res) => {
@@ -83,7 +97,7 @@ export function PlansView() {
         queryClient.invalidateQueries({ queryKey: ['models'] })
       }
     },
-    onSettled: () => setPendingSlug(null),
+    onSettled: () => setPendingAction(null),
   })
 
   // Upgrade charges the full new plan price immediately via a real gateway (card
@@ -94,14 +108,14 @@ export function PlansView() {
   // it's scheduled for the next renewal, so it needs no payment_source at all.
   const changePlan = useMutation({
     mutationFn: async (
-      { slug, direction, source }:
-      { slug: string; direction: 'upgrade'; source: 'card' | 'bkash' } |
-      { slug: string; direction: 'downgrade'; source?: undefined }
+      { slug, direction, source, currency, key }:
+      { slug: string; direction: 'upgrade'; source: 'card' | 'bkash'; currency: 'USD' | 'BDT'; key: string } |
+      { slug: string; direction: 'downgrade'; source?: undefined; currency?: undefined; key: string }
     ) => {
-      setPendingSlug(slug)
+      setPendingAction({ slug, key })
       return apiClient.post<{ checkout_url?: string; message?: string }>(`/api/v1/subscription/${direction}`, {
         package_slug: slug,
-        ...(direction === 'upgrade' ? { payment_source: source, currency: source === 'bkash' ? 'BDT' : 'USD' } : {}),
+        ...(direction === 'upgrade' ? { payment_source: source, currency } : {}),
       })
     },
     onSuccess: (res, variables) => {
@@ -130,8 +144,71 @@ export function PlansView() {
         queryClient.invalidateQueries({ queryKey: ['models'] })
       }
     },
-    onSettled: () => setPendingSlug(null),
+    onSettled: () => setPendingAction(null),
   })
+
+  // Shared by the subscribe and upgrade "choosing" views below — a package now
+  // has up to three payment buttons (card/BDT, card/USD, bKash/BDT) instead of
+  // one card + one bKash, since Stripe can charge the package's own real BDT
+  // sticker price directly now (not just USD) — see
+  // SubscriptionController::resolveCurrency(). Whichever currency the card
+  // already shows as its price (cardCurrency, driven by the visitor's own
+  // preferred_currency) is the PRIMARY card button; the other currency is
+  // still offered, just secondary, so a card payer always has a real choice
+  // rather than being defaulted into whichever currency happens to be shown.
+  const renderPaymentButtons = (
+    pkg: Package,
+    isBusy: boolean,
+    isPendingKey: (key: string) => boolean,
+    verb: string,
+    onPay: (source: 'card' | 'bkash', currency: 'USD' | 'BDT', key: string) => void,
+    onCancel: () => void
+  ) => {
+    const hasBdt = pkg.price.bdt !== null
+    const primaryCardCurrency: 'USD' | 'BDT' = displayCurrency === 'BDT' && hasBdt ? 'BDT' : 'USD'
+    const secondaryCardCurrency: 'USD' | 'BDT' | null = hasBdt ? (primaryCardCurrency === 'BDT' ? 'USD' : 'BDT') : null
+
+    const cardButton = (currency: 'USD' | 'BDT', primary: boolean) => {
+      const key = `card-${currency}`
+      const price = currency === 'BDT' ? pkg.price.bdt! : pkg.price.usd
+      return (
+        <Button
+          key={key}
+          className="w-full"
+          variant={primary ? 'primary' : 'outline'}
+          disabled={isBusy}
+          onClick={() => onPay('card', currency, key)}
+        >
+          {isPendingKey(key) ? `${verb}…` : `Pay ${formatCurrency(price, currency)} with Card (Stripe)`}
+        </Button>
+      )
+    }
+
+    return (
+      <div className="space-y-2">
+        {cardButton(primaryCardCurrency, true)}
+        {secondaryCardCurrency && cardButton(secondaryCardCurrency, false)}
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={isBusy}
+          onClick={() => onPay('bkash', 'BDT', 'bkash-BDT')}
+        >
+          {isPendingKey('bkash-BDT')
+            ? `${verb}…`
+            : `Pay ${hasBdt ? formatCurrency(pkg.price.bdt!, 'BDT') : formatCurrency(pkg.price.usd)} with bKash`}
+        </Button>
+        <button
+          type="button"
+          className="w-full text-xs text-muted-foreground hover:text-foreground"
+          disabled={isBusy}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    )
+  }
 
   const cancelSubscription = useMutation({
     mutationFn: async () => apiClient.post<{ access_until: string }>('/api/v1/subscription/cancel', {}),
@@ -176,7 +253,8 @@ export function PlansView() {
             const isCurrent = subscription?.package?.slug === pkg.slug
             const currentPrice = subscription?.package?.monthly_price_usd
             const isUpgrade = currentPrice !== undefined && pkg.price.usd > currentPrice
-            const isPending = (subscribe.isPending || changePlan.isPending) && pendingSlug === pkg.slug
+            const isBusy = (subscribe.isPending || changePlan.isPending) && pendingAction?.slug === pkg.slug
+            const isPendingKey = (key: string) => isBusy && pendingAction?.key === key
             const isChoosing = choosingSlug === pkg.slug
 
             return (
@@ -188,13 +266,13 @@ export function PlansView() {
                   {(() => {
                     const cardCurrency = displayCurrency === 'BDT' && pkg.price.bdt !== null ? 'BDT' : 'USD'
                     const cardPrice = cardCurrency === 'BDT' ? pkg.price.bdt! : pkg.price.usd
-                    // Informational only — the wallet credit itself is always a
-                    // real USD number internally (see WalletView.tsx). Converted
-                    // here using the package's own implied rate (its BDT sticker
-                    // ÷ its USD price) purely so this card doesn't show two
-                    // numbers in two different currencies at once.
-                    const cardWalletCredit =
-                      cardCurrency === 'BDT' && pkg.price.usd > 0 ? pkg.wallet_credit_usd * (pkg.price.bdt! / pkg.price.usd) : pkg.wallet_credit_usd
+                    // The real, admin-typed BDT entitlement a bKash purchase
+                    // actually grants (see PackageActivationService::computeWalletCredit())
+                    // — shown as-is, not derived from a formula, so this card
+                    // never promises a number the backend won't match. Falls
+                    // back to the USD figure when a package has no BDT credit
+                    // configured, same rule the backend itself uses.
+                    const cardWalletCredit = cardCurrency === 'BDT' && pkg.wallet_credit_bdt !== null ? pkg.wallet_credit_bdt : pkg.wallet_credit_usd
                     return (
                       <>
                         <div>
@@ -218,65 +296,32 @@ export function PlansView() {
                     </Button>
                   ) : !subscription ? (
                     isChoosing ? (
-                      <div className="space-y-2">
-                        <Button
-                          className="w-full"
-                          disabled={isPending}
-                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'card' })}
-                        >
-                          {isPending ? 'Subscribing…' : 'Pay with Card (Stripe)'}
-                        </Button>
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          disabled={isPending}
-                          onClick={() => subscribe.mutate({ slug: pkg.slug, source: 'bkash' })}
-                        >
-                          {isPending ? 'Subscribing…' : 'Pay with bKash'}
-                        </Button>
-                        <button
-                          type="button"
-                          className="w-full text-xs text-muted-foreground hover:text-foreground"
-                          disabled={isPending}
-                          onClick={() => setChoosingSlug(null)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                      renderPaymentButtons(
+                        pkg,
+                        isBusy,
+                        isPendingKey,
+                        'Subscribing',
+                        (source, currency, key) => subscribe.mutate({ slug: pkg.slug, source, currency, key }),
+                        () => setChoosingSlug(null)
+                      )
                     ) : (
-                      <Button className="w-full" disabled={isPending} onClick={() => setChoosingSlug(pkg.slug)}>
-                        {isPending ? 'Subscribing…' : 'Subscribe'}
+                      <Button className="w-full" disabled={isBusy} onClick={() => setChoosingSlug(pkg.slug)}>
+                        Subscribe
                       </Button>
                     )
                   ) : isUpgrade ? (
                     isChoosing ? (
-                      <div className="space-y-2">
-                        <Button
-                          className="w-full"
-                          disabled={isPending}
-                          onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'upgrade', source: 'card' })}
-                        >
-                          {isPending ? 'Upgrading…' : 'Pay with Card (Stripe)'}
-                        </Button>
-                        <Button
-                          className="w-full"
-                          variant="outline"
-                          disabled={isPending}
-                          onClick={() => changePlan.mutate({ slug: pkg.slug, direction: 'upgrade', source: 'bkash' })}
-                        >
-                          {isPending ? 'Upgrading…' : 'Pay with bKash'}
-                        </Button>
-                        <button
-                          type="button"
-                          className="w-full text-xs text-muted-foreground hover:text-foreground"
-                          disabled={isPending}
-                          onClick={() => setChoosingSlug(null)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                      renderPaymentButtons(
+                        pkg,
+                        isBusy,
+                        isPendingKey,
+                        'Upgrading',
+                        (source, currency, key) =>
+                          changePlan.mutate({ slug: pkg.slug, direction: 'upgrade', source, currency, key }),
+                        () => setChoosingSlug(null)
+                      )
                     ) : (
-                      <Button className="w-full" disabled={isPending} onClick={() => setChoosingSlug(pkg.slug)}>
+                      <Button className="w-full" disabled={isBusy} onClick={() => setChoosingSlug(pkg.slug)}>
                         Upgrade — full price charged now
                       </Button>
                     )

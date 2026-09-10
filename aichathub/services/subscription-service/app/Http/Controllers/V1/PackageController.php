@@ -38,6 +38,7 @@ class PackageController extends Controller
                     'bdt' => $p->monthly_price_bdt !== null ? (float) $p->monthly_price_bdt : null,
                 ],
                 'wallet_credit_usd' => (float) $p->monthly_wallet_credit_usd,
+                'wallet_credit_bdt' => $p->monthly_wallet_credit_bdt !== null ? (float) $p->monthly_wallet_credit_bdt : null,
                 'features'    => json_decode($p->features, true),
                 'model_access'=> json_decode($p->model_access, true),
             ]);
@@ -94,6 +95,7 @@ class PackageController extends Controller
             'monthly_price_usd'         => 'sometimes|numeric|min:0',
             'monthly_price_bdt'         => 'sometimes|numeric|min:0',
             'monthly_wallet_credit_usd' => 'sometimes|numeric|min:0',
+            'monthly_wallet_credit_bdt' => 'sometimes|nullable|numeric|min:0',
             'credit_buffer_percentage'  => 'sometimes|numeric|min:0|max:100',
             'model_access'              => 'sometimes|array',
             'features'                  => 'sometimes|array',
@@ -122,6 +124,7 @@ class PackageController extends Controller
             'monthly_price_usd'         => 'required|numeric|min:0',
             'monthly_price_bdt'         => 'nullable|numeric|min:0',
             'monthly_wallet_credit_usd' => 'required|numeric|min:0',
+            'monthly_wallet_credit_bdt' => 'nullable|numeric|min:0',
             'credit_buffer_percentage'  => 'nullable|numeric|min:0|max:100',
             'model_access'              => 'nullable|array',
             'features'                  => 'nullable|array',

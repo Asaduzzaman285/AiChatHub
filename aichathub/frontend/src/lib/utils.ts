@@ -35,9 +35,10 @@ export async function downloadFile(url: string, filename: string): Promise<void>
 }
 
 // en-US's Intl currency data doesn't reliably carry a native symbol for every
-// ISO code (BDT renders as the bare string "BDT" rather than "৳") — this map
-// only needs to cover currencies the app actually charges in.
-const CURRENCY_SYMBOLS: Record<string, string> = { USD: '$', BDT: '৳' }
+// ISO code — this map only needs to cover currencies the app actually charges
+// in. BDT deliberately spells out "BDT" rather than using the "৳" glyph
+// (inconsistent font support made it look broken in some places).
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: '$', BDT: 'BDT ' }
 
 export function formatCurrency(amount: number | string, currency = 'USD'): string {
   const value = typeof amount === 'string' ? parseFloat(amount) : amount

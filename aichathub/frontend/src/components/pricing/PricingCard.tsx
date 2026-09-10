@@ -6,13 +6,19 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { usePublicModels } from '@/hooks/usePublicModels'
 import type { Package } from '@/types'
 
-const FEATURE_LABELS: Record<keyof Package['features'], string> = {
+// support_tier is rendered separately below (its own "Priority support" line),
+// not as a checkmark item — every package has exactly one tier, it's never "off".
+const FEATURE_LABELS: Record<Exclude<keyof Package['features'], 'support_tier'>, string> = {
   file_upload: 'File & document upload',
   api_access: 'API access',
   comparison: 'Compare models side by side',
   image_gen: 'Image generation',
+  video_gen: 'Video generation',
+  voice_gen: 'Voice generation',
   audio: 'Audio & voice',
   vision: 'Vision / image analysis',
+  ide_integration: 'IDE integration support',
+  prompt_library: 'Prompt library access',
 }
 
 /** Shared by the public landing page's PricingSection (CTA links to /register) and the
@@ -51,17 +57,16 @@ export function PricingCard({
   // no BDT sticker price set (monthly_price_bdt is nullable).
   currency?: 'USD' | 'BDT'
 }) {
-  const features = (Object.keys(FEATURE_LABELS) as (keyof Package['features'])[]).filter((key) => pkg.features[key])
+  const features = (Object.keys(FEATURE_LABELS) as Exclude<keyof Package['features'], 'support_tier'>[]).filter((key) => pkg.features[key])
   const displayCurrency = currency === 'BDT' && pkg.price.bdt !== null ? 'BDT' : 'USD'
   const displayPrice = displayCurrency === 'BDT' ? pkg.price.bdt! : pkg.price.usd
-  // Informational only, same as displayPrice above — the wallet credit itself
-  // is always a real USD number internally (see WalletView.tsx's own comment
-  // on why the actual balance never gets relabeled into another currency).
-  // This just converts the marketing figure using the package's own implied
-  // rate (its BDT sticker ÷ its USD price) so the two numbers on this card
-  // don't visibly contradict each other in mixed currencies.
-  const displayWalletCredit =
-    displayCurrency === 'BDT' && pkg.price.usd > 0 ? pkg.wallet_credit_usd * (pkg.price.bdt! / pkg.price.usd) : pkg.wallet_credit_usd
+  // wallet_credit_bdt is the real, admin-typed BDT entitlement a bKash
+  // purchase actually grants (see PackageActivationService::computeWalletCredit())
+  // — shown as-is, not derived from any formula, so this card never promises
+  // a number the backend won't actually match. Falls back to the USD figure
+  // whenever a package has no BDT credit configured (same rule the backend
+  // itself uses).
+  const displayWalletCredit = displayCurrency === 'BDT' && pkg.wallet_credit_bdt !== null ? pkg.wallet_credit_bdt : pkg.wallet_credit_usd
 
   // Real model names, not just the feature-flag summary above — a visitor comparing
   // plans previously had no way to see WHICH models a plan actually includes (e.g. does
@@ -107,6 +112,12 @@ export function PricingCard({
                 {FEATURE_LABELS[key]}
               </li>
             ))}
+            {pkg.features.support_tier === 'priority' && (
+              <li className="flex items-start gap-2">
+                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                Priority support
+              </li>
+            )}
           </ul>
           {modelNames.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-1.5">
@@ -153,6 +164,12 @@ export function PricingCard({
             {FEATURE_LABELS[key]}
           </li>
         ))}
+        {pkg.features.support_tier === 'priority' && (
+          <li className="flex items-start gap-2">
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+            Priority support
+          </li>
+        )}
       </ul>
       {modelNames.length > 0 && (
         <div className="mb-5 flex flex-wrap gap-1.5">

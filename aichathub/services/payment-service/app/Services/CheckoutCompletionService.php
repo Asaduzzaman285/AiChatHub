@@ -65,13 +65,32 @@ class CheckoutCompletionService
         $claimed->update(['status' => 'completed', 'completed_at' => now()]);
     }
 
+    /**
+     * Re-fetches and locks the row rather than trusting the $transaction
+     * instance the caller already has — same reasoning as complete()'s own
+     * claim step, but this method was missing it. CheckoutController::verify()
+     * is polled repeatedly by the frontend (and can genuinely run twice
+     * concurrently — a user reloading a payment page that looks stuck is
+     * common, and bKash's tokenized flow has no webhook to fall back on) —
+     * without a fresh locked read here, a losing request's executePayment()
+     * rejection (bKash allows exactly one execute per payment) could call
+     * cancel() against a stale in-memory $transaction still showing 'pending',
+     * overwriting a status a concurrent winning request had *just* set to
+     * 'completed' moments earlier. Confirmed as a real, reproducible failure
+     * mode: a bKash payment that genuinely succeeded (verified independently
+     * against bKash's own API) ended up 'cancelled' in this app's own ledger.
+     */
     public function cancel(Transaction $transaction): void
     {
-        if (in_array($transaction->status, ['completed', 'cancelled'], true)) {
-            return;
-        }
+        DB::transaction(function () use ($transaction) {
+            $locked = Transaction::where('id', $transaction->id)->lockForUpdate()->first();
 
-        $transaction->update(['status' => 'cancelled']);
+            if (! $locked || in_array($locked->status, ['completed', 'cancelled', 'processing'], true)) {
+                return;
+            }
+
+            $locked->update(['status' => 'cancelled']);
+        });
     }
 
     private function completeTopup(Transaction $transaction): bool
@@ -84,11 +103,36 @@ class CheckoutCompletionService
         );
 
         if ($credited) {
-            $this->internal->createReceipt($transaction->user_id, (float) $transaction->amount, $transaction->currency, $transaction->id);
-            $this->internal->sendReceiptEmail($transaction->user_id, (float) $transaction->amount, $transaction->currency, 'Wallet top-up', "receipt:topup:{$transaction->id}");
+            [$amount, $currency] = $this->realAmountAndCurrency($transaction);
+            $this->internal->createReceipt($transaction->user_id, $amount, $currency, $transaction->id);
+            $this->internal->sendReceiptEmail($transaction->user_id, $amount, $currency, 'Wallet top-up', "receipt:topup:{$transaction->id}");
         }
 
         return $credited;
+    }
+
+    /**
+     * transaction->amount/currency are always this app's internal USD
+     * bookkeeping value, even for a bKash payment (see beginBkashCheckout()'s
+     * Transaction::create) — the real amount actually charged, whenever the
+     * gateway is bKash, lives in metadata.amount_bdt (the exact BDT figure
+     * either the package's own fixed sticker price, or usdToBdt()'s live
+     * conversion for a top-up with no sticker). Receipts/invoices are a
+     * frozen record of what really happened, so they must use this, never
+     * the bookkeeping placeholder. Confirmed live: a real ৳1 bKash purchase
+     * was producing a receipt/invoice reading "$1.00" — a different number
+     * than the customer's own bKash statement, for any package where the
+     * BDT sticker isn't numerically identical to the USD price.
+     *
+     * @return array{0: float, 1: string}
+     */
+    private function realAmountAndCurrency(Transaction $transaction): array
+    {
+        if ($transaction->gateway === 'bkash' && isset($transaction->metadata['amount_bdt'])) {
+            return [(float) $transaction->metadata['amount_bdt'], 'BDT'];
+        }
+
+        return [(float) $transaction->amount, $transaction->currency];
     }
 
     private function completeSubscription(Transaction $transaction): bool
@@ -108,6 +152,8 @@ class CheckoutCompletionService
         }
 
         try {
+            [$amount, $currency] = $this->realAmountAndCurrency($transaction);
+
             $response = Http::withHeaders([
                 'X-Internal-Service-Key' => $internalKey,
                 'Accept'                 => 'application/json',
@@ -115,14 +161,30 @@ class CheckoutCompletionService
                 'user_id'        => $transaction->user_id,
                 'package_slug'   => $packageSlug,
                 'transaction_id' => $transaction->id,
-                'currency'       => $transaction->currency,
+                // The real currency actually charged — realAmountAndCurrency()
+                // already resolves both bKash's own Transaction-bookkeeping
+                // quirk (always 'USD' there regardless of what was really
+                // charged) and a card/Stripe checkout charged directly in BDT
+                // (see StripeGateway::createCheckoutSession()'s $currency,
+                // which IS the real one — no bookkeeping placeholder involved),
+                // so subscription-service can trust it directly to (a) pick
+                // between monthly_wallet_credit_usd/_bdt and (b) record the
+                // SUBSCRIPTION's and INVOICE's own currency/amount as what was
+                // really charged. Confirmed live: before this, a real ৳1
+                // bKash purchase recorded user_subscriptions.currency='USD'
+                // and an invoice of "$1.00" — silently wrong for any package
+                // where the BDT sticker isn't numerically identical to the USD
+                // price.
+                'currency'       => $currency,
+                'gateway'        => $transaction->gateway,
+                'amount_bdt'     => $currency === 'BDT' ? $amount : null,
             ]);
 
             if (! $response->successful()) {
                 return false;
             }
 
-            $this->internal->createReceipt($transaction->user_id, (float) $transaction->amount, $transaction->currency, $transaction->id, 'subscription_purchase');
+            $this->internal->createReceipt($transaction->user_id, $amount, $currency, $transaction->id, 'subscription_purchase');
 
             return true;
         } catch (\Exception $e) {
@@ -149,6 +211,8 @@ class CheckoutCompletionService
         }
 
         try {
+            [$amount, $currency] = $this->realAmountAndCurrency($transaction);
+
             $response = Http::withHeaders([
                 'X-Internal-Service-Key' => $internalKey,
                 'Accept'                 => 'application/json',
@@ -156,14 +220,16 @@ class CheckoutCompletionService
                 'user_id'        => $transaction->user_id,
                 'package_slug'   => $packageSlug,
                 'transaction_id' => $transaction->id,
-                'currency'       => $transaction->currency,
+                'currency'       => $currency,
+                'gateway'        => $transaction->gateway,
+                'amount_bdt'     => $currency === 'BDT' ? $amount : null,
             ]);
 
             if (! $response->successful()) {
                 return false;
             }
 
-            $this->internal->createReceipt($transaction->user_id, (float) $transaction->amount, $transaction->currency, $transaction->id, 'subscription_upgrade');
+            $this->internal->createReceipt($transaction->user_id, $amount, $currency, $transaction->id, 'subscription_upgrade');
 
             return true;
         } catch (\Exception $e) {

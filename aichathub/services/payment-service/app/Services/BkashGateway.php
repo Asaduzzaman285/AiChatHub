@@ -102,6 +102,21 @@ class BkashGateway
         // set above instead of whatever it read (live) the first time
         // something resolved it this request.
         app()->forgetInstance(\Ihasan\Bkash\Bkash::class);
+
+        // The vendor's own bKash token cache key is NOT namespaced by which
+        // credential set generated it — getToken() caches under the bare key
+        // 'bkash_token' regardless of sandbox vs live (its forTenant() method
+        // exists specifically to prefix that key per-tenant, but nothing here
+        // was calling it). With one shared payment-service deployment now
+        // legitimately switching between two real credential sets (sandbox
+        // for staging, live for production), a token cached by one environment
+        // was being handed to the other — bKash then rejects create/execute
+        // calls made with a token that doesn't match the app_key in the
+        // request, surfacing as a generic "Failed to create payment" with no
+        // hint it was a stale-token problem. Confirmed live via Redis: a
+        // single un-namespaced aichathub_payment_cache_bkash_token key shared
+        // by both app.alveta.ai and staging.alveta.ai.
+        app(\Ihasan\Bkash\Bkash::class)->forTenant($sandbox ? 'sandbox' : 'live');
     }
 
     /**
@@ -142,7 +157,7 @@ class BkashGateway
      * services.bkash.usd_to_bdt_rate config if subscription-service can't be
      * reached at all, rather than failing the whole top-up.
      */
-    private function currentBdtRate(): float
+    public function currentBdtRate(): float
     {
         return Cache::remember('bkash:bdt_effective_rate', now()->addMinutes(15), function () {
             $subscriptionUrl = rtrim((string) config('services.subscription_url'), '/');

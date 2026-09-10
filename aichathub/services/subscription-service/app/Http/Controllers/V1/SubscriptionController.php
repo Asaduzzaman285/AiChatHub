@@ -65,7 +65,7 @@ class SubscriptionController extends Controller
         $package = Package::where('slug', $data['package_slug'])->where('is_active', true)->firstOrFail();
 
         [$currency, $amountBdt] = $this->resolveCurrency($data['currency'] ?? 'USD', $data['payment_source'], $package);
-        $price = (float) $package->monthly_price_usd;
+        $price = $this->priceFor($currency, $data['payment_source'], $package);
 
         if ($price > 0) {
             $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $package, $data['payment_source'], 'subscription_purchase', $request->header('Origin'), $amountBdt);
@@ -186,7 +186,7 @@ class SubscriptionController extends Controller
     private function doUpgrade(string $userId, UserSubscription $current, Package $newPackage, array $data, ?string $origin = null): JsonResponse
     {
         [$currency, $amountBdt] = $this->resolveCurrency($data['currency'] ?? 'USD', $data['payment_source'], $newPackage);
-        $price = (float) $newPackage->monthly_price_usd;
+        $price = $this->priceFor($currency, $data['payment_source'], $newPackage);
 
         if ($price > 0) {
             $checkoutUrl = $this->createGatewayCheckout($userId, $price, $currency, $newPackage, $data['payment_source'], 'subscription_upgrade', $origin, $amountBdt);
@@ -246,19 +246,45 @@ class SubscriptionController extends Controller
      * of the USD price (see CurrencyRate's docblock / the admin currency page:
      * that formula is for ad-hoc amounts with no sticker, like wallet top-ups,
      * not for repricing a package's own admin-set monthly_price_bdt). Falls
-     * back to USD whenever BDT isn't actually chargeable: bKash is the only
-     * gateway that settles in BDT at all, and a package with no
+     * back to USD whenever BDT isn't actually chargeable: a package with no
      * monthly_price_bdt set has nothing to charge.
+     *
+     * Both card and bKash can charge the real BDT sticker price now — Stripe
+     * accepts a non-USD Checkout Session currency directly (see
+     * StripeGateway::createCheckoutSession(), always with adaptive_pricing
+     * disabled so it never substitutes its own live-market conversion), it
+     * isn't bKash-exclusive. $amountBdt stays null for a card/BDT checkout
+     * (priceFor() below sends the BDT sticker as the Checkout Session's own
+     * `amount`+`currency` directly, a normal same-currency charge) — it's
+     * only needed for bKash's own quirk of keeping Transaction.amount/currency
+     * pinned to USD bookkeeping regardless of what was actually charged (see
+     * CreatesCheckoutSessions::beginBkashCheckout()).
      *
      * @return array{0: string, 1: ?float} [currency, amount_bdt]
      */
     private function resolveCurrency(string $requestedCurrency, string $paymentSource, Package $package): array
     {
-        if (strtoupper($requestedCurrency) !== 'BDT' || $paymentSource !== 'bkash' || $package->monthly_price_bdt === null) {
+        if (strtoupper($requestedCurrency) !== 'BDT' || $package->monthly_price_bdt === null) {
             return ['USD', null];
         }
 
-        return ['BDT', (float) $package->monthly_price_bdt];
+        return $paymentSource === 'bkash' ? ['BDT', (float) $package->monthly_price_bdt] : ['BDT', null];
+    }
+
+    /**
+     * The actual amount to send as this checkout's own `amount` — bKash always
+     * needs the USD figure here (its Transaction bookkeeping convention; the
+     * real BDT sticker rides separately as $amountBdt, see resolveCurrency()
+     * above), while a card/BDT checkout needs the real BDT sticker price
+     * directly, since there $currency and this amount ARE the actual charge.
+     */
+    private function priceFor(string $currency, string $paymentSource, Package $package): float
+    {
+        if ($currency === 'BDT' && $paymentSource === 'card') {
+            return (float) $package->monthly_price_bdt;
+        }
+
+        return (float) $package->monthly_price_usd;
     }
 
     private function createGatewayCheckout(string $userId, float $amount, string $currency, Package $package, string $paymentSource, string $type = 'subscription_purchase', ?string $origin = null, ?float $amountBdt = null): ?string

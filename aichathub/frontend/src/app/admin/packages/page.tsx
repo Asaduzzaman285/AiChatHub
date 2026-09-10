@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
 import { Label } from '@/components/ui/Label'
 import { Badge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -15,13 +16,18 @@ import { formatCurrency } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
 import type { AdminPackage, AiModel, PackageFeatures } from '@/types'
 
-const FEATURE_LABELS: { key: keyof PackageFeatures; label: string }[] = [
+// Boolean features only — support_tier is a separate select below, not a checkbox.
+const FEATURE_LABELS: { key: Exclude<keyof PackageFeatures, 'support_tier'>; label: string }[] = [
   { key: 'file_upload', label: 'File upload' },
   { key: 'api_access', label: 'API access' },
   { key: 'comparison', label: 'Multi-model comparison' },
-  { key: 'image_gen', label: 'Image generation' },
+  { key: 'image_gen', label: 'Image generation model' },
+  { key: 'video_gen', label: 'Video generation model' },
+  { key: 'voice_gen', label: 'Voice generation model' },
   { key: 'audio', label: 'Audio (TTS/STT)' },
   { key: 'vision', label: 'Vision' },
+  { key: 'ide_integration', label: 'Integration support w/ IDE' },
+  { key: 'prompt_library', label: 'Access to prompt library' },
 ]
 
 interface PackageFormState {
@@ -31,18 +37,22 @@ interface PackageFormState {
   monthly_price_usd: string
   monthly_price_bdt: string
   monthly_wallet_credit_usd: string
+  monthly_wallet_credit_bdt: string
   credit_buffer_percentage: string
   is_active: boolean
   model_access: string[]
   features: PackageFeatures
 }
 
-const EMPTY_FEATURES: PackageFeatures = { file_upload: false, api_access: false, comparison: false, image_gen: false, audio: false, vision: false }
+const EMPTY_FEATURES: PackageFeatures = {
+  file_upload: false, api_access: false, comparison: false, image_gen: false, audio: false, vision: false,
+  video_gen: false, voice_gen: false, ide_integration: false, prompt_library: false, support_tier: 'standard',
+}
 
 function emptyForm(): PackageFormState {
   return {
     name: '', slug: '', description: '',
-    monthly_price_usd: '', monthly_price_bdt: '', monthly_wallet_credit_usd: '',
+    monthly_price_usd: '', monthly_price_bdt: '', monthly_wallet_credit_usd: '', monthly_wallet_credit_bdt: '',
     credit_buffer_percentage: '30', is_active: true, model_access: [], features: { ...EMPTY_FEATURES },
   }
 }
@@ -51,7 +61,8 @@ function formFromPackage(pkg: AdminPackage): PackageFormState {
   return {
     name: pkg.name, slug: pkg.slug, description: pkg.description ?? '',
     monthly_price_usd: pkg.monthly_price_usd, monthly_price_bdt: pkg.monthly_price_bdt ?? '',
-    monthly_wallet_credit_usd: pkg.monthly_wallet_credit_usd, credit_buffer_percentage: pkg.credit_buffer_percentage,
+    monthly_wallet_credit_usd: pkg.monthly_wallet_credit_usd, monthly_wallet_credit_bdt: pkg.monthly_wallet_credit_bdt ?? '',
+    credit_buffer_percentage: pkg.credit_buffer_percentage,
     is_active: pkg.is_active, model_access: pkg.model_access, features: { ...EMPTY_FEATURES, ...pkg.features },
   }
 }
@@ -76,6 +87,7 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
         monthly_price_usd: parseFloat(form.monthly_price_usd),
         monthly_price_bdt: form.monthly_price_bdt ? parseFloat(form.monthly_price_bdt) : null,
         monthly_wallet_credit_usd: parseFloat(form.monthly_wallet_credit_usd),
+        monthly_wallet_credit_bdt: form.monthly_wallet_credit_bdt ? parseFloat(form.monthly_wallet_credit_bdt) : null,
         credit_buffer_percentage: parseFloat(form.credit_buffer_percentage),
         is_active: form.is_active,
         model_access: form.model_access,
@@ -133,7 +145,7 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
             <Input id="pkg-description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="pkg-price-usd">Price (USD)</Label>
               <Input id="pkg-price-usd" type="number" min="0" step="0.01" required value={form.monthly_price_usd} onChange={(e) => setForm({ ...form, monthly_price_usd: e.target.value })} />
@@ -145,6 +157,10 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
             <div className="space-y-1.5">
               <Label htmlFor="pkg-credit">Wallet credit (USD)</Label>
               <Input id="pkg-credit" type="number" min="0" step="0.01" required value={form.monthly_wallet_credit_usd} onChange={(e) => setForm({ ...form, monthly_wallet_credit_usd: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pkg-credit-bdt">Wallet credit (BDT)</Label>
+              <Input id="pkg-credit-bdt" type="number" min="0" step="0.01" value={form.monthly_wallet_credit_bdt} onChange={(e) => setForm({ ...form, monthly_wallet_credit_bdt: e.target.value })} placeholder="Falls back to USD if blank" />
             </div>
           </div>
 
@@ -172,6 +188,18 @@ function PackageFormDialog({ pkg, trigger }: { pkg?: AdminPackage; trigger: Reac
                 </label>
               ))}
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="pkg-support-tier">Support tier</Label>
+            <Select
+              id="pkg-support-tier"
+              value={form.features.support_tier}
+              onChange={(e) => setForm({ ...form, features: { ...form.features, support_tier: e.target.value as 'standard' | 'priority' } })}
+            >
+              <option value="standard">Standard</option>
+              <option value="priority">Priority</option>
+            </Select>
           </div>
 
           <div>

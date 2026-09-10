@@ -3,6 +3,7 @@
 use App\Http\Controllers\V1\Admin\CurrencyAdminController;
 use App\Http\Controllers\V1\Admin\DashboardController;
 use App\Http\Controllers\V1\Admin\SubscriptionAdminController;
+use App\Http\Controllers\V1\CurrencyRateController;
 use App\Http\Controllers\V1\PackageController;
 use App\Http\Controllers\V1\SubscriptionController;
 use App\Http\Controllers\HealthController;
@@ -14,6 +15,11 @@ Route::get('/ready',  [HealthController::class, 'ready']);
 
 // Public — list packages (no auth needed for pricing page)
 Route::get('/packages', [PackageController::class, 'index']);
+
+// Public — read-only display conversion rate (see CurrencyRateController's
+// own docblock for why this is a separate, unauthenticated counterpart to
+// the admin-gated currencies/admin/* CRUD below).
+Route::get('/subscription/currencies/{code}/rate', [CurrencyRateController::class, 'show']);
 
 // Admin package listing — registered before the public GET /packages/{slug}
 // wildcard below, otherwise "admin" would be captured as {slug} and 404 in

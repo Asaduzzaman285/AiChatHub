@@ -14,7 +14,7 @@ class Package extends Model
     protected $fillable = [
         'name', 'slug', 'description',
         'monthly_price_usd', 'monthly_price_bdt',
-        'monthly_wallet_credit_usd', 'credit_buffer_percentage',
+        'monthly_wallet_credit_usd', 'monthly_wallet_credit_bdt', 'credit_buffer_percentage',
         'model_access', 'features',
         'is_active', 'sort_order',
     ];

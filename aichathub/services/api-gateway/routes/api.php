@@ -51,6 +51,27 @@ Route::get('/models/public', [ProxyController::class, 'proxyAiGateway'])
     ->defaults('path', 'public')
     ->middleware('throttle:api');
 
+// Public display-conversion rate — same carve-out pattern as /packages above.
+// useDisplayCurrency() (frontend) needs this pre-login too (the register
+// page's own currency default), and it's read-only, non-sensitive data
+// (CurrencyRateController is deliberately not behind subscription-service's
+// own auth.jwt group either) — proxySubscription's {path?} wildcard would
+// otherwise still hit this gateway's blanket auth.jwt.gateway requirement
+// below regardless of what subscription-service's own routes say. Registered
+// before that group so this exact shape wins; every other
+// /subscription/currencies/* path (the admin CRUD) still requires auth via
+// the wildcard below.
+//
+// The route parameter is named `path` (not e.g. `code`) so it binds
+// positionally to proxySubscription(Request $request, string $path)'s own
+// $path — forward() builds the downstream URL as
+// "api/v1/{segment(3)}/{$path}", i.e. "api/v1/subscription/{$path}", so
+// $path needs to be the full "currencies/XXX/rate" to reach
+// subscription-service's identically-shaped route, not just the code alone.
+Route::get('/subscription/{path}', [ProxyController::class, 'proxySubscription'])
+    ->where('path', 'currencies/[A-Za-z]{3}/rate')
+    ->middleware('throttle:api');
+
 // Protected routes — JWT validated at gateway before proxying
 Route::middleware(['auth.jwt.gateway', 'throttle:api'])->group(function () {
     Route::any('/packages/{path?}',       [ProxyController::class, 'proxySubscription'])->where('path', '.*');

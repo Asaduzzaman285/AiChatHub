@@ -15,6 +15,25 @@ const STATUS_STYLES: Record<string, string> = {
   refunded: 'text-muted-foreground',
 }
 
+/**
+ * A transaction/invoice/receipt is a frozen historical fact, not an ongoing
+ * balance — it must always show the real currency and amount that was
+ * actually charged, never a live reconversion through today's exchange rate
+ * (that's what useDisplayCurrency is for, and it's the wrong tool here).
+ * transaction.amount/currency are always the internal USD bookkeeping value
+ * even for a bKash purchase (payment-service's own convention) — the real
+ * BDT amount charged lives in metadata.amount_bdt. Confirmed live: before
+ * this, a real ৳1 bKash payment displayed as "BDT 202.13" here — the $1
+ * catalog price re-converted through today's unrelated exchange rate, with
+ * no connection to what was actually paid.
+ */
+function transactionAmount(t: Transaction): string {
+  if (t.gateway === 'bkash' && t.metadata?.amount_bdt != null) {
+    return formatCurrency(t.metadata.amount_bdt, 'BDT')
+  }
+  return formatCurrency(t.amount, t.currency)
+}
+
 /** Shared by the Settings modal's Billing tab — extracted from the old standalone /billing route. */
 export function BillingView() {
   const { data: transactions, isLoading: txLoading } = useQuery({
@@ -60,7 +79,7 @@ export function BillingView() {
                     <td className="py-2">{formatDate(t.created_at)}</td>
                     <td className="py-2 capitalize">{t.type.replace(/_/g, ' ')}</td>
                     <td className="py-2 capitalize">{t.gateway}</td>
-                    <td className="py-2 text-right">{formatCurrency(t.amount, t.currency)}</td>
+                    <td className="py-2 text-right">{transactionAmount(t)}</td>
                     <td className={`py-2 text-right capitalize ${STATUS_STYLES[t.status] ?? ''}`}>
                       {t.status}
                       {t.error_message && (

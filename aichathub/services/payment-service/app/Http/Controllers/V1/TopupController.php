@@ -24,7 +24,9 @@ class TopupController extends Controller
     public function initiate(Request $request, StripeGateway $stripe, BkashGateway $bkash): JsonResponse
     {
         $data = $request->validate([
-            'amount'   => 'required|numeric|min:1',
+            // The real floor is enforced per-gateway below (bKash's own ৳20
+            // native minimum is far below $1) — this just rejects zero/negative.
+            'amount'   => 'required|numeric|min:0.01',
             // Stripe-only — it can charge a card in whatever currency is given.
             // bKash always settles in BDT (converted from USD internally by
             // BkashGateway), so this has no effect and is rejected below if
@@ -46,6 +48,26 @@ class TopupController extends Controller
             return response()->json(['error' => 'bKash top-ups must be specified in USD (converted to BDT automatically).'], 422);
         }
 
+        // Card top-ups keep a flat $1 USD floor. bKash's floor is a native ৳20
+        // BDT figure instead of a USD amount pushed through the currency
+        // policy — a $1 floor converts to ~৳202 at the live rate, which was
+        // blocking legitimate small BDT top-ups (confirmed live: a genuine
+        // ৳1 top-up attempt was rejected with "Minimum top-up is BDT 202.13",
+        // a policy problem, not a math bug). $amount here is always USD (see
+        // beginBkashCheckout's own $amountUsd param), so bKash's ৳20 floor has
+        // to be converted the other way, via the same live rate BkashGateway
+        // itself uses to go from USD to BDT.
+        if ($gateway === 'bkash') {
+            $minBdt = 20.0;
+            $minUsd = $minBdt / $bkash->currentBdtRate();
+
+            if ($amount < $minUsd) {
+                return response()->json(['error' => 'Minimum top-up is ৳20 when paying with bKash.'], 422);
+            }
+        } elseif ($amount < 1.0) {
+            return response()->json(['error' => 'Minimum top-up is $1.00 when paying by card.'], 422);
+        }
+
         $result = $gateway === 'bkash'
             ? $this->beginBkashCheckout(
                 $bkash,
@@ -54,6 +76,8 @@ class TopupController extends Controller
                 $amount,
                 'Alveta.ai wallet top-up',
                 ['type' => 'wallet_topup'],
+                null,
+                $origin,
             )
             : $this->beginCheckout(
                 $stripe,

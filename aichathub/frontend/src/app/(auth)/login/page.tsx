@@ -28,13 +28,15 @@ type LoginForm = z.infer<typeof loginSchema>
 // useSearchParams directly in LoginPage) because useSearchParams() bails out of
 // static rendering and requires its own <Suspense> boundary — wrapping the whole
 // page would be more invasive than isolating just this.
-function VerifiedToast() {
+function VerifiedToast({ onVerifiedEmail }: { onVerifiedEmail: (email: string) => void }) {
   const searchParams = useSearchParams()
 
   useEffect(() => {
     const verified = searchParams.get('verified')
     if (verified === '1') {
       toast.success('Email verified — you can now sign in.')
+      const email = searchParams.get('email')
+      if (email) onVerifiedEmail(email)
     } else if (verified === '0') {
       const reason = searchParams.get('reason')
       toast.error(
@@ -66,6 +68,7 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) })
 
@@ -90,7 +93,7 @@ export default function LoginPage() {
   return (
     <AuthShell>
       <Suspense fallback={null}>
-        <VerifiedToast />
+        <VerifiedToast onVerifiedEmail={(email) => setValue('email', email)} />
       </Suspense>
       <div className="relative w-full max-w-[420px]">
         <div className="flex flex-col items-center text-center">

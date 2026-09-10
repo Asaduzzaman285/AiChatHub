@@ -5,7 +5,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Skeleton, SkeletonTableRows } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
-import { cn, formatDate, formatNumber, formatPreciseCurrency } from '@/lib/utils'
+import { cn, formatDate, formatNumber } from '@/lib/utils'
+import { useDisplayCurrency } from '@/hooks/useDisplayCurrency'
 import type { UsageLogEntry, UsageSummary } from '@/types'
 
 const PERIODS = [
@@ -20,6 +21,7 @@ const PERIODS = [
  * "remaining" balance. */
 export function UsageView() {
   const [period, setPeriod] = useState<(typeof PERIODS)[number]['id']>('30d')
+  const { formatPrecise } = useDisplayCurrency()
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['usage', 'summary', period],
@@ -72,7 +74,7 @@ export function UsageView() {
             {summaryLoading ? (
               <Skeleton className="h-9 w-32" />
             ) : (
-              <p className="text-3xl font-bold">{formatPreciseCurrency(summary?.totals.cost ?? 0)}</p>
+              <p className="text-3xl font-bold">{formatPrecise(summary?.totals.cost ?? 0)}</p>
             )}
           </CardContent>
         </Card>

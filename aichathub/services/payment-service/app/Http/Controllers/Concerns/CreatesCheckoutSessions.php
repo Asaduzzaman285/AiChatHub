@@ -95,6 +95,14 @@ trait CreatesCheckoutSessions
         string $description,
         array $metadata,
         ?float $fixedAmountBdt = null,
+        // Same reasoning as beginCheckout()'s $origin above — bKash's own
+        // callback_url needs to land back on whichever frontend actually
+        // started checkout. Missed when this method was first built (only
+        // Stripe's got the fix): confirmed live, a bKash purchase started
+        // from staging.alveta.ai redirected to app.alveta.ai/billing/checkout-callback
+        // after payment, where the user has no session at all — that page
+        // then bounced them to app.alveta.ai/login instead of completing.
+        ?string $origin = null,
     ): array {
         $idempotencyKey = (string) Str::uuid();
 
@@ -117,7 +125,7 @@ trait CreatesCheckoutSessions
             'metadata'        => array_merge($metadata, ['is_sandbox' => $bkash->isSandbox()]),
         ]);
 
-        $frontendUrl = rtrim((string) config('services.frontend_url'), '/');
+        $frontendUrl = rtrim($origin ?: (string) config('services.frontend_url'), '/');
         $returnType  = $type === 'wallet_topup' ? 'topup' : 'subscription';
         $callbackUrl = "{$frontendUrl}/billing/checkout-callback?type={$returnType}";
         $fullMetadata = array_merge($metadata, ['transaction_id' => $transaction->id, 'user_id' => $userId]);

@@ -82,7 +82,7 @@ class EmailVerificationController extends Controller
             $this->notificationClient->send('welcome', $userId, $email, ['name' => $name], "welcome:{$userId}");
         })->afterResponse();
 
-        return redirect("{$this->redirectOrigin($verification->origin)}/login?verified=1");
+        return redirect("{$this->redirectOrigin($verification->origin)}/login?verified=1&email=" . urlencode($email));
     }
 
     /**

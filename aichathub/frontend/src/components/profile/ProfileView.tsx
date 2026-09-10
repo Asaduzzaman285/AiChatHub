@@ -11,8 +11,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import apiClient from '@/lib/api-client'
-import { formatPreciseCurrency, formatDate } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
 import { describeError } from '@/lib/errors'
+import { useDisplayCurrency } from '@/hooks/useDisplayCurrency'
 import type { Subscription, User, WalletBalance } from '@/types'
 
 const passwordSchema = z.object({
@@ -50,6 +51,7 @@ export function ProfileView() {
     queryKey: ['wallet', 'balance'],
     queryFn: async () => (await apiClient.get<WalletBalance>('/api/v1/wallet')).data,
   })
+  const { formatPrecise } = useDisplayCurrency()
 
   const { data: subscription, isLoading: subLoading } = useQuery({
     queryKey: ['subscription', 'current'],
@@ -182,7 +184,7 @@ export function ProfileView() {
               <div className="space-y-1">
                 {/* Always USD, ignoring wallet.currency — see WalletView.tsx's matching
                     comment for why that field can't be trusted for display. */}
-                <p className="text-2xl font-bold">{formatPreciseCurrency(wallet.balance)}</p>
+                <p className="text-2xl font-bold">{formatPrecise(wallet.balance)}</p>
                 <p className="text-xs text-muted-foreground">balance</p>
               </div>
             ) : (
